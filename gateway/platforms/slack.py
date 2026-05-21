@@ -52,6 +52,8 @@ from gateway.platforms.base import (
 
 logger = logging.getLogger(__name__)
 
+HERMES_BLOCK_KIT_ACTION_ID = "hermes_block_kit_interaction"
+
 # ContextVar carrying the user_id of the slash-command invoker.
 # Set in _handle_slash_command, read in send() to match the correct
 # stashed response_url when multiple users issue commands on the same
@@ -336,6 +338,10 @@ class SlackAdapter(BasePlatformAdapter):
             "hermes_confirm_cancel",
         ):
             self.register_block_action_handler(action_id, self._handle_slash_confirm_action)
+        self.register_block_action_handler(
+            HERMES_BLOCK_KIT_ACTION_ID,
+            lambda body, action: self._reinject_block_kit_interaction(body, action),
+        )
         # Track timestamps of messages sent by the bot so we can respond
         # to thread replies even without an explicit @mention.
         self._bot_message_ts: set = set()
@@ -363,6 +369,10 @@ class SlackAdapter(BasePlatformAdapter):
         # (channel_id, user_id) to avoid cross-user collisions.
         # Each value: {"response_url": str, "ts": float}
         self._slash_command_contexts: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        # Interaction log for Block Kit events (ring buffer, capped).
+        # Keyed by message_ts → list of interaction dicts.
+        self._block_kit_interactions: Dict[str, List[Dict[str, Any]]] = {}
+        self._BLOCK_KIT_INTERACTIONS_MAX = 200
 
     def _describe_slack_api_error(self, response: Any, *, file_obj: Optional[Dict[str, Any]] = None) -> Optional[str]:
         """Convert Slack API auth/permission failures into actionable user-facing text."""
@@ -681,6 +691,10 @@ class SlackAdapter(BasePlatformAdapter):
             for _action_id in sorted(self._registered_block_action_ids):
                 self._app.action(_action_id)(self._handle_generic_block_action)
 
+            # Catch-all handler for any action_id not explicitly registered
+            # (e.g. buttons/selects sent by the agent via slack_block_kit tool).
+            self._app.action(re.compile(".*"))(self._handle_catchall_block_action)
+
             # Start Socket Mode handler in background
             self._handler = AsyncSocketModeHandler(self._app, app_token, proxy=proxy_url)
             _apply_slack_proxy(self._handler.client, proxy_url)
@@ -719,6 +733,202 @@ class SlackAdapter(BasePlatformAdapter):
             await handler(body, action)
         except Exception as exc:
             logger.error("[Slack] Block Kit action handler failed for %s: %s", action_id, exc, exc_info=True)
+
+    async def _handle_catchall_block_action(self, ack, body, action) -> None:
+        """Catch-all handler for arbitrary Block Kit interactions (agent-sent cards).
+
+        Extracts action_id, value/selected_option from the raw action payload
+        and re-injects it into the agent session as a message event.
+        """
+        await ack()
+
+        action_id = action.get("action_id", "")
+        # Determine value based on action type
+        action_type = action.get("type", "button")
+        if action_type == "static_select":
+            selected_option = action.get("selected_option") or {}
+            selected_value = selected_option.get("value", "")
+        elif action_type == "multi_static_select":
+            selected_options = action.get("selected_options") or []
+            selected_value = ",".join(opt.get("value", "") for opt in selected_options)
+        elif action_type in ("datepicker", "timepicker"):
+            selected_value = action.get("selected_date") or action.get("selected_time") or ""
+        elif action_type == "overflow":
+            selected_option = action.get("selected_option") or {}
+            selected_value = selected_option.get("value", "")
+        else:
+            # button or other — use value field
+            selected_value = action.get("value", "")
+
+        message = body.get("message") or {}
+        user = body.get("user") or {}
+        channel = body.get("channel") or {}
+        channel_id = channel.get("id", "")
+        msg_ts = message.get("ts", "")
+        thread_ts = message.get("thread_ts") or msg_ts
+
+        # Store interaction for tool query
+        user_name = user.get("username") or user.get("name", "")
+        if msg_ts:
+            if msg_ts not in self._block_kit_interactions:
+                self._block_kit_interactions[msg_ts] = []
+            self._block_kit_interactions[msg_ts].append({
+                "interaction_type": action_type,
+                "action": action_id,
+                "selected_value": selected_value,
+                "user_id": user.get("id", ""),
+                "user_name": user_name,
+                "timestamp": time.time(),
+            })
+            if len(self._block_kit_interactions) > self._BLOCK_KIT_INTERACTIONS_MAX:
+                oldest_key = next(iter(self._block_kit_interactions))
+                del self._block_kit_interactions[oldest_key]
+
+        # Replace the card with a confirmation text
+        display_value = selected_value or action_id
+        confirmation_text = f"✅ selected {display_value} by {user_name}"
+        if msg_ts and channel_id:
+            try:
+                client = self._get_client(channel_id)
+                if client:
+                    await client.chat_update(
+                        channel=channel_id,
+                        ts=msg_ts,
+                        text=confirmation_text,
+                        blocks=[],
+                    )
+            except Exception as exc:
+                logger.warning(
+                    "[Slack] Failed to replace Block Kit card after interaction: %s", exc,
+                )
+
+        # Format and inject as agent message
+        lines = [
+            "[Slack interactive event]",
+            f"type: {action_type}",
+            f"action_id: {action_id}",
+            f"selected_value: {selected_value}",
+            f"message_id: {msg_ts}",
+            f"user_id: {user.get('id', '')}",
+            f"channel_id: {channel_id}",
+        ]
+        text = "\n".join(lines)
+
+        source = self.build_source(
+            chat_id=channel_id,
+            chat_name=channel_id,
+            chat_type="group",
+            user_id=user.get("id", ""),
+            user_name=user_name,
+            thread_id=thread_ts,
+        )
+        event = MessageEvent(
+            text=text,
+            source=source,
+            raw_message=body,
+            message_id=msg_ts,
+        )
+        await self.handle_message(event)
+
+    def _decode_block_kit_interaction(self, action: Dict[str, Any]) -> Dict[str, Any]:
+        if action.get("selected_option"):
+            selected = json.loads(action["selected_option"]["value"])
+            meta = json.loads(selected["meta"])
+            return {
+                **meta,
+                "interaction_type": "static_select",
+                "selected_value": selected["selected_value"],
+            }
+
+        raw = action.get("value")
+        if not raw:
+            raise ValueError("Slack Block Kit interaction payload is missing")
+
+        meta = json.loads(raw)
+        payload = meta.get("payload") or {}
+        return {
+            **meta,
+            "interaction_type": payload.get("type", "button"),
+            "selected_value": payload.get("value"),
+        }
+
+    def _format_block_kit_interaction_event(
+        self,
+        interaction: Dict[str, Any],
+        body: Dict[str, Any],
+    ) -> str:
+        message = body.get("message") or {}
+        user = body.get("user") or {}
+        channel = body.get("channel") or {}
+        lines = [
+            "[Slack interactive event]",
+            f"type: {interaction['interaction_type']}",
+            f"action: {interaction['action']}",
+        ]
+        if interaction["interaction_type"] == "static_select":
+            lines.append(f"selected_value: {interaction['selected_value']}")
+        else:
+            lines.append(f"value: {interaction['selected_value']}")
+        lines.extend(
+            [
+                f"message_id: {message.get('ts', '')}",
+                f"user_id: {user.get('id', '')}",
+                f"channel_id: {channel.get('id', '')}",
+            ]
+        )
+        return "\n".join(lines)
+
+    async def _reinject_block_kit_interaction(self, body, action) -> None:
+        try:
+            interaction = self._decode_block_kit_interaction(action)
+        except (ValueError, KeyError, TypeError, json.JSONDecodeError) as exc:
+            logger.warning("[Slack] Failed to decode Hermes Block Kit interaction: %s", exc)
+            return
+
+        # Store interaction for tool query (get_interactions action).
+        msg_ts = (body.get("message") or {}).get("ts", "")
+        if msg_ts:
+            if msg_ts not in self._block_kit_interactions:
+                self._block_kit_interactions[msg_ts] = []
+            self._block_kit_interactions[msg_ts].append({
+                "interaction_type": interaction.get("interaction_type"),
+                "action": interaction.get("action"),
+                "selected_value": interaction.get("selected_value"),
+                "user_id": (body.get("user") or {}).get("id", ""),
+                "user_name": (body.get("user") or {}).get("name", ""),
+                "timestamp": time.time(),
+            })
+            if len(self._block_kit_interactions) > self._BLOCK_KIT_INTERACTIONS_MAX:
+                oldest_key = next(iter(self._block_kit_interactions))
+                del self._block_kit_interactions[oldest_key]
+
+        text = self._format_block_kit_interaction_event(interaction, body)
+        user = body.get("user") or {}
+        source = self.build_source(
+            chat_id=interaction["chat_id"],
+            chat_name=interaction["chat_id"],
+            chat_type="group",
+            user_id=user.get("id", ""),
+            user_name=user.get("username") or user.get("name", ""),
+            thread_id=interaction.get("thread_ts") or (body.get("message") or {}).get("thread_ts"),
+        )
+        event = MessageEvent(
+            text=text,
+            source=source,
+            raw_message=body,
+            message_id=(body.get("message") or {}).get("ts", ""),
+        )
+        await self.handle_message(event)
+
+    def get_block_kit_interactions(self, message_id: str = "") -> List[Dict[str, Any]]:
+        """Return stored Block Kit interactions for a specific message, or all recent."""
+        if message_id:
+            return list(self._block_kit_interactions.get(message_id, []))
+        result: List[Dict[str, Any]] = []
+        for ts, interactions in self._block_kit_interactions.items():
+            for i in interactions:
+                result.append({**i, "message_id": ts})
+        return result
 
     async def create_handoff_thread(
         self,
