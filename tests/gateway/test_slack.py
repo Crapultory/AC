@@ -779,6 +779,232 @@ class TestBangPrefixCommands:
 
 
 # ---------------------------------------------------------------------------
+# TestBlockKitHelpers
+# ---------------------------------------------------------------------------
+
+
+class TestBlockKitHelpers:
+    @pytest.mark.asyncio
+    async def test_send_blocks_posts_text_and_blocks(self, adapter):
+        adapter._team_clients = {"T1": AsyncMock()}
+        adapter._channel_team = {"C1": "T1"}
+        mock_client = adapter._team_clients["T1"]
+        mock_client.chat_postMessage = AsyncMock(return_value={"ts": "5555.0001"})
+
+        result = await adapter.send_blocks(
+            chat_id="C1",
+            text="fallback text",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "*hello*"},
+                }
+            ],
+        )
+
+        assert result.success is True
+        assert result.message_id == "5555.0001"
+        kwargs = mock_client.chat_postMessage.call_args[1]
+        assert kwargs["channel"] == "C1"
+        assert kwargs["text"] == "fallback text"
+        assert kwargs["blocks"][0]["type"] == "section"
+
+    @pytest.mark.asyncio
+    async def test_send_blocks_uses_thread_ts(self, adapter):
+        adapter._team_clients = {"T1": AsyncMock()}
+        adapter._channel_team = {"C1": "T1"}
+        mock_client = adapter._team_clients["T1"]
+        mock_client.chat_postMessage = AsyncMock(return_value={"ts": "5555.0002"})
+
+        await adapter.send_blocks(
+            chat_id="C1",
+            text="thread fallback",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "thread body"},
+                }
+            ],
+            metadata={"thread_id": "9999.0000"},
+        )
+
+        kwargs = mock_client.chat_postMessage.call_args[1]
+        assert kwargs["thread_ts"] == "9999.0000"
+
+    @pytest.mark.asyncio
+    async def test_send_blocks_returns_not_connected(self, adapter):
+        adapter._app = None
+
+        result = await adapter.send_blocks(
+            chat_id="C1",
+            text="fallback text",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "*hello*"},
+                }
+            ],
+        )
+
+        assert result.success is False
+        assert result.error == "Not connected"
+
+    @pytest.mark.asyncio
+    async def test_send_blocks_tracks_sent_message_ts(self, adapter):
+        adapter._team_clients = {"T1": AsyncMock()}
+        adapter._channel_team = {"C1": "T1"}
+        mock_client = adapter._team_clients["T1"]
+        mock_client.chat_postMessage = AsyncMock(return_value={"ts": "5555.0005"})
+
+        await adapter.send_blocks(
+            chat_id="C1",
+            text="fallback text",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "*hello*"},
+                }
+            ],
+        )
+
+        assert "5555.0005" in adapter._bot_message_ts
+
+    @pytest.mark.asyncio
+    async def test_send_blocks_finalize_thread_stops_typing(self, adapter):
+        adapter._team_clients = {"T1": AsyncMock()}
+        adapter._channel_team = {"C1": "T1"}
+        mock_client = adapter._team_clients["T1"]
+        mock_client.chat_postMessage = AsyncMock(return_value={"ts": "5555.0006"})
+        adapter.stop_typing = AsyncMock()
+
+        await adapter.send_blocks(
+            chat_id="C1",
+            text="thread fallback",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "thread body"},
+                }
+            ],
+            metadata={"thread_id": "9999.0000"},
+        )
+
+        adapter.stop_typing.assert_awaited_once_with("C1")
+
+    @pytest.mark.asyncio
+    async def test_update_blocks_returns_not_connected(self, adapter):
+        adapter._app = None
+
+        result = await adapter.update_blocks(
+            chat_id="C1",
+            message_id="5555.0003",
+            text="updated fallback",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "updated body"},
+                }
+            ],
+        )
+
+        assert result.success is False
+        assert result.error == "Not connected"
+
+    @pytest.mark.asyncio
+    async def test_update_blocks_calls_chat_update(self, adapter):
+        adapter._team_clients = {"T1": AsyncMock()}
+        adapter._channel_team = {"C1": "T1"}
+        mock_client = adapter._team_clients["T1"]
+        mock_client.chat_update = AsyncMock(return_value={"ts": "5555.0003"})
+
+        result = await adapter.update_blocks(
+            chat_id="C1",
+            message_id="5555.0003",
+            text="updated fallback",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "updated body"},
+                }
+            ],
+        )
+
+        assert result.success is True
+        assert result.message_id == "5555.0003"
+        kwargs = mock_client.chat_update.call_args[1]
+        assert kwargs["channel"] == "C1"
+        assert kwargs["ts"] == "5555.0003"
+        assert kwargs["text"] == "updated fallback"
+        assert kwargs["blocks"][0]["type"] == "section"
+
+    @pytest.mark.asyncio
+    async def test_update_blocks_finalize_stops_typing(self, adapter):
+        adapter._team_clients = {"T1": AsyncMock()}
+        adapter._channel_team = {"C1": "T1"}
+        mock_client = adapter._team_clients["T1"]
+        mock_client.chat_update = AsyncMock(return_value={"ts": "5555.0004"})
+        adapter.stop_typing = AsyncMock()
+
+        await adapter.update_blocks(
+            chat_id="C1",
+            message_id="5555.0004",
+            text="done",
+            blocks=[
+                {
+                    "type": "section",
+                    "text": {"type": "mrkdwn", "text": "done"},
+                }
+            ],
+            finalize=True,
+        )
+
+        adapter.stop_typing.assert_awaited_once_with("C1")
+
+
+# ---------------------------------------------------------------------------
+# TestBlockActionRouting
+# ---------------------------------------------------------------------------
+
+
+class TestBlockActionRouting:
+    @pytest.mark.asyncio
+    async def test_generic_block_action_dispatches_registered_handler(self, adapter):
+        calls = []
+
+        async def handler(body, action):
+            calls.append((body, action))
+
+        adapter.register_block_action_handler("hermes_test_action", handler)
+        ack = AsyncMock()
+        body = {"channel": {"id": "C1"}}
+        action = {"action_id": "hermes_test_action", "value": "v1"}
+
+        await adapter._handle_generic_block_action(ack, body, action)
+
+        ack.assert_called_once()
+        assert calls == [(body, action)]
+
+    @pytest.mark.asyncio
+    async def test_generic_block_action_ignores_unknown_action(self, adapter):
+        ack = AsyncMock()
+        body = {"channel": {"id": "C1"}}
+        action = {"action_id": "hermes_unknown_action", "value": "v1"}
+
+        await adapter._handle_generic_block_action(ack, body, action)
+
+        ack.assert_called_once()
+
+    def test_register_block_action_handler_tracks_action_ids(self, adapter):
+        async def handler(body, action):
+            return None
+
+        adapter.register_block_action_handler("hermes_test_action", handler)
+
+        assert adapter._block_action_handlers["hermes_test_action"] is handler
+        assert "hermes_test_action" in adapter._registered_block_action_ids
+
+
+# ---------------------------------------------------------------------------
 # TestIncomingDocumentHandling
 # ---------------------------------------------------------------------------
 
