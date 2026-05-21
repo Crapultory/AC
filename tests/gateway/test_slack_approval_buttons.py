@@ -146,117 +146,6 @@ class TestSlackExecApproval:
 
 
 # ===========================================================================
-# send_exec_approval / send_slash_confirm shared Block Kit path
-# ===========================================================================
-
-@pytest.mark.asyncio
-async def test_send_exec_approval_uses_send_blocks_path():
-    adapter = _make_adapter()
-    adapter.send_blocks = AsyncMock(return_value=MagicMock(success=True, message_id="1234.5678", raw_response={"ts": "1234.5678"}))
-
-    await adapter.send_exec_approval(
-        chat_id="C1",
-        command="echo hi",
-        session_key="session-1",
-    )
-
-    adapter.send_blocks.assert_awaited_once()
-
-
-@pytest.mark.asyncio
-async def test_send_slash_confirm_uses_send_blocks_path():
-    adapter = _make_adapter()
-    adapter.send_blocks = AsyncMock(return_value=MagicMock(success=True, message_id="1234.5678", raw_response={"ts": "1234.5678"}))
-
-    await adapter.send_slash_confirm(
-        chat_id="C1",
-        title="Confirm",
-        message="Proceed?",
-        session_key="session-1",
-        confirm_id="confirm-1",
-    )
-
-    adapter.send_blocks.assert_awaited_once()
-
-
-def test_builtin_action_ids_are_registered():
-    adapter = _make_adapter()
-
-    for action_id in (
-        "hermes_approve_once",
-        "hermes_approve_session",
-        "hermes_approve_always",
-        "hermes_deny",
-        "hermes_confirm_once",
-        "hermes_confirm_always",
-        "hermes_confirm_cancel",
-    ):
-        assert action_id in adapter._registered_block_action_ids
-
-
-@pytest.mark.asyncio
-async def test_generic_router_dispatches_approval_handler():
-    adapter = _make_adapter()
-    adapter._approval_resolved["1234.5678"] = False
-    ack = AsyncMock()
-    body = {
-        "message": {
-            "ts": "1234.5678",
-            "blocks": [
-                {"type": "section", "text": {"type": "mrkdwn", "text": "original text"}},
-            ],
-        },
-        "channel": {"id": "C1"},
-        "user": {"name": "norbert"},
-    }
-    action = {
-        "action_id": "hermes_approve_once",
-        "value": "agent:main:slack:group:C1:1111",
-    }
-
-    mock_client = adapter._team_clients["T1"]
-    mock_client.chat_update = AsyncMock()
-
-    with patch("tools.approval.resolve_gateway_approval", return_value=1) as mock_resolve:
-        await adapter._handle_generic_block_action(ack, body, action)
-
-    ack.assert_called_once()
-    mock_resolve.assert_called_once_with("agent:main:slack:group:C1:1111", "once")
-
-
-@pytest.mark.asyncio
-async def test_generic_router_dispatches_slash_confirm_handler():
-    adapter = _make_adapter()
-    ack = AsyncMock()
-    body = {
-        "message": {
-            "ts": "1234.5678",
-            "thread_ts": "1234.5678",
-            "blocks": [
-                {"type": "section", "text": {"type": "mrkdwn", "text": "confirm body"}},
-            ],
-        },
-        "channel": {"id": "C1"},
-        "user": {"name": "norbert", "id": "U123"},
-    }
-    action = {
-        "action_id": "hermes_confirm_once",
-        "value": "session-1|confirm-1",
-    }
-
-    mock_client = adapter._team_clients["T1"]
-    mock_client.chat_update = AsyncMock()
-    mock_client.chat_postMessage = AsyncMock()
-
-    with patch("tools.slash_confirm.resolve", new_callable=AsyncMock) as mock_resolve:
-        mock_resolve.return_value = "follow-up"
-        await adapter._handle_generic_block_action(ack, body, action)
-
-    ack.assert_called_once()
-    mock_resolve.assert_awaited_once_with("session-1", "confirm-1", "once")
-
-
-# ===========================================================================
 # _handle_approval_action — button click handler
 # ===========================================================================
 
@@ -289,7 +178,7 @@ class TestSlackApprovalAction:
         mock_client.chat_update = AsyncMock()
 
         with patch("tools.approval.resolve_gateway_approval", return_value=1) as mock_resolve:
-            await adapter._handle_generic_block_action(ack, body, action)
+            await adapter._handle_approval_action(ack, body, action)
 
         ack.assert_called_once()
         mock_resolve.assert_called_once_with("agent:main:slack:group:C1:1111", "once")
@@ -316,7 +205,7 @@ class TestSlackApprovalAction:
         }
 
         with patch("tools.approval.resolve_gateway_approval") as mock_resolve:
-            await adapter._handle_generic_block_action(ack, body, action)
+            await adapter._handle_approval_action(ack, body, action)
 
         # Should have acked but NOT resolved
         ack.assert_called_once()
@@ -341,9 +230,8 @@ class TestSlackApprovalAction:
         mock_client.chat_update = AsyncMock()
 
         with patch("tools.approval.resolve_gateway_approval", return_value=1) as mock_resolve:
-            await adapter._handle_generic_block_action(ack, body, action)
+            await adapter._handle_approval_action(ack, body, action)
 
-        ack.assert_called_once()
         mock_resolve.assert_called_once_with("session-key", "deny")
         update_kwargs = mock_client.chat_update.call_args[1]
         assert "Denied by alice" in update_kwargs["text"]

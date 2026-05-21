@@ -1,8 +1,6 @@
 import { Button } from "@nous-research/ui/ui/components/button";
-import { Checkbox } from "@nous-research/ui/ui/components/checkbox";
 import { ListItem } from "@nous-research/ui/ui/components/list-item";
 import { Spinner } from "@nous-research/ui/ui/components/spinner";
-import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
 import type { GatewayClient } from "@/lib/gatewayClient";
 import { Check, Search, X } from "lucide-react";
@@ -285,22 +283,15 @@ export function ModelPickerDialog(props: Props) {
               Saves to config.yaml — applies to new sessions.
             </span>
           ) : (
-            <div className="flex items-center gap-2">
-              <Checkbox
+            <label className="flex items-center gap-2 text-xs text-muted-foreground cursor-pointer select-none">
+              <input
+                type="checkbox"
                 checked={persistGlobal}
-                id="model-picker-persist-global"
-                onCheckedChange={(checked) =>
-                  setPersistGlobal(checked === true)
-                }
+                onChange={(e) => setPersistGlobal(e.target.checked)}
+                className="cursor-pointer"
               />
-
-              <Label
-                className="font-sans normal-case tracking-normal text-xs text-muted-foreground cursor-pointer"
-                htmlFor="model-picker-persist-global"
-              >
-                Persist globally (otherwise this session only)
-              </Label>
-            </div>
+              Persist globally (otherwise this session only)
+            </label>
           )}
 
           <div className="flex items-center gap-2 ml-auto">

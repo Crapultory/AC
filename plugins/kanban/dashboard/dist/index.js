@@ -24,23 +24,6 @@
   const { useState, useEffect, useCallback, useMemo, useRef } = SDK.hooks;
   const { cn, timeAgo } = SDK.utils;
 
-  // Newer host dashboards expose a DS-styled Checkbox on the plugin SDK.
-  // Fall back to a native <input type="checkbox"> shim so older hosts that
-  // predate the design-system rollout still render. The shim normalises
-  // Radix's onCheckedChange(checked) signature to native onChange(event).
-  const Checkbox = SDK.components.Checkbox || function (props) {
-    const { checked, onCheckedChange, className, onClick, ...rest } = props;
-    return h("input", Object.assign({
-      type: "checkbox",
-      checked: !!checked,
-      className: className,
-      onClick: onClick,
-      onChange: function (e) {
-        if (onCheckedChange) onCheckedChange(e.target.checked);
-      },
-    }, rest));
-  };
-
   // useI18n is a hook each component calls locally. Older host dashboards
   // may not expose it yet; fall back to a shim so the bundle still renders
   // English against an older host SDK. English fallback strings live
@@ -1665,10 +1648,11 @@
             h(Label, { className: "text-xs text-muted-foreground" },
               "Orchestration mode"),
             h("label", { className: "flex items-center gap-2 text-xs h-8" },
-              h(Checkbox, {
+              h("input", {
+                type: "checkbox",
                 checked: !!settings.auto_decompose,
-                onCheckedChange: function (checked) {
-                  saveSettings({ auto_decompose: checked === true });
+                onChange: function (e) {
+                  saveSettings({ auto_decompose: !!e.target.checked });
                 },
               }),
               "Auto-decompose triage tasks",
@@ -1924,9 +1908,10 @@
             }),
           ),
           h("label", { className: "flex items-center gap-2 text-xs" },
-            h(Checkbox, {
+            h("input", {
+              type: "checkbox",
               checked: switchTo,
-              onCheckedChange: function (checked) { setSwitchTo(checked === true); },
+              onChange: function (e) { setSwitchTo(e.target.checked); },
             }),
             tx(t, "switchAfterCreate", "Switch to this board after creating it"),
           ),
@@ -1996,17 +1981,19 @@
       ),
       h("label", { className: "flex items-center gap-2 text-xs",
                    title: "Include archived tasks in the board view. Archived tasks are hidden by default." },
-        h(Checkbox, {
+        h("input", {
+          type: "checkbox",
           checked: props.includeArchived,
-          onCheckedChange: function (checked) { props.setIncludeArchived(checked === true); },
+          onChange: function (e) { props.setIncludeArchived(e.target.checked); },
         }),
         tx(t, "showArchived", "Show archived"),
       ),
       h("label", { className: "flex items-center gap-2 text-xs",
                    title: "Group the Running column by assigned profile" },
-        h(Checkbox, {
+        h("input", {
+          type: "checkbox",
           checked: props.laneByProfile,
-          onCheckedChange: function (checked) { props.setLaneByProfile(checked === true); },
+          onChange: function (e) { props.setLaneByProfile(e.target.checked); },
         }),
         tx(t, "lanesByProfile", "Lanes by profile"),
       ),
@@ -2135,9 +2122,10 @@
         }, tx(t, "apply", "Apply")),
       ),
       h("label", { className: "hermes-kanban-bulk-reclaim-first", title: "Reclaim any active claims before reassigning" },
-        h(Checkbox, {
+        h("input", {
+          type: "checkbox",
           checked: reclaimFirst,
-          onCheckedChange: function (checked) { setReclaimFirst(checked === true); },
+          onChange: function (e) { setReclaimFirst(e.target.checked); },
         }),
         "Reclaim first",
       ),
@@ -2325,12 +2313,14 @@
     },
       h("div", { className: "hermes-kanban-column-header",
                  title: colHelp || "" },
-        h(Checkbox, {
+        h("input", {
+          type: "checkbox",
           className: "hermes-kanban-col-check",
           title: "Select all tasks in this column",
           "aria-label": `Select all tasks in ${colLabel || props.column.name}`,
           checked: props.column.tasks.length > 0 && props.column.tasks.every(function (t) { return props.selectedIds.has(t.id); }),
-          onCheckedChange: function () {
+          onChange: function (e) {
+            e.stopPropagation();
             if (props.selectAllInColumn) props.selectAllInColumn(props.column.name);
           },
           onClick: function (e) { e.stopPropagation(); },
@@ -2471,7 +2461,8 @@
         if (props.toggleSelected) props.toggleSelected(t.id, false);
       }
     };
-    const handleCheckedChange = function () {
+    const handleCheckbox = function (e) {
+      e.stopPropagation();
       props.toggleSelected(t.id, true);
     };
 
@@ -2504,10 +2495,11 @@
               title: tx(i18n, "selectForBulk", "Select for bulk actions"),
               onClick: function (e) { e.stopPropagation(); },
             },
-              h(Checkbox, {
+              h("input", {
+                type: "checkbox",
                 className: "hermes-kanban-card-check",
                 checked: props.selected,
-                onCheckedChange: handleCheckedChange,
+                onChange: handleCheckbox,
                 onClick: function (e) { e.stopPropagation(); },
                 "aria-label": `Select task ${t.id}`,
               }),

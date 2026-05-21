@@ -321,21 +321,6 @@ class SlackAdapter(BasePlatformAdapter):
         # Track pending approval message_ts → resolved flag to prevent
         # double-clicks on approval buttons.
         self._approval_resolved: Dict[str, bool] = {}
-        self._block_action_handlers: Dict[str, Any] = {}
-        self._registered_block_action_ids: set = set()
-        for action_id in (
-            "hermes_approve_once",
-            "hermes_approve_session",
-            "hermes_approve_always",
-            "hermes_deny",
-        ):
-            self.register_block_action_handler(action_id, self._handle_approval_action)
-        for action_id in (
-            "hermes_confirm_once",
-            "hermes_confirm_always",
-            "hermes_confirm_cancel",
-        ):
-            self.register_block_action_handler(action_id, self._handle_slash_confirm_action)
         # Track timestamps of messages sent by the bot so we can respond
         # to thread replies even without an explicit @mention.
         self._bot_message_ts: set = set()
@@ -678,8 +663,23 @@ class SlackAdapter(BasePlatformAdapter):
                 )
                 await self._handle_slash_command(command)
 
-            for _action_id in sorted(self._registered_block_action_ids):
-                self._app.action(_action_id)(self._handle_generic_block_action)
+            # Register Block Kit action handlers for approval buttons
+            for _action_id in (
+                "hermes_approve_once",
+                "hermes_approve_session",
+                "hermes_approve_always",
+                "hermes_deny",
+            ):
+                self._app.action(_action_id)(self._handle_approval_action)
+
+            # Register Block Kit action handlers for slash-confirm buttons
+            # (generic three-option prompts; see tools/slash_confirm.py).
+            for _action_id in (
+                "hermes_confirm_once",
+                "hermes_confirm_always",
+                "hermes_confirm_cancel",
+            ):
+                self._app.action(_action_id)(self._handle_slash_confirm_action)
 
             # Start Socket Mode handler in background
             self._handler = AsyncSocketModeHandler(self._app, app_token, proxy=proxy_url)
@@ -699,26 +699,6 @@ class SlackAdapter(BasePlatformAdapter):
         finally:
             if lock_acquired and not self._running:
                 self._release_platform_lock()
-
-    def register_block_action_handler(self, action_id: str, handler) -> None:
-        """Register a handler for a Slack Block Kit action_id before connect()."""
-        self._block_action_handlers[action_id] = handler
-        self._registered_block_action_ids.add(action_id)
-
-    async def _handle_generic_block_action(self, ack, body, action) -> None:
-        """Dispatch a Slack Block Kit action to a registered handler."""
-        await ack()
-
-        action_id = action.get("action_id", "")
-        handler = self._block_action_handlers.get(action_id)
-        if not handler:
-            logger.warning("[Slack] No Block Kit action handler registered for %s", action_id)
-            return
-
-        try:
-            await handler(body, action)
-        except Exception as exc:
-            logger.error("[Slack] Block Kit action handler failed for %s: %s", action_id, exc, exc_info=True)
 
     async def create_handoff_thread(
         self,
@@ -852,53 +832,6 @@ class SlackAdapter(BasePlatformAdapter):
             logger.error("[Slack] Send error: %s", e, exc_info=True)
             return SendResult(success=False, error=str(e))
 
-    async def send_blocks(
-        self,
-        chat_id: str,
-        *,
-        text: str,
-        blocks: List[Dict[str, Any]],
-        reply_to: Optional[str] = None,
-        metadata: Optional[Dict[str, Any]] = None,
-    ) -> SendResult:
-        """Send a Slack Block Kit message."""
-        if not self._app:
-            return SendResult(success=False, error="Not connected")
-
-        try:
-            thread_ts = self._resolve_thread_ts(reply_to, metadata)
-            kwargs: Dict[str, Any] = {
-                "channel": chat_id,
-                "text": text,
-                "blocks": blocks,
-            }
-            if thread_ts:
-                kwargs["thread_ts"] = thread_ts
-
-            result = await self._get_client(chat_id).chat_postMessage(**kwargs)
-
-            if thread_ts:
-                await self.stop_typing(chat_id)
-
-            sent_ts = result.get("ts", "")
-            if sent_ts:
-                self._bot_message_ts.add(sent_ts)
-                if thread_ts:
-                    self._bot_message_ts.add(thread_ts)
-                if len(self._bot_message_ts) > self._BOT_TS_MAX:
-                    excess = len(self._bot_message_ts) - self._BOT_TS_MAX // 2
-                    for old_ts in list(self._bot_message_ts)[:excess]:
-                        self._bot_message_ts.discard(old_ts)
-
-            return SendResult(
-                success=True,
-                message_id=sent_ts,
-                raw_response=result,
-            )
-        except Exception as e:  # pragma: no cover - defensive logging
-            logger.error("[Slack] Block send error: %s", e, exc_info=True)
-            return SendResult(success=False, error=str(e))
-
     async def send_private_notice(
         self,
         chat_id: str,
@@ -959,38 +892,6 @@ class SlackAdapter(BasePlatformAdapter):
         except Exception as e:  # pragma: no cover - defensive logging
             logger.error(
                 "[Slack] Failed to edit message %s in channel %s: %s",
-                message_id,
-                chat_id,
-                e,
-                exc_info=True,
-            )
-            return SendResult(success=False, error=str(e))
-
-    async def update_blocks(
-        self,
-        chat_id: str,
-        message_id: str,
-        *,
-        text: str,
-        blocks: List[Dict[str, Any]],
-        finalize: bool = False,
-    ) -> SendResult:
-        """Update a Slack message with Block Kit content."""
-        if not self._app:
-            return SendResult(success=False, error="Not connected")
-        try:
-            await self._get_client(chat_id).chat_update(
-                channel=chat_id,
-                ts=message_id,
-                text=text,
-                blocks=blocks,
-            )
-            if finalize:
-                await self.stop_typing(chat_id)
-            return SendResult(success=True, message_id=message_id)
-        except Exception as e:  # pragma: no cover - defensive logging
-            logger.error(
-                "[Slack] Failed to update Block Kit message %s in channel %s: %s",
                 message_id,
                 chat_id,
                 e,
@@ -2353,6 +2254,8 @@ class SlackAdapter(BasePlatformAdapter):
 
         try:
             cmd_preview = command[:2900] + "..." if len(command) > 2900 else command
+            thread_ts = self._resolve_thread_ts(None, metadata)
+
             blocks = [
                 {
                     "type": "section",
@@ -2398,17 +2301,20 @@ class SlackAdapter(BasePlatformAdapter):
                 },
             ]
 
-            result = await self.send_blocks(
-                chat_id,
-                text=f"⚠️ Command approval required: {cmd_preview[:100]}",
-                blocks=blocks,
-                metadata=metadata,
-            )
-            msg_ts = result.message_id or ""
+            kwargs: Dict[str, Any] = {
+                "channel": chat_id,
+                "text": f"⚠️ Command approval required: {cmd_preview[:100]}",
+                "blocks": blocks,
+            }
+            if thread_ts:
+                kwargs["thread_ts"] = thread_ts
+
+            result = await self._get_client(chat_id).chat_postMessage(**kwargs)
+            msg_ts = result.get("ts", "")
             if msg_ts:
                 self._approval_resolved[msg_ts] = False
 
-            return result
+            return SendResult(success=True, message_id=msg_ts, raw_response=result)
         except Exception as e:
             logger.error("[Slack] send_exec_approval failed: %s", e, exc_info=True)
             return SendResult(success=False, error=str(e))
@@ -2423,6 +2329,7 @@ class SlackAdapter(BasePlatformAdapter):
 
         try:
             body = message[:2900] + "..." if len(message) > 2900 else message
+            thread_ts = self._resolve_thread_ts(None, metadata)
             # Encode session_key and confirm_id into the button value so the
             # callback handler can resolve without extra bookkeeping.
             value = f"{session_key}|{confirm_id}"
@@ -2462,18 +2369,24 @@ class SlackAdapter(BasePlatformAdapter):
                 },
             ]
 
-            return await self.send_blocks(
-                chat_id,
-                text=f"{title or 'Confirm'}: {body[:100]}",
-                blocks=blocks,
-                metadata=metadata,
-            )
+            kwargs: Dict[str, Any] = {
+                "channel": chat_id,
+                "text": f"{title or 'Confirm'}: {body[:100]}",
+                "blocks": blocks,
+            }
+            if thread_ts:
+                kwargs["thread_ts"] = thread_ts
+
+            result = await self._get_client(chat_id).chat_postMessage(**kwargs)
+            return SendResult(success=True, message_id=result.get("ts", ""), raw_response=result)
         except Exception as e:
             logger.error("[Slack] send_slash_confirm failed: %s", e, exc_info=True)
             return SendResult(success=False, error=str(e))
 
-    async def _handle_slash_confirm_action(self, body, action) -> None:
+    async def _handle_slash_confirm_action(self, ack, body, action) -> None:
         """Handle a slash-confirm button click from Block Kit."""
+        await ack()
+
         action_id = action.get("action_id", "")
         value = action.get("value", "")
         message = body.get("message", {})
@@ -2568,8 +2481,10 @@ class SlackAdapter(BasePlatformAdapter):
         except Exception as exc:
             logger.error("Failed to resolve slash-confirm from Slack button: %s", exc, exc_info=True)
 
-    async def _handle_approval_action(self, body, action) -> None:
+    async def _handle_approval_action(self, ack, body, action) -> None:
         """Handle an approval button click from Block Kit."""
+        await ack()
+
         action_id = action.get("action_id", "")
         session_key = action.get("value", "")
         message = body.get("message", {})
