@@ -342,6 +342,8 @@ class SlackAdapter(BasePlatformAdapter):
             HERMES_BLOCK_KIT_ACTION_ID,
             lambda body, action: self._reinject_block_kit_interaction(body, action),
         )
+        # Clarify choices storage: clarify_id → list of choice strings
+        self._clarify_choices: Dict[str, List[str]] = {}
         # Track timestamps of messages sent by the bot so we can respond
         # to thread replies even without an explicit @mention.
         self._bot_message_ts: set = set()
@@ -743,6 +745,11 @@ class SlackAdapter(BasePlatformAdapter):
         await ack()
 
         action_id = action.get("action_id", "")
+
+        # Route clarify buttons to the dedicated handler
+        if action_id.startswith("hermes_clarify_"):
+            await self._handle_clarify_action(body, action)
+            return
         # Determine value based on action type
         action_type = action.get("type", "button")
         if action_type == "static_select":
@@ -1108,6 +1115,123 @@ class SlackAdapter(BasePlatformAdapter):
         except Exception as e:  # pragma: no cover - defensive logging
             logger.error("[Slack] Block send error: %s", e, exc_info=True)
             return SendResult(success=False, error=str(e))
+
+    async def send_clarify(
+        self,
+        chat_id: str,
+        question: str,
+        choices: Optional[list],
+        clarify_id: str,
+        session_key: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> SendResult:
+        """Render a clarify prompt with Block Kit buttons for each choice.
+
+        Multi-choice mode: renders one button per option plus a final
+        "Other (type answer)" button. Open-ended mode falls back to
+        the base class text-only implementation.
+        """
+        if not self._app:
+            return SendResult(success=False, error="Not connected")
+
+        if not choices:
+            return await super().send_clarify(
+                chat_id, question, choices, clarify_id, session_key, metadata,
+            )
+
+        # Store choices so button handler can look up text from index
+        self._clarify_choices[clarify_id] = list(choices)
+
+        elements = [
+            {
+                "type": "button",
+                "text": {"type": "plain_text", "text": choice[:75]},
+                "action_id": f"hermes_clarify_{i}",
+                "value": json.dumps({"clarify_id": clarify_id, "index": i}),
+            }
+            for i, choice in enumerate(choices)
+        ]
+        elements.append({
+            "type": "button",
+            "text": {"type": "plain_text", "text": "\u270f\ufe0f Other (type answer)"},
+            "action_id": "hermes_clarify_other",
+            "value": json.dumps({"clarify_id": clarify_id, "index": "other"}),
+        })
+
+        blocks: List[Dict[str, Any]] = [
+            {
+                "type": "section",
+                "text": {"type": "mrkdwn", "text": f"\u2753 *{question}*"},
+            },
+            {"type": "actions", "elements": elements},
+        ]
+
+        return await self.send_blocks(
+            chat_id,
+            text=f"\u2753 {question}",
+            blocks=blocks,
+            metadata=metadata,
+        )
+
+    async def _handle_clarify_action(self, body, action) -> None:
+        """Handle a clarify button click — resolve the pending clarify request."""
+        raw_value = action.get("value", "")
+        try:
+            payload = json.loads(raw_value)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("[Slack] Malformed clarify button value: %s", raw_value)
+            return
+
+        clarify_id = payload.get("clarify_id", "")
+        index = payload.get("index")
+        user = body.get("user") or {}
+        user_name = user.get("username") or user.get("name", "")
+        message = body.get("message") or {}
+        channel = body.get("channel") or {}
+        channel_id = channel.get("id", "")
+        msg_ts = message.get("ts", "")
+
+        from tools.clarify_gateway import resolve_gateway_clarify, mark_awaiting_text
+
+        if index == "other":
+            mark_awaiting_text(clarify_id)
+            # Update card to indicate waiting for typed answer
+            if msg_ts and channel_id:
+                try:
+                    client = self._get_client(channel_id)
+                    if client:
+                        await client.chat_update(
+                            channel=channel_id,
+                            ts=msg_ts,
+                            text=f"[\u270f\ufe0f] waiting for typed answer from {user_name}...",
+                            blocks=[],
+                        )
+                except Exception:
+                    pass
+            return
+
+        # Resolve with the actual choice text
+        choices = self._clarify_choices.pop(clarify_id, [])
+        try:
+            choice_text = choices[int(index)]
+        except (IndexError, TypeError, ValueError):
+            choice_text = str(index)
+
+        resolve_gateway_clarify(clarify_id, choice_text)
+
+        # Replace card with confirmation
+        if msg_ts and channel_id:
+            try:
+                client = self._get_client(channel_id)
+                if client:
+                    await client.chat_update(
+                        channel=channel_id,
+                        ts=msg_ts,
+                        text=f"\u2705 selected {choice_text} by {user_name}",
+                        blocks=[],
+                    )
+            except Exception:
+                pass
 
     async def send_private_notice(
         self,
