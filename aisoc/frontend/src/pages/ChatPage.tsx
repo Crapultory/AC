@@ -58,16 +58,17 @@ export function ChatPage() {
   }, []);
 
   useEffect(() => {
-    if (!resume) return;
+    const resumeId = resume ?? "";
+    if (!resumeId) return;
     let cancelled = false;
 
     async function syncLatest() {
       try {
         const payload = await fetchJSON<LatestDescendant>(
-          `/api/sessions/${encodeURIComponent(resume)}/latest-descendant`,
+          `/api/sessions/${encodeURIComponent(resumeId)}/latest-descendant`,
         );
         if (cancelled) return;
-        if (payload.session_id && payload.session_id !== resume) {
+        if (payload.session_id && payload.session_id !== resumeId) {
           const next = new URLSearchParams(searchParams);
           next.set("resume", payload.session_id);
           setSearchParams(next, { replace: true });
@@ -84,6 +85,9 @@ export function ChatPage() {
   }, [resume, searchParams, setSearchParams]);
 
   useEffect(() => {
+    if (!status?.ready) {
+      return;
+    }
     const host = hostRef.current;
     if (!host) return;
 
@@ -132,8 +136,13 @@ export function ChatPage() {
     ptyWs.onerror = () => {
       term.writeln("\r\n\x1b[31mPTY websocket error.\x1b[0m");
     };
-    ptyWs.onclose = () => {
+    ptyWs.onclose = (event) => {
       term.writeln("\r\n\x1b[33mPTY connection closed.\x1b[0m");
+      if (event.code === 4401) {
+        setBanner("Session token expired. Please sign in again.");
+      } else if (event.code === 4403) {
+        setBanner("Embedded chat is disabled on the server. Start with --tui.");
+      }
     };
 
     const disposeData = term.onData((text) => {
@@ -152,6 +161,13 @@ export function ChatPage() {
     resizeObserver.observe(host);
 
     const eventsWs = new WebSocket(buildEventsUrl(channel));
+    eventsWs.onclose = (event) => {
+      if (event.code === 4401) {
+        setBanner("Session token expired. Please sign in again.");
+      } else if (event.code === 4403) {
+        setBanner("Embedded chat is disabled on the server. Start with --tui.");
+      }
+    };
     eventsWs.onmessage = (event) => {
       const text = typeof event.data === "string" ? event.data : "";
       if (!text) return;
@@ -162,6 +178,13 @@ export function ChatPage() {
     };
 
     const gatewayWs = new WebSocket(buildGatewayUrl(channel));
+    gatewayWs.onclose = (event) => {
+      if (event.code === 4401) {
+        setBanner("Session token expired. Please sign in again.");
+      } else if (event.code === 4403) {
+        setBanner("Embedded chat is disabled on the server. Start with --tui.");
+      }
+    };
 
     return () => {
       disposeData.dispose();
@@ -174,7 +197,7 @@ export function ChatPage() {
       wsRef.current = null;
       termRef.current = null;
     };
-  }, [channel, resume]);
+  }, [channel, resume, status?.ready]);
 
   return (
     <section className="chat-layout">

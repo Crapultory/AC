@@ -6,13 +6,32 @@ type CronJob = {
   id?: string;
   name?: string;
   profile?: string;
-  schedule?: string;
+  schedule?:
+    | string
+    | {
+        kind?: string;
+        expr?: string;
+        display?: string;
+      };
   paused?: boolean;
 };
+
+function renderSchedule(schedule: CronJob["schedule"]): string {
+  if (!schedule) return "no schedule";
+  if (typeof schedule === "string") return schedule;
+  if (schedule.display) return schedule.display;
+  if (schedule.expr) return schedule.expr;
+  if (schedule.kind) return schedule.kind;
+  return "no schedule";
+}
 
 export function CronPage() {
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [error, setError] = useState("");
+  const [selectedJobId, setSelectedJobId] = useState("");
+  const [detailLoading, setDetailLoading] = useState(false);
+  const [detailError, setDetailError] = useState("");
+  const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
 
   async function loadJobs() {
     try {
@@ -28,6 +47,24 @@ export function CronPage() {
     await loadJobs();
   }
 
+  async function selectJob(rawId: string) {
+    if (!rawId) return;
+    setSelectedJobId(rawId);
+    setDetailLoading(true);
+    setDetailError("");
+    try {
+      const payload = await fetchJSON<Record<string, unknown>>(
+        `/api/cron/jobs/${encodeURIComponent(rawId)}`,
+      );
+      setDetail(payload);
+    } catch {
+      setDetail(null);
+      setDetailError("Failed to load cron job details.");
+    } finally {
+      setDetailLoading(false);
+    }
+  }
+
   useEffect(() => {
     void loadJobs();
   }, []);
@@ -36,21 +73,48 @@ export function CronPage() {
     <section>
       <h2>Cron</h2>
       {error ? <p className="error-text">{error}</p> : null}
+      <div className="detail-layout">
       <ul className="list-grid">
         {jobs.map((job) => (
-          <li key={job.id || job.name}>
+          <li
+            key={job.id || job.name}
+            className={
+              selectedJobId === String(job.id || job.name || "")
+                ? "clickable-card active"
+                : "clickable-card"
+            }
+            onClick={() => selectJob(String(job.id || job.name || ""))}
+          >
             <strong>{job.name || job.id}</strong>
-            <p>{job.schedule || "no schedule"}</p>
+            <p>{renderSchedule(job.schedule)}</p>
             <p>Profile: {job.profile || "default"}</p>
             {job.id ? (
               <div className="button-row">
-                <button type="button" onClick={() => action(job.id as string, "trigger")}>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void action(job.id as string, "trigger");
+                  }}
+                >
                   Trigger
                 </button>
-                <button type="button" onClick={() => action(job.id as string, "pause")}>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void action(job.id as string, "pause");
+                  }}
+                >
                   Pause
                 </button>
-                <button type="button" onClick={() => action(job.id as string, "resume")}>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void action(job.id as string, "resume");
+                  }}
+                >
                   Resume
                 </button>
               </div>
@@ -58,6 +122,20 @@ export function CronPage() {
           </li>
         ))}
       </ul>
+      <aside className="detail-panel">
+        <h3>Cron Job Detail</h3>
+        {!selectedJobId ? (
+          <p className="subtle-copy">Click a cron row to inspect details.</p>
+        ) : null}
+        {detailLoading ? <p>Loading detail...</p> : null}
+        {detailError ? <p className="error-text">{detailError}</p> : null}
+        {detail ? (
+          <div className="detail-content">
+            <pre>{JSON.stringify(detail, null, 2)}</pre>
+          </div>
+        ) : null}
+      </aside>
+      </div>
     </section>
   );
 }

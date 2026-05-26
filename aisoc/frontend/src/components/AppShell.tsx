@@ -8,7 +8,6 @@ const NAV_ITEMS: Array<{ path: string; label: string }> = [
   { path: "/cron", label: "Cron" },
   { path: "/skills", label: "Skills" },
   { path: "/memory", label: "Memory" },
-  { path: "/logs", label: "Logs" },
 ];
 
 export function AppShell() {
@@ -49,4 +48,3 @@ export function AppShell() {
     </div>
   );
 }
-

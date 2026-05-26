@@ -70,3 +70,18 @@ def test_middleware_blocks_protected_api_without_token(monkeypatch) -> None:
     assert allowed.status_code == 200
     assert allowed.json() == {"ok": True}
 
+
+def test_openapi_exposes_bearer_auth_scheme(monkeypatch) -> None:
+    monkeypatch.setenv("AISOC_SESSION_TOKEN", "test-token")
+    settings = load_aisoc_settings()
+    app = create_app(settings)
+    client = TestClient(app)
+
+    resp = client.get("/openapi.json")
+    assert resp.status_code == 200
+    schema = resp.json()
+    security_schemes = schema["components"]["securitySchemes"]
+    assert "bearerAuth" in security_schemes
+    assert security_schemes["bearerAuth"]["type"] == "http"
+    assert security_schemes["bearerAuth"]["scheme"] == "bearer"
+    assert {"bearerAuth": []} in schema.get("security", [])

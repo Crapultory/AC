@@ -6,6 +6,7 @@ from pathlib import Path
 import webbrowser
 
 from fastapi import FastAPI, Request
+from fastapi.openapi.utils import get_openapi
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -32,6 +33,42 @@ PUBLIC_API_PATHS = frozenset(
         "/api/system/bootstrap",
     }
 )
+
+
+def _install_docs_bearer_auth(app: FastAPI) -> None:
+    """Add Swagger/OpenAPI bearer auth so docs can call protected APIs."""
+
+    def custom_openapi():
+        if app.openapi_schema:
+            return app.openapi_schema
+
+        schema = get_openapi(
+            title=app.title,
+            version="0.1.0",
+            description=(
+                "AISOC backend API. Use the `Authorize` button in Swagger UI "
+                "and provide `Bearer <token>` automatically via the token field."
+            ),
+            routes=app.routes,
+        )
+
+        components = schema.setdefault("components", {})
+        security_schemes = components.setdefault("securitySchemes", {})
+        security_schemes["bearerAuth"] = {
+            "type": "http",
+            "scheme": "bearer",
+            "bearerFormat": "Token",
+            "description": (
+                "Paste AISOC session token. Swagger will send "
+                "`Authorization: Bearer <token>`."
+            ),
+        }
+        schema["security"] = [{"bearerAuth": []}]
+
+        app.openapi_schema = schema
+        return app.openapi_schema
+
+    app.openapi = custom_openapi
 
 
 def create_app(settings: AisocSettings | None = None) -> FastAPI:
@@ -72,6 +109,7 @@ def create_app(settings: AisocSettings | None = None) -> FastAPI:
     app.include_router(build_skills_router())
     app.include_router(build_memory_router())
     app.include_router(build_logs_router())
+    _install_docs_bearer_auth(app)
 
     dist_index = None
     if active_settings.dist_dir:

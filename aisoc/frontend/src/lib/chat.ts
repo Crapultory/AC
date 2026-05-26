@@ -12,11 +12,13 @@ function wsBaseUrl(): string {
   return `${proto}://${window.location.host}`;
 }
 
-export function buildPtyUrl(
-  *,
-  channel: string,
-  resume: string | null,
-): string {
+export function buildPtyUrl({
+  channel,
+  resume,
+}: {
+  channel: string;
+  resume: string | null;
+}): string {
   const qs = new URLSearchParams({
     token: getStoredToken(),
     channel,
@@ -40,4 +42,3 @@ export function buildGatewayUrl(channel: string): string {
   });
   return `${wsBaseUrl()}/api/chat/ws?${qs.toString()}`;
 }
-
