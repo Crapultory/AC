@@ -1,0 +1,166 @@
+:root {
+  --aisoc-bg: #f4f2ed;
+  --aisoc-panel: #ffffff;
+  --aisoc-accent: #b04928;
+  --aisoc-accent-strong: #922f11;
+  --aisoc-text: #1f1f1f;
+  --aisoc-muted: #6d675f;
+  --aisoc-border: #d6d0c8;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  font-family: "IBM Plex Sans", "Segoe UI", sans-serif;
+  color: var(--aisoc-text);
+  background:
+    radial-gradient(circle at 15% 12%, #f8d6c4 0, transparent 35%),
+    radial-gradient(circle at 85% 88%, #ddd7f9 0, transparent 30%),
+    var(--aisoc-bg);
+}
+
+a {
+  color: var(--aisoc-accent-strong);
+}
+
+.login-page {
+  height: 100%;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.login-card {
+  width: min(520px, 95vw);
+  background: var(--aisoc-panel);
+  border: 1px solid var(--aisoc-border);
+  border-radius: 16px;
+  box-shadow: 0 20px 50px rgba(0, 0, 0, 0.08);
+  padding: 28px;
+}
+
+.brand-kicker {
+  margin: 0 0 8px;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--aisoc-accent-strong);
+}
+
+h1 {
+  margin: 0 0 10px;
+  font-size: 30px;
+  line-height: 1.1;
+}
+
+h2 {
+  margin: 0 0 8px;
+  font-size: 28px;
+}
+
+.subtle-copy {
+  color: var(--aisoc-muted);
+  margin: 0 0 18px;
+}
+
+.login-form {
+  display: grid;
+  gap: 10px;
+}
+
+.login-form input {
+  border: 1px solid var(--aisoc-border);
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-size: 15px;
+}
+
+.login-form button,
+.ghost-button {
+  border: none;
+  border-radius: 10px;
+  padding: 10px 12px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.login-form button {
+  background: var(--aisoc-accent);
+  color: #fff;
+}
+
+.ghost-button {
+  background: #f1ece6;
+  color: var(--aisoc-text);
+}
+
+.error-text {
+  margin: 0;
+  color: #991b1b;
+}
+
+.app-shell {
+  display: grid;
+  grid-template-columns: 248px 1fr;
+  min-height: 100%;
+}
+
+.side-nav {
+  border-right: 1px solid var(--aisoc-border);
+  background: #faf8f5;
+  padding: 20px 16px;
+  display: grid;
+  align-content: start;
+  gap: 20px;
+}
+
+.side-nav h1 {
+  margin: 0;
+  font-size: 36px;
+}
+
+.side-nav nav {
+  display: grid;
+  gap: 6px;
+}
+
+.side-nav nav a {
+  border-radius: 8px;
+  color: var(--aisoc-text);
+  text-decoration: none;
+  padding: 8px 10px;
+}
+
+.side-nav nav a.active {
+  background: #efe4da;
+  color: var(--aisoc-accent-strong);
+}
+
+.main-panel {
+  padding: 30px;
+}
+
+@media (max-width: 920px) {
+  .app-shell {
+    grid-template-columns: 1fr;
+  }
+
+  .side-nav {
+    border-right: none;
+    border-bottom: 1px solid var(--aisoc-border);
+  }
+
+  .main-panel {
+    padding: 22px;
+  }
+}
+

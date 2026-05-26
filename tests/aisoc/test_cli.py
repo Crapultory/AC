@@ -2,9 +2,12 @@ from __future__ import annotations
 
 import sys
 
+from fastapi.testclient import TestClient
 import pytest
 
 import hermes_cli.main as main_mod
+from aisoc.backend.config import load_aisoc_settings
+from aisoc.backend.server import create_app
 
 
 def test_aisoc_registered_in_builtin_subcommands() -> None:
@@ -36,3 +39,21 @@ def test_main_routes_aisoc_with_expected_defaults(monkeypatch: pytest.MonkeyPatc
     assert args.stop is False
     assert args.status is False
 
+
+def test_root_serves_index_html(tmp_path) -> None:
+    dist_dir = tmp_path / "web_dist"
+    dist_dir.mkdir(parents=True)
+    marker = "<div id='aisoc-root'>aisoc</div>"
+    (dist_dir / "index.html").write_text(marker, encoding="utf-8")
+
+    settings = load_aisoc_settings(dist_dir=dist_dir)
+    app = create_app(settings)
+    client = TestClient(app)
+
+    resp_root = client.get("/")
+    assert resp_root.status_code == 200
+    assert marker in resp_root.text
+
+    resp_spa = client.get("/chat")
+    assert resp_spa.status_code == 200
+    assert marker in resp_spa.text

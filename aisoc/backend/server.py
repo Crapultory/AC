@@ -7,7 +7,7 @@ import webbrowser
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
 import uvicorn
 
@@ -61,8 +61,26 @@ def create_app(settings: AisocSettings | None = None) -> FastAPI:
     app.include_router(build_auth_router(active_settings))
     app.include_router(build_system_router(active_settings))
 
-    if active_settings.dist_dir and active_settings.dist_dir.exists():
-        app.mount("/assets", StaticFiles(directory=active_settings.dist_dir / "assets"), name="assets")
+    dist_index = None
+    if active_settings.dist_dir:
+        candidate = active_settings.dist_dir / "index.html"
+        if candidate.exists():
+            dist_index = candidate
+        assets_dir = active_settings.dist_dir / "assets"
+        if assets_dir.exists():
+            app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    if dist_index is not None:
+
+        @app.get("/", include_in_schema=False)
+        async def root_index():
+            return FileResponse(dist_index)
+
+        @app.get("/{front_path:path}", include_in_schema=False)
+        async def spa_fallback(front_path: str):
+            if front_path.startswith("api/") or front_path == "health":
+                return JSONResponse(status_code=404, content={"detail": "Not Found"})
+            return FileResponse(dist_index)
 
     return app
 
