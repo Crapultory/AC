@@ -14,6 +14,12 @@ import uvicorn
 from aisoc.backend.auth import verify_bearer_token
 from aisoc.backend.config import AisocSettings, is_loopback_host, load_aisoc_settings
 from aisoc.backend.routes.auth import build_auth_router
+from aisoc.backend.routes.chat import build_chat_router
+from aisoc.backend.routes.cron import build_cron_router
+from aisoc.backend.routes.logs import build_logs_router
+from aisoc.backend.routes.memory import build_memory_router
+from aisoc.backend.routes.sessions import build_sessions_router
+from aisoc.backend.routes.skills import build_skills_router
 from aisoc.backend.routes.system import build_system_router
 
 
@@ -60,6 +66,12 @@ def create_app(settings: AisocSettings | None = None) -> FastAPI:
 
     app.include_router(build_auth_router(active_settings))
     app.include_router(build_system_router(active_settings))
+    app.include_router(build_chat_router(active_settings))
+    app.include_router(build_sessions_router())
+    app.include_router(build_cron_router())
+    app.include_router(build_skills_router())
+    app.include_router(build_memory_router())
+    app.include_router(build_logs_router())
 
     dist_index = None
     if active_settings.dist_dir:

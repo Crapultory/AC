@@ -30,3 +30,22 @@ class SystemBootstrapResponse(BaseModel):
     embedded_chat: bool
     auth_scheme: str
 
+
+class CronJobCreate(BaseModel):
+    prompt: str
+    schedule: str
+    name: str = ""
+    deliver: str = "local"
+
+
+class CronJobUpdate(BaseModel):
+    updates: dict
+
+
+class SkillToggleRequest(BaseModel):
+    name: str
+    enabled: bool
+
+
+class MemoryWriteRequest(BaseModel):
+    content: str
