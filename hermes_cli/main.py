@@ -10230,6 +10230,181 @@ def cmd_dashboard(args):
     )
 
 
+def _find_stale_aisoc_pids() -> list[int]:
+    """Return PIDs of ``hermes aisoc`` processes other than ourselves."""
+    patterns = [
+        "hermes aisoc",
+        "hermes_cli.main aisoc",
+        "hermes_cli/main.py aisoc",
+    ]
+    self_pid = os.getpid()
+    aisoc_pids: list[int] = []
+
+    try:
+        if sys.platform == "win32":
+            result = subprocess.run(
+                ["wmic", "process", "get", "ProcessId,CommandLine", "/FORMAT:LIST"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+                encoding="utf-8",
+                errors="ignore",
+            )
+            if result.returncode != 0 or result.stdout is None:
+                return []
+            current_cmd = ""
+            for line in result.stdout.split("\n"):
+                line = line.strip()
+                if line.startswith("CommandLine="):
+                    current_cmd = line[len("CommandLine=") :]
+                elif line.startswith("ProcessId="):
+                    pid_str = line[len("ProcessId=") :]
+                    if (
+                        any(p in current_cmd for p in patterns)
+                        and int(pid_str) != self_pid
+                    ):
+                        try:
+                            aisoc_pids.append(int(pid_str))
+                        except ValueError:
+                            pass
+        else:
+            result = subprocess.run(
+                ["ps", "-A", "-o", "pid=,command="],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode == 0:
+                for line in getattr(result, "stdout", "").split("\n"):
+                    stripped = line.strip()
+                    if not stripped or "grep" in stripped:
+                        continue
+                    parts = stripped.split(None, 1)
+                    if len(parts) != 2:
+                        continue
+                    try:
+                        pid = int(parts[0])
+                    except ValueError:
+                        continue
+                    command = parts[1]
+                    if any(p in command for p in patterns) and pid != self_pid:
+                        aisoc_pids.append(pid)
+    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
+        return []
+
+    return aisoc_pids
+
+
+def _kill_stale_aisoc_processes() -> None:
+    """Kill running ``hermes aisoc`` processes."""
+    pids = _find_stale_aisoc_pids()
+    if not pids:
+        return
+
+    print(f"⟲ Stopping {len(pids)} aisoc process(es)")
+    if sys.platform == "win32":
+        for pid in pids:
+            subprocess.run(
+                ["taskkill", "/PID", str(pid), "/F"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+        return
+
+    import signal as _signal
+    import time as _time
+
+    for pid in pids:
+        try:
+            os.kill(pid, _signal.SIGTERM)
+        except ProcessLookupError:
+            pass
+        except OSError:
+            pass
+
+    deadline = _time.monotonic() + 3.0
+    while _time.monotonic() < deadline:
+        from gateway.status import _pid_exists
+
+        alive = [pid for pid in pids if _pid_exists(pid)]
+        if not alive:
+            return
+        _time.sleep(0.1)
+
+    for pid in pids:
+        try:
+            from gateway.status import _pid_exists
+
+            if _pid_exists(pid):
+                os.kill(pid, _signal.SIGKILL)
+        except OSError:
+            pass
+
+
+def cmd_aisoc(args):
+    """Start the AISOC web UI server, or manage running instances."""
+    if getattr(args, "status", False):
+        pids = _find_stale_aisoc_pids()
+        if not pids:
+            print("No hermes aisoc processes running.")
+            sys.exit(0)
+        print(f"{len(pids)} hermes aisoc process(es) running:")
+        for pid in pids:
+            print(f"    PID {pid}")
+        sys.exit(0)
+
+    if getattr(args, "stop", False):
+        pids = _find_stale_aisoc_pids()
+        if not pids:
+            print("No hermes aisoc processes running.")
+            sys.exit(0)
+        _kill_stale_aisoc_processes()
+        sys.exit(0 if not _find_stale_aisoc_pids() else 1)
+
+    try:
+        import fastapi  # noqa: F401
+        import uvicorn  # noqa: F401
+    except ImportError as e:
+        print("Web UI dependencies not installed (need fastapi + uvicorn).")
+        print(
+            f"Re-install the package into this interpreter so metadata updates apply:\n"
+            f"  cd {PROJECT_ROOT}\n"
+            f"  {sys.executable} -m pip install -e .\n"
+            "If `pip` is missing in this venv, use:  uv pip install -e ."
+        )
+        print(f"Import error: {e}")
+        sys.exit(1)
+
+    aisoc_web_dir = PROJECT_ROOT / "aisoc" / "frontend"
+    if "AISOC_WEB_DIST" not in os.environ and not getattr(args, "skip_build", False):
+        if not _build_web_ui(aisoc_web_dir, fatal=True):
+            sys.exit(1)
+    elif getattr(args, "skip_build", False):
+        dist_root = (
+            Path(os.environ["AISOC_WEB_DIST"])
+            if "AISOC_WEB_DIST" in os.environ
+            else PROJECT_ROOT / "aisoc" / "backend" / "web_dist"
+        )
+        if not (dist_root / "index.html").exists():
+            print(f"✗ --skip-build was passed but no aisoc web dist found at: {dist_root}")
+            print("  Pre-build first:  cd aisoc/frontend && npm install && npm run build")
+            print("  Or drop --skip-build to build automatically.")
+            sys.exit(1)
+        print(f"→ Skipping aisoc web UI build (--skip-build); using dist at {dist_root}")
+
+    from aisoc.backend.server import start_server
+
+    embedded_chat = args.tui or os.environ.get("HERMES_AISOC_TUI") == "1"
+    start_server(
+        host=args.host,
+        port=args.port,
+        open_browser=not args.no_open,
+        allow_public=getattr(args, "insecure", False),
+        embedded_chat=embedded_chat,
+    )
+
+
 def cmd_completion(args, parser=None):
     """Print shell completion script."""
     from hermes_cli.completion import generate_bash, generate_zsh, generate_fish
@@ -10293,7 +10468,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
     {
         "acp", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
         "computer-use",
-        "config", "cron", "curator", "dashboard", "debug", "doctor",
+        "config", "cron", "curator", "dashboard", "aisoc", "debug", "doctor",
         "dump", "fallback", "gateway", "hooks", "import", "insights",
         "kanban", "login", "logout", "logs", "lsp", "mcp", "memory",
         "model", "pairing", "plugins", "postinstall", "profile", "proxy",
@@ -12992,6 +13167,56 @@ Examples:
         help="List running hermes dashboard processes and exit",
     )
     dashboard_parser.set_defaults(func=cmd_dashboard)
+
+    # =========================================================================
+    # aisoc command
+    # =========================================================================
+    aisoc_parser = subparsers.add_parser(
+        "aisoc",
+        help="Start the AISOC web console",
+        description="Launch the AISOC console for chat operations and runtime controls",
+    )
+    aisoc_parser.add_argument(
+        "--port", type=int, default=9120, help="Port (default 9120)"
+    )
+    aisoc_parser.add_argument(
+        "--host", default="127.0.0.1", help="Host (default 127.0.0.1)"
+    )
+    aisoc_parser.add_argument(
+        "--no-open", action="store_true", help="Don't open browser automatically"
+    )
+    aisoc_parser.add_argument(
+        "--insecure",
+        action="store_true",
+        help="Allow binding to non-localhost (DANGEROUS: exposes APIs on the network)",
+    )
+    aisoc_parser.add_argument(
+        "--tui",
+        action="store_true",
+        help=(
+            "Expose the in-browser Chat tab (embedded `hermes --tui` via PTY/WebSocket). "
+            "Alternatively set HERMES_AISOC_TUI=1."
+        ),
+    )
+    aisoc_parser.add_argument(
+        "--skip-build",
+        action="store_true",
+        help=(
+            "Skip the AISOC web UI build step and serve existing dist directly. "
+            "Pre-build with: cd aisoc/frontend && npm run build"
+        ),
+    )
+    aisoc_parser.add_argument(
+        "--stop",
+        action="store_true",
+        help="Stop all running hermes aisoc processes and exit",
+    )
+    aisoc_parser.add_argument(
+        "--status",
+        action="store_true",
+        help="List running hermes aisoc processes and exit",
+    )
+    aisoc_parser.set_defaults(func=cmd_aisoc)
 
     # =========================================================================
     # logs command
