@@ -5,6 +5,7 @@ import { fetchJSON } from "../lib/api";
 
 type SessionRow = {
   id: string;
+  session_id?: string;
   title?: string;
   model?: string;
   source?: string;
@@ -35,6 +36,17 @@ export function SessionsPage() {
     void load();
   }, []);
 
+  async function relaunch(rawSessionId: string) {
+    try {
+      const payload = await fetchJSON<{ session_id: string }>(
+        `/api/sessions/${encodeURIComponent(rawSessionId)}/latest-descendant`,
+      );
+      navigate(`/chat?resume=${encodeURIComponent(payload.session_id || rawSessionId)}`);
+    } catch {
+      navigate(`/chat?resume=${encodeURIComponent(rawSessionId)}`);
+    }
+  }
+
   return (
     <section>
       <h2>Sessions</h2>
@@ -42,11 +54,15 @@ export function SessionsPage() {
       {error ? <p className="error-text">{error}</p> : null}
       <ul className="list-grid">
         {rows.map((row) => (
-          <li key={row.id}>
-            <strong>{row.title || row.id}</strong>
+          <li key={row.id || row.session_id}>
+            <strong>{row.title || row.id || row.session_id}</strong>
             <p>{row.model || "unknown-model"}</p>
             <p>{row.source || "unknown-source"}</p>
-            <button type="button" onClick={() => navigate(`/chat?resume=${row.id}`)}>
+            <button
+              type="button"
+              onClick={() => relaunch(row.id || row.session_id || "")}
+              disabled={!(row.id || row.session_id)}
+            >
               Relaunch in Chat
             </button>
           </li>

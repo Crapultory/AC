@@ -217,6 +217,53 @@ h2 {
   border-radius: 10px;
 }
 
+.chat-layout {
+  display: grid;
+  grid-template-columns: 1fr 320px;
+  gap: 14px;
+}
+
+.chat-terminal-pane {
+  min-width: 0;
+}
+
+.terminal-host {
+  height: min(72vh, 760px);
+  border: 1px solid #214949;
+  border-radius: 10px;
+  overflow: hidden;
+  margin-top: 8px;
+}
+
+.chat-sidebar {
+  background: var(--aisoc-panel);
+  border: 1px solid var(--aisoc-border);
+  border-radius: 12px;
+  padding: 12px;
+}
+
+.chat-sidebar h3 {
+  margin-top: 0;
+}
+
+.chat-events {
+  max-height: min(68vh, 700px);
+  overflow: auto;
+  display: grid;
+  gap: 8px;
+}
+
+.chat-events pre {
+  margin: 0;
+  padding: 8px;
+  background: #f5f1eb;
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace;
+  font-size: 12px;
+}
+
 @media (max-width: 920px) {
   .app-shell {
     grid-template-columns: 1fr;
@@ -237,5 +284,13 @@ h2 {
 
   .filter-row {
     grid-template-columns: 1fr;
+  }
+
+  .chat-layout {
+    grid-template-columns: 1fr;
+  }
+
+  .terminal-host {
+    height: 56vh;
   }
 }
