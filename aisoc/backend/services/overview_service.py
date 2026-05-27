@@ -17,6 +17,7 @@ _STATUS_RECENT_WINDOW_SECONDS = 6 * 3600
 _ACTIVE_SESSION_WINDOW_SECONDS = 24 * 3600
 _DEFAULT_MEMORY_LIMIT = 2200
 _DEFAULT_USER_LIMIT = 1375
+_TOOL_OUTPUT_TRUNCATE_CHARS = 500
 
 
 def _today_start_ts(now_ts: float) -> float:
@@ -55,6 +56,173 @@ def _memory_totals() -> tuple[int, int]:
     except Exception:
         pass
     return used, max(memory_total + user_total, 0)
+
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _cron_session_pattern(job_id: str) -> str:
+    return f"cron_{_escape_like(job_id)}%"
+
+
+def _format_schedule(schedule: Any) -> str:
+    if isinstance(schedule, dict):
+        display = schedule.get("display")
+        expr = schedule.get("expr")
+        return str(display or expr or "unknown")
+    return str(schedule or "unknown")
+
+
+def get_cronjobs() -> list[dict[str, Any]]:
+    jobs = cron_service.list_jobs(profile="all")
+    db = SessionDB()
+    try:
+        result: list[dict[str, Any]] = []
+        for job in jobs:
+            job_id = str(job.get("id") or "")
+            if not job_id:
+                continue
+            like_pattern = _cron_session_pattern(job_id)
+            last_run = _query_one(
+                db,
+                """
+                SELECT id, started_at, ended_at,
+                       COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) AS total_tokens,
+                       end_reason
+                FROM sessions
+                WHERE id LIKE ? ESCAPE '\\'
+                ORDER BY started_at DESC
+                LIMIT 1
+                """,
+                (like_pattern,),
+            )
+            run_count_row = _query_one(
+                db,
+                "SELECT COUNT(*) AS count FROM sessions WHERE id LIKE ? ESCAPE '\\'",
+                (like_pattern,),
+            )
+            result.append(
+                {
+                    "id": job_id,
+                    "name": str(job.get("name") or "unnamed"),
+                    "enabled": bool(job.get("enabled", True)),
+                    "schedule": _format_schedule(job.get("schedule")),
+                    "last_run": (
+                        {
+                            "session_id": str(last_run.get("id") or ""),
+                            "started_at": last_run.get("started_at"),
+                            "ended_at": last_run.get("ended_at"),
+                            "tokens": int(last_run.get("total_tokens") or 0),
+                            "status": str(last_run.get("end_reason") or "completed"),
+                        }
+                        if last_run
+                        else None
+                    ),
+                    "run_count": int(run_count_row.get("count") or 0),
+                }
+            )
+        return result
+    finally:
+        db.close()
+
+
+def get_cronjob_history(job_id: str) -> list[dict[str, Any]] | None:
+    if not cron_service.get_job(job_id):
+        return None
+
+    db = SessionDB()
+    try:
+        rows = _query_all(
+            db,
+            """
+            SELECT id, started_at, ended_at, message_count,
+                   COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) AS total_tokens,
+                   end_reason
+            FROM sessions
+            WHERE id LIKE ? ESCAPE '\\'
+            ORDER BY started_at DESC
+            LIMIT 20
+            """,
+            (_cron_session_pattern(job_id),),
+        )
+    finally:
+        db.close()
+
+    history: list[dict[str, Any]] = []
+    for row in rows:
+        started_at = row.get("started_at")
+        ended_at = row.get("ended_at")
+        duration = None
+        if started_at is not None and ended_at is not None:
+            try:
+                duration = int(float(ended_at) - float(started_at))
+            except Exception:
+                duration = None
+        history.append(
+            {
+                "session_id": str(row.get("id") or ""),
+                "started_at": started_at,
+                "ended_at": ended_at,
+                "duration_seconds": duration,
+                "messages": int(row.get("message_count") or 0),
+                "tokens": int(row.get("total_tokens") or 0),
+                "status": str(row.get("end_reason") or "completed"),
+            }
+        )
+    return history
+
+
+def get_session_detail(session_id: str) -> dict[str, Any] | None:
+    db = SessionDB()
+    try:
+        sid = db.resolve_session_id(session_id)
+        if not sid:
+            return None
+
+        session = db.get_session(sid)
+        if not session:
+            return None
+
+        raw_messages = db.get_messages(sid)
+    finally:
+        db.close()
+
+    messages: list[dict[str, Any]] = []
+    for msg in raw_messages:
+        role = str(msg.get("role") or "")
+        content = msg.get("content")
+        if content is None:
+            text = ""
+        elif isinstance(content, str):
+            text = content
+        else:
+            text = str(content)
+
+        if role == "tool" and len(text) > _TOOL_OUTPUT_TRUNCATE_CHARS:
+            text = text[:_TOOL_OUTPUT_TRUNCATE_CHARS] + "...[truncated]"
+        if role == "assistant" and not text:
+            continue
+
+        messages.append(
+            {
+                "role": role,
+                "content": text,
+                "tool_name": msg.get("tool_name"),
+                "timestamp": msg.get("timestamp"),
+            }
+        )
+
+    return {
+        "session_id": sid,
+        "source": str(session.get("source") or ""),
+        "model": str(session.get("model") or ""),
+        "started_at": session.get("started_at"),
+        "ended_at": session.get("ended_at"),
+        "message_count": int(session.get("message_count") or 0),
+        "tokens": int(session.get("input_tokens") or 0) + int(session.get("output_tokens") or 0),
+        "messages": messages,
+    }
 
 
 def get_status() -> dict[str, Any]:
