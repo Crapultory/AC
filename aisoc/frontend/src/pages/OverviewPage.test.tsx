@@ -3,8 +3,17 @@ import { renderToStaticMarkup } from "react-dom/server";
 
 import {
   OverviewPage,
+  createCronHistoryModalOpenState,
+  createKeywordModalOpenState,
+  createSessionModalOpenState,
   formatDateTime,
+  loadCronDistributionForPeriod,
   loadOverviewDataResilient,
+  loadTrendForRange,
+  openCronHistoryDrilldown,
+  openKeywordSessionsDrilldown,
+  openSessionDetailDrilldown,
+  shouldLoadTrendRange,
   type OverviewLoaderDeps,
 } from "./OverviewPage";
 
@@ -160,6 +169,147 @@ describe("loadOverviewDataResilient", () => {
 
     expect(result.data).toBeNull();
     expect(result.error).toContain("Failed to load overview data.");
+  });
+});
+
+describe("Overview interactions", () => {
+  it("computes trend switch behavior for tabs", () => {
+    expect(shouldLoadTrendRange(7, 30, true)).toBe(true);
+    expect(shouldLoadTrendRange(7, 7, false)).toBe(true);
+    expect(shouldLoadTrendRange(7, 7, true)).toBe(false);
+  });
+
+  it("switches trend range between 7D and 30D via loader", async () => {
+    const calledDays: number[] = [];
+
+    const result7 = await loadTrendForRange(7, {
+      getOverviewTokenTrend: async (days) => {
+        calledDays.push(days);
+        return [];
+      },
+    });
+    const result30 = await loadTrendForRange(30, {
+      getOverviewTokenTrend: async (days) => {
+        calledDays.push(days);
+        return [];
+      },
+    });
+
+    expect(calledDays).toEqual([7, 30]);
+    expect(result7.error).toBe("");
+    expect(result30.error).toBe("");
+  });
+
+  it("loads cron period distribution for today/7d/30d", async () => {
+    const calledPeriods: string[] = [];
+    const mockCronDistribution = async (period?: "today" | "7d" | "30d") => {
+      const safePeriod = period ?? "today";
+      calledPeriods.push(safePeriod);
+      return {
+        period: safePeriod,
+        total_cron_tokens: 1,
+        non_cron_tokens: 1,
+        grand_total: 2,
+        cron_percent: 50,
+        jobs: [],
+      };
+    };
+
+    await loadCronDistributionForPeriod("today", {
+      getCronTokenDistribution: mockCronDistribution,
+    });
+    await loadCronDistributionForPeriod("7d", {
+      getCronTokenDistribution: mockCronDistribution,
+    });
+    await loadCronDistributionForPeriod("30d", {
+      getCronTokenDistribution: mockCronDistribution,
+    });
+
+    expect(calledPeriods).toEqual(["today", "7d", "30d"]);
+  });
+
+  it("opens drilldowns for cron history/session detail/keyword sessions", async () => {
+    const calls: string[] = [];
+
+    const cron = await openCronHistoryDrilldown("job-1", {
+      getCronjobHistoryDrilldown: async (jobId) => {
+        calls.push(`cron:${jobId}`);
+        return [
+          {
+            session_id: "sess-1",
+            started_at: 1710000100,
+            ended_at: 1710000200,
+            duration_seconds: 100,
+            messages: 5,
+            tokens: 200,
+            status: "success",
+          },
+        ];
+      },
+    });
+
+    const session = await openSessionDetailDrilldown("sess-1", {
+      getSessionDetailDrilldown: async (sessionId) => {
+        calls.push(`session:${sessionId}`);
+        return {
+          session_id: sessionId,
+          source: "cron",
+          model: "gpt-5",
+          started_at: 1710000100,
+          ended_at: 1710000200,
+          message_count: 5,
+          tokens: 200,
+          messages: [],
+        };
+      },
+    });
+
+    const keyword = await openKeywordSessionsDrilldown("security", {
+      getKeywordSessionsDrilldown: async (word) => {
+        calls.push(`keyword:${word}`);
+        return [
+          {
+            session_id: "sess-2",
+            title: "Security review",
+            source: "cli",
+            started_at: 1710000100,
+            messages: 3,
+            tokens: 120,
+          },
+        ];
+      },
+    });
+
+    expect(calls).toEqual(["cron:job-1", "session:sess-1", "keyword:security"]);
+    expect(cron.error).toBe("");
+    expect(session.error).toBe("");
+    expect(keyword.error).toBe("");
+    expect(cron.payload?.[0]?.session_id).toBe("sess-1");
+    expect(session.payload?.session_id).toBe("sess-1");
+    expect(keyword.payload?.[0]?.session_id).toBe("sess-2");
+  });
+
+  it("creates modal open states for cron/session/keyword drilldowns", () => {
+    const cronState = createCronHistoryModalOpenState({
+      id: "job-1",
+      name: "Daily summary",
+      enabled: true,
+      schedule: "0 8 * * *",
+      last_run: null,
+      run_count: 0,
+    });
+    const sessionState = createSessionModalOpenState("sess-1");
+    const keywordState = createKeywordModalOpenState("security");
+
+    expect(cronState.open).toBe(true);
+    expect(cronState.jobId).toBe("job-1");
+    expect(cronState.loading).toBe(true);
+    expect(sessionState.open).toBe(true);
+    expect(sessionState.sessionId).toBe("sess-1");
+    expect(sessionState.detail).toBeNull();
+    expect(keywordState.open).toBe(true);
+    expect(keywordState.keyword).toBe("security");
+    expect(keywordState.items).toEqual([]);
   });
 });
 

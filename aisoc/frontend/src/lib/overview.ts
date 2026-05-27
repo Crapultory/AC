@@ -130,6 +130,15 @@ export type SessionDetail = {
   messages: SessionDetailMessage[];
 };
 
+export type PaginatedSecurityEvents = {
+  page: number;
+  page_size: number;
+  fetched_count: number;
+  items: SecurityEvent[];
+  has_prev: boolean;
+  has_next: boolean;
+};
+
 export function getOverviewStatus(): Promise<OverviewStatus> {
   return fetchJSON<OverviewStatus>("/api/overview/status");
 }
@@ -146,6 +155,27 @@ export function listOverviewSecurityEvents(limit: number = 15): Promise<Security
   return fetchJSON<SecurityEvent[]>(`/api/overview/security-events?limit=${limit}`);
 }
 
+export async function listOverviewSecurityEventsPage(
+  page: number,
+  pageSize: number = 5,
+): Promise<PaginatedSecurityEvents> {
+  const safePage = Number.isFinite(page) ? Math.max(1, Math.trunc(page)) : 1;
+  const safePageSize = Number.isFinite(pageSize) ? Math.min(25, Math.max(1, Math.trunc(pageSize))) : 5;
+  // Fetch exactly what the requested page needs (+1 sentinel) so has_next stays correct.
+  const limit = safePage * safePageSize + 1;
+  const events = await listOverviewSecurityEvents(limit);
+  const start = (safePage - 1) * safePageSize;
+  const end = start + safePageSize;
+  return {
+    page: safePage,
+    page_size: safePageSize,
+    fetched_count: events.length,
+    items: events.slice(start, end),
+    has_prev: safePage > 1,
+    has_next: events.length > end,
+  };
+}
+
 export function listOverviewKeywords(): Promise<OverviewKeyword[]> {
   return fetchJSON<OverviewKeyword[]>("/api/overview/keywords");
 }
@@ -153,6 +183,10 @@ export function listOverviewKeywords(): Promise<OverviewKeyword[]> {
 export function getKeywordSessions(keyword: string): Promise<KeywordSession[]> {
   const encodedKeyword = encodeURIComponent(keyword);
   return fetchJSON<KeywordSession[]>(`/api/overview/keywords/${encodedKeyword}/sessions`);
+}
+
+export function getKeywordSessionsDrilldown(keyword: string): Promise<KeywordSession[]> {
+  return getKeywordSessions(keyword);
 }
 
 export function getCronTokenDistribution(
@@ -170,7 +204,15 @@ export function getCronjobHistory(jobId: string): Promise<CronjobHistoryItem[]> 
   return fetchJSON<CronjobHistoryItem[]>(`/api/overview/cronjobs/${encodedJobId}/history`);
 }
 
+export function getCronjobHistoryDrilldown(jobId: string): Promise<CronjobHistoryItem[]> {
+  return getCronjobHistory(jobId);
+}
+
 export function getSessionDetail(sessionId: string): Promise<SessionDetail> {
   const encodedSessionId = encodeURIComponent(sessionId);
   return fetchJSON<SessionDetail>(`/api/overview/sessions/${encodedSessionId}/detail`);
+}
+
+export function getSessionDetailDrilldown(sessionId: string): Promise<SessionDetail> {
+  return getSessionDetail(sessionId);
 }
