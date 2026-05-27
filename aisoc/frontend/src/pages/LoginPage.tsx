@@ -13,7 +13,7 @@ export function LoginPage() {
         <p className="subtle-copy">
           Enter the token from `AISOC_SESSION_TOKEN` or the startup log output.
         </p>
-        <LoginForm onSuccess={() => navigate("/sessions", { replace: true })} />
+        <LoginForm onSuccess={() => navigate("/overview", { replace: true })} />
       </div>
     </section>
   );

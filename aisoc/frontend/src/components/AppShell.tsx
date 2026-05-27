@@ -3,6 +3,7 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 import { clearStoredToken } from "../lib/auth";
 
 const NAV_ITEMS: Array<{ path: string; label: string }> = [
+  { path: "/overview", label: "Overview" },
   { path: "/chat", label: "Chat" },
   { path: "/sessions", label: "Sessions" },
   { path: "/cron", label: "Cron" },
