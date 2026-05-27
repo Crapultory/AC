@@ -146,3 +146,48 @@ def test_get_token_trend_returns_daily_rows(monkeypatch, tmp_path) -> None:
     assert last["output_tokens"] == 150
     assert last["total_tokens"] == 450
     assert last["sessions"] == 2
+
+
+def test_started_outside_today_is_excluded_from_today_stats_and_today_trend(
+    monkeypatch, tmp_path
+) -> None:
+    now_ts = datetime(2026, 5, 27, 12, 0, 0).timestamp()
+    db_path = tmp_path / "state.db"
+    _seed_sessions(db_path, now_ts)
+
+    db = SessionDB(db_path=db_path)
+    try:
+        db.create_session("s_open_prev_day", "cli", model="gpt-5")
+        db.update_token_counts("s_open_prev_day", input_tokens=999, output_tokens=777)
+        with db._lock:
+            db._conn.execute(
+                "UPDATE sessions SET started_at = ?, ended_at = NULL WHERE id = ?",
+                (now_ts - 36 * 3600, "s_open_prev_day"),
+            )
+    finally:
+        db.close()
+
+    monkeypatch.setattr(overview_service, "SessionDB", lambda: SessionDB(db_path=db_path))
+    monkeypatch.setattr(overview_service.time, "time", lambda: now_ts)
+    monkeypatch.setattr(overview_service.cron_service, "list_jobs", lambda profile="all": [])
+    monkeypatch.setattr(overview_service.memory_service, "read_soul", lambda: {"content": ""})
+    monkeypatch.setattr(
+        overview_service.memory_service,
+        "read_user_preferences",
+        lambda: {"content": ""},
+    )
+    monkeypatch.setattr(
+        overview_service,
+        "load_config",
+        lambda: {"memory": {"memory_char_limit": 2200, "user_char_limit": 1375}},
+    )
+
+    stats = overview_service.get_stats()
+    trend = overview_service.get_token_trend(days=7)
+
+    assert stats["today_input_tokens"] == 300
+    assert stats["today_output_tokens"] == 150
+    assert stats["today_tokens"] == 450
+    assert trend[-1]["input_tokens"] == 300
+    assert trend[-1]["output_tokens"] == 150
+    assert trend[-1]["total_tokens"] == 450

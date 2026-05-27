@@ -120,6 +120,8 @@ def get_stats() -> dict[str, Any]:
 
     db = SessionDB()
     try:
+        # Intentionally bucket today's counters by sessions.started_at to mirror
+        # aisoc-dashboard reference behavior.
         summary = _query_one(
             db,
             """
@@ -183,6 +185,8 @@ def get_token_trend(days: int) -> list[dict[str, Any]]:
 
     db = SessionDB()
     try:
+        # Intentionally aggregate trend by sessions.started_at day to mirror
+        # aisoc-dashboard reference behavior.
         trend_rows = _query_all(
             db,
             """

@@ -73,8 +73,12 @@ def test_overview_token_trend_days_validation(monkeypatch) -> None:
     valid_30 = client.get("/api/overview/token-trend?days=30", headers=headers)
     assert valid_30.status_code == 200
 
+    valid_07 = client.get("/api/overview/token-trend?days=07", headers=headers)
+    assert valid_07.status_code == 200
+
     invalid = client.get("/api/overview/token-trend?days=14", headers=headers)
     assert invalid.status_code == 422
+    assert invalid.json() == {"detail": "days must be 7 or 30"}
 
 
 def test_overview_token_trend_response_shape(monkeypatch) -> None:
