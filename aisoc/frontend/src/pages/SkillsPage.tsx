@@ -35,22 +35,33 @@ export function SkillsPage() {
 
   return (
     <section>
-      <h2>Skills</h2>
-      {error ? <p className="error-text">{error}</p> : null}
-      <ul className="list-grid">
-        {skills.map((skill) => (
-          <li key={skill.name}>
-            <strong>{skill.name}</strong>
-            <p>{skill.description || "No description available."}</p>
-            <button
-              type="button"
-              onClick={() => toggleSkill(skill.name, !skill.enabled)}
-            >
-              {skill.enabled ? "Disable" : "Enable"}
-            </button>
-          </li>
-        ))}
-      </ul>
+      <header className="detail-panel">
+        <h2>Skills</h2>
+        <p className="subtle-copy">Enable or disable skill modules without changing backend behavior.</p>
+        {error ? <p className="error-text">{error}</p> : null}
+      </header>
+      <section className="detail-panel" style={{ marginTop: 14 }}>
+        <h3>Installed Skills</h3>
+        {!error && skills.length === 0 ? <p className="subtle-copy">No skills found.</p> : null}
+        <ul
+          className="list-grid"
+          style={{
+            display: "grid",
+            gap: 10,
+            gridTemplateColumns: "repeat(auto-fit, minmax(220px, 1fr))",
+          }}
+        >
+          {skills.map((skill) => (
+            <li key={skill.name}>
+              <strong>{skill.name}</strong>
+              <p>{skill.description || "No description available."}</p>
+              <button type="button" onClick={() => toggleSkill(skill.name, !skill.enabled)}>
+                {skill.enabled ? "Disable" : "Enable"}
+              </button>
+            </li>
+          ))}
+        </ul>
+      </section>
     </section>
   );
 }

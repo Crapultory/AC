@@ -200,9 +200,12 @@ export function ChatPage() {
   }, [channel, resume, status?.ready]);
 
   return (
-    <section className="chat-layout">
-      <div className="chat-terminal-pane">
+    <section>
+      <header className="detail-panel">
         <h2>Chat</h2>
+        <p className="subtle-copy">
+          Embedded terminal session via PTY with realtime gateway event feed.
+        </p>
         {resume ? <p className="subtle-copy">Resume target: {resume}</p> : null}
         {!status?.ready ? (
           <p className="subtle-copy">
@@ -210,9 +213,15 @@ export function ChatPage() {
           </p>
         ) : null}
         {banner ? <p className="error-text">{banner}</p> : null}
-        <div className="terminal-host" ref={hostRef} />
+      </header>
+      <div className="chat-layout" style={{ marginTop: 14 }}>
+        <article className="detail-panel chat-terminal-pane">
+          <h3>Terminal</h3>
+          <p className="subtle-copy">Interactive Hermes TUI stream (PTY over websocket).</p>
+          <div className="terminal-host" ref={hostRef} />
+        </article>
+        <ChatSidebar events={events} />
       </div>
-      <ChatSidebar events={events} />
     </section>
   );
 }

@@ -71,70 +71,77 @@ export function CronPage() {
 
   return (
     <section>
-      <h2>Cron</h2>
-      {error ? <p className="error-text">{error}</p> : null}
-      <div className="detail-layout">
-      <ul className="list-grid">
-        {jobs.map((job) => (
-          <li
-            key={job.id || job.name}
-            className={
-              selectedJobId === String(job.id || job.name || "")
-                ? "clickable-card active"
-                : "clickable-card"
-            }
-            onClick={() => selectJob(String(job.id || job.name || ""))}
-          >
-            <strong>{job.name || job.id}</strong>
-            <p>{renderSchedule(job.schedule)}</p>
-            <p>Profile: {job.profile || "default"}</p>
-            {job.id ? (
-              <div className="button-row">
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void action(job.id as string, "trigger");
-                  }}
-                >
-                  Trigger
-                </button>
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void action(job.id as string, "pause");
-                  }}
-                >
-                  Pause
-                </button>
-                <button
-                  type="button"
-                  onClick={(event) => {
-                    event.stopPropagation();
-                    void action(job.id as string, "resume");
-                  }}
-                >
-                  Resume
-                </button>
-              </div>
-            ) : null}
-          </li>
-        ))}
-      </ul>
-      <aside className="detail-panel">
-        <h3>Cron Job Detail</h3>
-        {!selectedJobId ? (
-          <p className="subtle-copy">Click a cron row to inspect details.</p>
-        ) : null}
-        {detailLoading ? <p>Loading detail...</p> : null}
-        {detailError ? <p className="error-text">{detailError}</p> : null}
-        {detail ? (
-          <div className="detail-content">
-            <pre>{JSON.stringify(detail, null, 2)}</pre>
-          </div>
-        ) : null}
-      </aside>
+      <header className="detail-panel">
+        <h2>Cron</h2>
+        <p className="subtle-copy">Inspect and control scheduled jobs.</p>
+        {error ? <p className="error-text">{error}</p> : null}
+      </header>
+      <div className="detail-layout" style={{ marginTop: 14 }}>
+        <article className="detail-panel">
+          <h3>Jobs</h3>
+          {jobs.length === 0 ? <p className="subtle-copy">No cron jobs found.</p> : null}
+          <ul className="list-grid" style={{ display: "grid", gap: 10 }}>
+            {jobs.map((job) => (
+              <li
+                key={job.id || job.name}
+                className={
+                  selectedJobId === String(job.id || job.name || "")
+                    ? "clickable-card active"
+                    : "clickable-card"
+                }
+                onClick={() => selectJob(String(job.id || job.name || ""))}
+              >
+                <strong>{job.name || job.id}</strong>
+                <p>{renderSchedule(job.schedule)}</p>
+                <p>Profile: {job.profile || "default"}</p>
+                {job.id ? (
+                  <div className="button-row">
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void action(job.id as string, "trigger");
+                      }}
+                    >
+                      Trigger
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void action(job.id as string, "pause");
+                      }}
+                    >
+                      Pause
+                    </button>
+                    <button
+                      type="button"
+                      onClick={(event) => {
+                        event.stopPropagation();
+                        void action(job.id as string, "resume");
+                      }}
+                    >
+                      Resume
+                    </button>
+                  </div>
+                ) : null}
+              </li>
+            ))}
+          </ul>
+        </article>
+        <aside className="detail-panel">
+          <h3>Cron Job Detail</h3>
+          {!selectedJobId ? (
+            <p className="subtle-copy">Click a cron row to inspect details.</p>
+          ) : null}
+          {detailLoading ? <p>Loading detail...</p> : null}
+          {detailError ? <p className="error-text">{detailError}</p> : null}
+          {detail ? (
+            <div className="detail-content">
+              <pre>{JSON.stringify(detail, null, 2)}</pre>
+            </div>
+          ) : null}
+        </aside>
       </div>
     </section>
   );

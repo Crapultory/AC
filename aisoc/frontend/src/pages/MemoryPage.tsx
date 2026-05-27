@@ -94,12 +94,13 @@ export function MemoryPage() {
 
   return (
     <section>
-      <h2>Memory</h2>
-      <p className="subtle-copy">
-        Edit `SOUL.md`, `USER.md`, and built-in memory files.
-      </p>
-      <div className="memory-layout">
-        <aside className="memory-nav">
+      <header className="detail-panel">
+        <h2>Memory</h2>
+        <p className="subtle-copy">Edit `SOUL.md`, `USER.md`, and built-in memory files.</p>
+      </header>
+      <div className="memory-layout" style={{ marginTop: 14 }}>
+        <aside className="detail-panel memory-nav">
+          <h3>Memory Files</h3>
           <button type="button" onClick={() => setSelected("soul")}>
             Agent Soul
           </button>
@@ -107,22 +108,14 @@ export function MemoryPage() {
             User Preferences
           </button>
           {(memoryIndex?.memory_files || []).map((file) => (
-            <button
-              key={file.name}
-              type="button"
-              onClick={() => setSelected(`file:${file.name}`)}
-            >
+            <button key={file.name} type="button" onClick={() => setSelected(`file:${file.name}`)}>
               {file.name}
             </button>
           ))}
         </aside>
-        <div className="memory-editor">
+        <div className="detail-panel memory-editor">
           <h3>{selectedLabel}</h3>
-          <textarea
-            value={content}
-            onChange={(event) => setContent(event.target.value)}
-            rows={20}
-          />
+          <textarea value={content} onChange={(event) => setContent(event.target.value)} rows={20} />
           <div>
             <button type="button" onClick={save} disabled={saving}>
               {saving ? "Saving..." : "Save"}

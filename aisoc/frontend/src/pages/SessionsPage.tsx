@@ -35,6 +35,7 @@ export function SessionsPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [messages, setMessages] = useState<SessionMessagesResponse["messages"]>([]);
+  const visibleMessages = messages.filter((msg) => (msg.role || "").toLowerCase() !== "system");
 
   useEffect(() => {
     async function load() {
@@ -81,37 +82,44 @@ export function SessionsPage() {
 
   return (
     <section>
-      <h2>Sessions</h2>
-      {loading ? <p>Loading sessions...</p> : null}
-      {error ? <p className="error-text">{error}</p> : null}
-      <div className="detail-layout">
-        <ul className="list-grid">
-          {rows.map((row) => (
-            <li
-              key={row.id || row.session_id}
-              className={
-                selectedSessionId === (row.id || row.session_id || "")
-                  ? "clickable-card active"
-                  : "clickable-card"
-              }
-              onClick={() => selectSession(row.id || row.session_id || "")}
-            >
-              <strong>{row.title || row.id || row.session_id}</strong>
-              <p>{row.model || "unknown-model"}</p>
-              <p>{row.source || "unknown-source"}</p>
-              <button
-                type="button"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  void relaunch(row.id || row.session_id || "");
-                }}
-                disabled={!(row.id || row.session_id)}
+      <header className="detail-panel">
+        <h2>Sessions</h2>
+        <p className="subtle-copy">Browse recent sessions and inspect message-only history.</p>
+        {error ? <p className="error-text">{error}</p> : null}
+      </header>
+      <div className="detail-layout" style={{ marginTop: 14 }}>
+        <article className="detail-panel">
+          <h3>Recent Sessions</h3>
+          {loading ? <p>Loading sessions...</p> : null}
+          {!loading && rows.length === 0 ? <p className="subtle-copy">No sessions found.</p> : null}
+          <ul className="list-grid" style={{ display: "grid", gap: 10 }}>
+            {rows.map((row) => (
+              <li
+                key={row.id || row.session_id}
+                className={
+                  selectedSessionId === (row.id || row.session_id || "")
+                    ? "clickable-card active"
+                    : "clickable-card"
+                }
+                onClick={() => selectSession(row.id || row.session_id || "")}
               >
-                Relaunch in Chat
-              </button>
-            </li>
-          ))}
-        </ul>
+                <strong>{row.title || row.id || row.session_id}</strong>
+                <p>{row.model || "unknown-model"}</p>
+                <p>{row.source || "unknown-source"}</p>
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.stopPropagation();
+                    void relaunch(row.id || row.session_id || "");
+                  }}
+                  disabled={!(row.id || row.session_id)}
+                >
+                  Relaunch in Chat
+                </button>
+              </li>
+            ))}
+          </ul>
+        </article>
         <aside className="detail-panel">
           <h3>Session Messages</h3>
           {!selectedSessionId ? (
@@ -119,18 +127,20 @@ export function SessionsPage() {
           ) : null}
           {detailLoading ? <p>Loading messages...</p> : null}
           {detailError ? <p className="error-text">{detailError}</p> : null}
-          {messages.length > 0 ? (
+          {!detailLoading && !detailError && selectedSessionId && visibleMessages.length === 0 ? (
+            <p className="subtle-copy">No non-system messages available for this session.</p>
+          ) : null}
+          {visibleMessages.length > 0 ? (
             <div className="detail-messages">
               <h4>Recent Messages</h4>
-              {messages
-                .filter((msg) => (msg.role || "").toLowerCase() !== "system")
-                .slice(-20)
-                .map((msg, index) => (
-                  <div key={`${index}-${msg.role || "unknown"}`} className="detail-message">
-                    <p><strong>{msg.role || "unknown"}</strong></p>
-                    <pre>{typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)}</pre>
-                  </div>
-                ))}
+              {visibleMessages.slice(-20).map((msg, index) => (
+                <div key={`${index}-${msg.role || "unknown"}`} className="detail-message">
+                  <p>
+                    <strong>{msg.role || "unknown"}</strong>
+                  </p>
+                  <pre>{typeof msg.content === "string" ? msg.content : JSON.stringify(msg.content)}</pre>
+                </div>
+              ))}
             </div>
           ) : null}
         </aside>
