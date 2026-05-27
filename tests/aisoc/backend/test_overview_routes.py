@@ -177,3 +177,151 @@ def test_overview_session_detail_truncates_tool_and_skips_empty_assistant(monkey
     assert payload["messages"][0]["content"] == ("x" * 500) + "...[truncated]"
     assert payload["messages"][1]["role"] == "assistant"
     assert payload["messages"][1]["content"] == "final"
+
+
+def test_overview_security_events_requires_auth_and_shape(monkeypatch) -> None:
+    captured: dict[str, int] = {}
+
+    def _fake_events(limit: int):
+        captured["limit"] = limit
+        return [
+            {
+                "session_id": "cron_alpha001_run_1",
+                "type_label": "漏洞追踪",
+                "icon": "shield",
+                "time": 1_748_348_000.0,
+                "duration": 120,
+                "tokens": 150,
+                "status": "completed",
+                "risk_level": "High",
+                "summary": "发现高危漏洞",
+                "entities": ["CVE-2026-1234"],
+                "verdict": "BLOCK",
+            }
+        ]
+
+    monkeypatch.setattr(overview_service, "list_security_events", _fake_events)
+    client, headers = _auth_client(monkeypatch)
+
+    unauth = client.get("/api/overview/security-events")
+    assert unauth.status_code == 401
+
+    auth = client.get("/api/overview/security-events?limit=15", headers=headers)
+    assert auth.status_code == 200
+    body = auth.json()
+    assert isinstance(body, list)
+    assert body
+    assert {
+        "session_id",
+        "type_label",
+        "icon",
+        "time",
+        "duration",
+        "tokens",
+        "status",
+        "risk_level",
+        "summary",
+        "entities",
+        "verdict",
+    }.issubset(body[0].keys())
+    assert captured["limit"] == 15
+
+
+def test_overview_keywords_requires_auth_and_shape(monkeypatch) -> None:
+    monkeypatch.setattr(
+        overview_service,
+        "list_keywords",
+        lambda: [{"word": "apollo", "count": 3, "lang": "en"}],
+    )
+    client, headers = _auth_client(monkeypatch)
+
+    unauth = client.get("/api/overview/keywords")
+    assert unauth.status_code == 401
+
+    auth = client.get("/api/overview/keywords", headers=headers)
+    assert auth.status_code == 200
+    body = auth.json()
+    assert isinstance(body, list)
+    assert body
+    assert set(body[0].keys()) == {"word", "count", "lang"}
+
+
+def test_overview_keyword_sessions_requires_auth_and_shape(monkeypatch) -> None:
+    captured: dict[str, str] = {}
+
+    def _fake_sessions(keyword: str):
+        captured["keyword"] = keyword
+        return [
+            {
+                "session_id": "s_kw_1",
+                "title": "Apollo review",
+                "source": "cli",
+                "started_at": 1_748_348_000.0,
+                "messages": 6,
+                "tokens": 300,
+            }
+        ]
+
+    monkeypatch.setattr(overview_service, "list_keyword_sessions", _fake_sessions)
+    client, headers = _auth_client(monkeypatch)
+
+    unauth = client.get("/api/overview/keywords/apollo/sessions")
+    assert unauth.status_code == 401
+
+    auth = client.get("/api/overview/keywords/apollo/sessions", headers=headers)
+    assert auth.status_code == 200
+    body = auth.json()
+    assert isinstance(body, list)
+    assert body
+    assert set(body[0].keys()) == {
+        "session_id",
+        "title",
+        "source",
+        "started_at",
+        "messages",
+        "tokens",
+    }
+    assert captured["keyword"] == "apollo"
+
+
+def test_overview_cron_token_dist_period_validation(monkeypatch) -> None:
+    def _fake_dist(period: str):
+        return {
+            "period": period,
+            "total_cron_tokens": 300,
+            "non_cron_tokens": 100,
+            "grand_total": 400,
+            "cron_percent": 75.0,
+            "jobs": [
+                {
+                    "job_id": "alpha001",
+                    "name": "Alpha Job",
+                    "runs": 2,
+                    "input_tokens": 200,
+                    "output_tokens": 100,
+                    "io_tokens": 300,
+                    "cache_read": 0,
+                    "cache_write": 0,
+                    "percent_of_cron": 100.0,
+                    "percent_of_total": 75.0,
+                }
+            ],
+        }
+
+    monkeypatch.setattr(overview_service, "get_cron_token_distribution", _fake_dist)
+    client, headers = _auth_client(monkeypatch)
+
+    default_period = client.get("/api/overview/cron-token-dist", headers=headers)
+    assert default_period.status_code == 200
+    assert default_period.json()["period"] == "today"
+
+    seven_days = client.get("/api/overview/cron-token-dist?period=7d", headers=headers)
+    assert seven_days.status_code == 200
+    assert seven_days.json()["period"] == "7d"
+
+    thirty_days = client.get("/api/overview/cron-token-dist?period=30d", headers=headers)
+    assert thirty_days.status_code == 200
+    assert thirty_days.json()["period"] == "30d"
+
+    invalid = client.get("/api/overview/cron-token-dist?period=14d", headers=headers)
+    assert invalid.status_code == 422

@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from collections import Counter
 from datetime import date, datetime, time as dt_time, timedelta
+import re
 from typing import Any
 import time
 
@@ -18,6 +20,68 @@ _ACTIVE_SESSION_WINDOW_SECONDS = 24 * 3600
 _DEFAULT_MEMORY_LIMIT = 2200
 _DEFAULT_USER_LIMIT = 1375
 _TOOL_OUTPUT_TRUNCATE_CHARS = 500
+_KEYWORD_WINDOW_SECONDS = 7 * 86400
+_EVENT_SUMMARY_MAX_CHARS = 180
+
+_SECURITY_JOB_TYPES: dict[str, dict[str, str]] = {
+    "f721eacc24df": {"type": "vuln_tracking", "label": "漏洞追踪", "icon": "shield"},
+    "172f0e3f08af": {"type": "attack_sim", "label": "AD域攻击模拟", "icon": "sword"},
+    "ddb63af96737": {"type": "attack_sim", "label": "终端攻击模拟", "icon": "terminal"},
+    "beffcc9eee81": {"type": "email_security", "label": "邮件安全", "icon": "mail"},
+    "e5eccc44d2fa": {"type": "daily_report", "label": "安全日报", "icon": "report"},
+    "614ad4c64bdb": {"type": "vuln_assessment", "label": "漏洞研判", "icon": "search"},
+}
+_DEFAULT_SECURITY_TYPE = {"type": "investigate", "label": "安全事件", "icon": "investigate"}
+
+_EN_STOP_WORDS = {
+    "the",
+    "and",
+    "for",
+    "with",
+    "from",
+    "this",
+    "that",
+    "have",
+    "will",
+    "your",
+    "about",
+    "into",
+    "user",
+    "session",
+    "message",
+    "messages",
+    "content",
+    "response",
+    "prompt",
+    "tool",
+    "result",
+    "output",
+    "input",
+    "error",
+    "status",
+    "task",
+    "cron",
+    "today",
+    "daily",
+}
+
+_ZH_STOP_WORDS = {
+    "这个",
+    "那个",
+    "一些",
+    "可以",
+    "需要",
+    "使用",
+    "进行",
+    "问题",
+    "功能",
+    "系统",
+    "内容",
+    "消息",
+    "会话",
+    "今天",
+    "安全",
+}
 
 
 def _today_start_ts(now_ts: float) -> float:
@@ -72,6 +136,112 @@ def _format_schedule(schedule: Any) -> str:
         expr = schedule.get("expr")
         return str(display or expr or "unknown")
     return str(schedule or "unknown")
+
+
+def _extract_cron_job_id(session_id: str) -> str:
+    if not session_id.startswith("cron_"):
+        return ""
+    suffix = session_id[5:]
+    return (suffix.split("_", 1)[0] or suffix[:12]).strip()
+
+
+def _event_type_from_session_id(session_id: str) -> dict[str, str]:
+    job_id = _extract_cron_job_id(session_id)
+    if not job_id:
+        return _DEFAULT_SECURITY_TYPE
+    return _SECURITY_JOB_TYPES.get(job_id, _DEFAULT_SECURITY_TYPE)
+
+
+def _extract_entities(text: str) -> list[str]:
+    if not text:
+        return []
+    entities: list[str] = []
+    seen: set[str] = set()
+
+    def _add(values: list[str]) -> None:
+        for value in values:
+            if value in seen:
+                continue
+            seen.add(value)
+            entities.append(value)
+            if len(entities) >= 6:
+                return
+
+    _add(re.findall(r"CVE-\d{4}-\d{4,}", text))
+    _add(
+        [
+            ip
+            for ip in re.findall(r"\b(?:\d{1,3}\.){3}\d{1,3}\b", text)
+            if not ip.startswith("127.") and not ip.startswith("0.")
+        ]
+    )
+    _add(re.findall(r"\b[a-z0-9][a-z0-9.-]+\.[a-z]{2,}\b", text.lower()))
+    return entities[:6]
+
+
+def _detect_event_status(end_reason: str, text: str) -> str:
+    blob = f"{end_reason} {text}".lower()
+    has_fail = any(k in blob for k in ("fail", "error", "timeout", "超时", "失败"))
+    has_ok = any(k in blob for k in ("done", "success", "completed", "完成", "成功"))
+    if has_fail and has_ok:
+        return "partial"
+    if has_fail:
+        return "failed"
+    return "completed"
+
+
+def _detect_risk_level(text: str) -> str:
+    blob = text.lower()
+    score_match = re.search(r"(\d{1,3})\s*/\s*100", blob)
+    if score_match:
+        score = int(score_match.group(1))
+        if score >= 80:
+            return "Critical"
+        if score >= 60:
+            return "High"
+        if score >= 40:
+            return "Medium"
+        if score >= 20:
+            return "Low"
+        return "Info"
+    if any(k in blob for k in ("critical", "严重", "紧急")):
+        return "Critical"
+    if any(k in blob for k in ("high", "高危")):
+        return "High"
+    if any(k in blob for k in ("medium", "中危")):
+        return "Medium"
+    if any(k in blob for k in ("low", "低危")):
+        return "Low"
+    return "Info"
+
+
+def _build_event_summary(title: str, text: str) -> str:
+    title = (title or "").strip()
+    if title:
+        return title[:_EVENT_SUMMARY_MAX_CHARS]
+
+    snippet = re.sub(r"\s+", " ", (text or "")).strip()
+    if snippet:
+        return snippet[:_EVENT_SUMMARY_MAX_CHARS]
+    return "Security event captured."
+
+
+def _normalize_keyword_text(text: str) -> str:
+    if not text:
+        return ""
+    cleaned = re.sub(r"^\[IMPORTANT:.*?\]\s*", "", text, flags=re.DOTALL)
+    cleaned = re.sub(r"^---\s*\n?name:\s*\S+\s*", "", cleaned, flags=re.DOTALL)
+    return cleaned.strip()
+
+
+def _period_start(period: str, now_ts: float) -> float:
+    if period == "today":
+        return _today_start_ts(now_ts)
+    if period == "7d":
+        return now_ts - 7 * 86400
+    if period == "30d":
+        return now_ts - 30 * 86400
+    raise ValueError("period must be today, 7d, or 30d")
 
 
 def get_cronjobs() -> list[dict[str, Any]]:
@@ -399,3 +569,288 @@ def get_token_trend(days: int) -> list[dict[str, Any]]:
             }
         )
     return results
+
+
+def list_security_events(limit: int) -> list[dict[str, Any]]:
+    safe_limit = min(max(int(limit or 0), 1), 50)
+    db = SessionDB()
+    try:
+        rows = _query_all(
+            db,
+            """
+            SELECT id, title, started_at, ended_at, end_reason,
+                   COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) AS total_tokens
+            FROM sessions
+            WHERE source = 'cron'
+            ORDER BY started_at DESC
+            LIMIT ?
+            """,
+            (safe_limit,),
+        )
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            session_id = str(row.get("id") or "")
+            if not session_id:
+                continue
+            assistant = _query_one(
+                db,
+                """
+                SELECT content FROM messages
+                WHERE session_id = ? AND role = 'assistant'
+                ORDER BY timestamp DESC
+                LIMIT 1
+                """,
+                (session_id,),
+            )
+            final_text = str(assistant.get("content") or "")
+            meta = _event_type_from_session_id(session_id)
+            started_at = row.get("started_at")
+            ended_at = row.get("ended_at")
+            duration = None
+            if started_at is not None and ended_at is not None:
+                try:
+                    duration = max(int(float(ended_at) - float(started_at)), 0)
+                except Exception:
+                    duration = None
+            risk_level = _detect_risk_level(final_text)
+            status = _detect_event_status(str(row.get("end_reason") or ""), final_text)
+            verdict = ""
+            if status == "failed":
+                verdict = "BLOCK"
+            elif risk_level in {"Critical", "High"}:
+                verdict = "REVIEW"
+            events.append(
+                {
+                    "session_id": session_id,
+                    "type": meta["type"],
+                    "type_label": meta["label"],
+                    "icon": meta["icon"],
+                    "time": started_at,
+                    "duration": duration,
+                    "tokens": int(row.get("total_tokens") or 0),
+                    "status": status,
+                    "risk_level": risk_level,
+                    "summary": _build_event_summary(str(row.get("title") or ""), final_text),
+                    "entities": _extract_entities(final_text),
+                    "verdict": verdict,
+                }
+            )
+        return events
+    finally:
+        db.close()
+
+
+def list_keywords() -> list[dict[str, Any]]:
+    since = time.time() - _KEYWORD_WINDOW_SECONDS
+    db = SessionDB()
+    try:
+        rows = _query_all(
+            db,
+            """
+            SELECT s.id, s.title,
+                   (
+                     SELECT substr(m.content, 1, 240)
+                     FROM messages m
+                     WHERE m.session_id = s.id AND m.role = 'user'
+                     ORDER BY m.timestamp
+                     LIMIT 1
+                   ) AS first_msg
+            FROM sessions s
+            WHERE s.started_at > ? AND COALESCE(s.message_count, 0) >= 1
+            ORDER BY s.started_at DESC
+            LIMIT 120
+            """,
+            (since,),
+        )
+    finally:
+        db.close()
+
+    text_pool: list[str] = []
+    for row in rows:
+        title = _normalize_keyword_text(str(row.get("title") or ""))
+        if title and "### Task:" not in title and "Suggest 3-5" not in title:
+            text_pool.append(title)
+        first_msg = _normalize_keyword_text(str(row.get("first_msg") or ""))
+        if first_msg:
+            text_pool.append(first_msg)
+
+    corpus = " ".join(text_pool)
+    if not corpus:
+        return []
+
+    en_counter: Counter[str] = Counter()
+    for word in re.findall(r"\b[A-Za-z][A-Za-z0-9_-]{3,24}\b", corpus):
+        normalized = word.lower()
+        if normalized in _EN_STOP_WORDS:
+            continue
+        if normalized.startswith("http"):
+            continue
+        en_counter[normalized] += 1
+
+    zh_counter: Counter[str] = Counter()
+    for word in re.findall(r"[\u4e00-\u9fff]{2,8}", corpus):
+        if word in _ZH_STOP_WORDS:
+            continue
+        zh_counter[word] += 1
+
+    keywords: list[dict[str, Any]] = []
+    for word, count in en_counter.most_common(14):
+        keywords.append({"word": word, "count": int(count), "lang": "en"})
+    for word, count in zh_counter.most_common(10):
+        keywords.append({"word": word, "count": int(count), "lang": "zh"})
+
+    keywords.sort(key=lambda item: (-int(item["count"]), str(item["word"])))
+    return keywords[:20]
+
+
+def list_keyword_sessions(keyword: str) -> list[dict[str, Any]]:
+    needle = (keyword or "").strip()
+    if not needle:
+        return []
+    since = time.time() - _KEYWORD_WINDOW_SECONDS
+    like_pattern = f"%{_escape_like(needle)}%"
+
+    db = SessionDB()
+    try:
+        rows = _query_all(
+            db,
+            """
+            SELECT
+              s.id AS session_id,
+              COALESCE(
+                NULLIF(s.title, ''),
+                (
+                  SELECT substr(m.content, 1, 120)
+                  FROM messages m
+                  WHERE m.session_id = s.id AND m.role = 'user'
+                  ORDER BY m.timestamp
+                  LIMIT 1
+                ),
+                s.id
+              ) AS title,
+              COALESCE(s.source, 'unknown') AS source,
+              s.started_at AS started_at,
+              COALESCE(s.message_count, 0) AS messages,
+              COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0) AS tokens
+            FROM sessions s
+            WHERE s.started_at > ?
+              AND (
+                LOWER(COALESCE(s.title, '')) LIKE LOWER(?) ESCAPE '\\'
+                OR EXISTS (
+                  SELECT 1
+                  FROM messages m
+                  WHERE m.session_id = s.id
+                    AND m.role = 'user'
+                    AND LOWER(COALESCE(m.content, '')) LIKE LOWER(?) ESCAPE '\\'
+                )
+              )
+            ORDER BY s.started_at DESC
+            LIMIT 10
+            """,
+            (since, like_pattern, like_pattern),
+        )
+    finally:
+        db.close()
+
+    return [
+        {
+            "session_id": str(row.get("session_id") or ""),
+            "title": str(row.get("title") or ""),
+            "source": str(row.get("source") or "unknown"),
+            "started_at": row.get("started_at"),
+            "messages": int(row.get("messages") or 0),
+            "tokens": int(row.get("tokens") or 0),
+        }
+        for row in rows
+    ]
+
+
+def get_cron_token_distribution(period: str) -> dict[str, Any]:
+    now_ts = time.time()
+    since = _period_start(period, now_ts)
+    jobs: list[dict[str, Any]]
+    try:
+        jobs = cron_service.list_jobs(profile="all")
+    except Exception:
+        jobs = []
+    job_name_candidates = [
+        (str(job.get("id") or ""), str(job.get("name") or job.get("id") or ""))
+        for job in jobs
+        if str(job.get("id") or "")
+    ]
+
+    db = SessionDB()
+    try:
+        cron_rows = _query_all(
+            db,
+            """
+            SELECT
+              CASE
+                WHEN instr(substr(id, 6), '_') > 0
+                THEN substr(substr(id, 6), 1, instr(substr(id, 6), '_') - 1)
+                ELSE substr(id, 6, 12)
+              END AS job_id,
+              COUNT(*) AS runs,
+              COALESCE(SUM(input_tokens), 0) AS input_tokens,
+              COALESCE(SUM(output_tokens), 0) AS output_tokens,
+              COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) AS io_tokens,
+              COALESCE(SUM(cache_read_tokens), 0) AS cache_read,
+              COALESCE(SUM(cache_write_tokens), 0) AS cache_write
+            FROM sessions
+            WHERE source = 'cron'
+              AND id LIKE 'cron_%'
+              AND started_at >= ?
+            GROUP BY job_id
+            ORDER BY io_tokens DESC
+            """,
+            (since,),
+        )
+        non_cron = _query_one(
+            db,
+            """
+            SELECT COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) AS io_tokens
+            FROM sessions
+            WHERE source != 'cron'
+              AND started_at >= ?
+            """,
+            (since,),
+        )
+    finally:
+        db.close()
+
+    non_cron_tokens = int(non_cron.get("io_tokens") or 0)
+    total_cron_tokens = sum(int(row.get("io_tokens") or 0) for row in cron_rows)
+    grand_total = total_cron_tokens + non_cron_tokens
+
+    def _resolve_job_name(job_id: str) -> str:
+        for full_id, name in job_name_candidates:
+            if full_id == job_id or full_id.startswith(job_id):
+                return name or job_id
+        return job_id
+
+    dist_jobs: list[dict[str, Any]] = []
+    for row in cron_rows:
+        io_tokens = int(row.get("io_tokens") or 0)
+        dist_jobs.append(
+            {
+                "job_id": str(row.get("job_id") or ""),
+                "name": _resolve_job_name(str(row.get("job_id") or "")),
+                "runs": int(row.get("runs") or 0),
+                "input_tokens": int(row.get("input_tokens") or 0),
+                "output_tokens": int(row.get("output_tokens") or 0),
+                "io_tokens": io_tokens,
+                "cache_read": int(row.get("cache_read") or 0),
+                "cache_write": int(row.get("cache_write") or 0),
+                "percent_of_cron": round(io_tokens / total_cron_tokens * 100, 1) if total_cron_tokens > 0 else 0,
+                "percent_of_total": round(io_tokens / grand_total * 100, 1) if grand_total > 0 else 0,
+            }
+        )
+
+    return {
+        "period": period,
+        "total_cron_tokens": total_cron_tokens,
+        "non_cron_tokens": non_cron_tokens,
+        "grand_total": grand_total,
+        "cron_percent": round(total_cron_tokens / grand_total * 100, 1) if grand_total > 0 else 0,
+        "jobs": dist_jobs,
+    }

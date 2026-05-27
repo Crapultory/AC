@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Literal
+
 from fastapi import APIRouter, HTTPException
 
 from aisoc.backend.services import overview_service
@@ -23,6 +25,22 @@ def build_overview_router() -> APIRouter:
         if days not in {7, 30}:
             raise HTTPException(status_code=422, detail="days must be 7 or 30")
         return overview_service.get_token_trend(days=days)
+
+    @router.get("/security-events")
+    async def security_events(limit: int = 15):
+        return overview_service.list_security_events(limit=limit)
+
+    @router.get("/keywords")
+    async def keywords():
+        return overview_service.list_keywords()
+
+    @router.get("/keywords/{keyword}/sessions")
+    async def keyword_sessions(keyword: str):
+        return overview_service.list_keyword_sessions(keyword=keyword)
+
+    @router.get("/cron-token-dist")
+    async def cron_token_dist(period: Literal["today", "7d", "30d"] = "today"):
+        return overview_service.get_cron_token_distribution(period=period)
 
     @router.get("/cronjobs")
     async def cronjobs():

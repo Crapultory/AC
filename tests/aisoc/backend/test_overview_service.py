@@ -191,3 +191,150 @@ def test_started_outside_today_is_excluded_from_today_stats_and_today_trend(
     assert trend[-1]["input_tokens"] == 300
     assert trend[-1]["output_tokens"] == 150
     assert trend[-1]["total_tokens"] == 450
+
+
+def test_list_security_events_returns_minimum_shape(monkeypatch, tmp_path) -> None:
+    now_ts = datetime(2026, 5, 27, 12, 0, 0).timestamp()
+    db_path = tmp_path / "state.db"
+    db = SessionDB(db_path=db_path)
+    try:
+        db.create_session("cron_alpha001_run_1", "cron", model="gpt-5")
+        db.update_token_counts("cron_alpha001_run_1", input_tokens=90, output_tokens=30)
+        db.end_session("cron_alpha001_run_1", "done")
+        db.append_message(
+            "cron_alpha001_run_1",
+            "assistant",
+            content="High risk observed for CVE-2026-1234 from 10.0.0.7",
+        )
+        with db._lock:
+            db._conn.execute(
+                "UPDATE sessions SET started_at = ?, ended_at = ?, title = ? WHERE id = ?",
+                (now_ts - 400, now_ts - 200, "Daily vuln scan", "cron_alpha001_run_1"),
+            )
+    finally:
+        db.close()
+
+    monkeypatch.setattr(overview_service, "SessionDB", lambda: SessionDB(db_path=db_path))
+    rows = overview_service.list_security_events(limit=15)
+
+    assert isinstance(rows, list)
+    assert len(rows) == 1
+    assert {
+        "session_id",
+        "type_label",
+        "icon",
+        "time",
+        "duration",
+        "tokens",
+        "status",
+        "risk_level",
+        "summary",
+        "entities",
+        "verdict",
+    }.issubset(rows[0].keys())
+
+
+def test_list_keywords_and_keyword_sessions_return_minimum_shape(monkeypatch, tmp_path) -> None:
+    now_ts = datetime(2026, 5, 27, 12, 0, 0).timestamp()
+    db_path = tmp_path / "state.db"
+    db = SessionDB(db_path=db_path)
+    try:
+        db.create_session("s_kw_1", "cli", model="gpt-5")
+        db.update_token_counts("s_kw_1", input_tokens=20, output_tokens=10)
+        db.append_message("s_kw_1", "user", content="apollo network review checklist")
+
+        db.create_session("s_kw_2", "api", model="gpt-5")
+        db.update_token_counts("s_kw_2", input_tokens=15, output_tokens=5)
+        db.append_message("s_kw_2", "user", content="apollo baseline hardening report")
+
+        with db._lock:
+            db._conn.execute(
+                "UPDATE sessions SET started_at = ?, title = ?, message_count = 4 WHERE id = ?",
+                (now_ts - 3000, "Apollo security review", "s_kw_1"),
+            )
+            db._conn.execute(
+                "UPDATE sessions SET started_at = ?, title = ?, message_count = 4 WHERE id = ?",
+                (now_ts - 2000, "Weekly apollo sync", "s_kw_2"),
+            )
+    finally:
+        db.close()
+
+    monkeypatch.setattr(overview_service, "SessionDB", lambda: SessionDB(db_path=db_path))
+    monkeypatch.setattr(overview_service.time, "time", lambda: now_ts)
+
+    keywords = overview_service.list_keywords()
+    assert isinstance(keywords, list)
+    assert keywords
+    assert set(keywords[0].keys()) == {"word", "count", "lang"}
+
+    sessions = overview_service.list_keyword_sessions("apollo")
+    assert isinstance(sessions, list)
+    assert sessions
+    assert {
+        "session_id",
+        "title",
+        "source",
+        "started_at",
+        "messages",
+        "tokens",
+    } == set(sessions[0].keys())
+
+
+def test_get_cron_token_distribution_returns_totals_and_jobs_shape(monkeypatch, tmp_path) -> None:
+    now_ts = datetime(2026, 5, 27, 12, 0, 0).timestamp()
+    db_path = tmp_path / "state.db"
+    db = SessionDB(db_path=db_path)
+    try:
+        db.create_session("cron_alpha001_run_1", "cron", model="gpt-5")
+        db.update_token_counts("cron_alpha001_run_1", input_tokens=100, output_tokens=50)
+        db.end_session("cron_alpha001_run_1", "done")
+
+        db.create_session("s_non_cron_1", "cli", model="gpt-5")
+        db.update_token_counts("s_non_cron_1", input_tokens=20, output_tokens=10)
+        db.end_session("s_non_cron_1", "done")
+
+        with db._lock:
+            db._conn.execute(
+                "UPDATE sessions SET started_at = ? WHERE id = ?",
+                (now_ts - 1200, "cron_alpha001_run_1"),
+            )
+            db._conn.execute(
+                "UPDATE sessions SET started_at = ? WHERE id = ?",
+                (now_ts - 1400, "s_non_cron_1"),
+            )
+    finally:
+        db.close()
+
+    monkeypatch.setattr(overview_service, "SessionDB", lambda: SessionDB(db_path=db_path))
+    monkeypatch.setattr(overview_service.time, "time", lambda: now_ts)
+    monkeypatch.setattr(
+        overview_service.cron_service,
+        "list_jobs",
+        lambda profile="all": [{"id": "alpha001", "name": "Alpha Job", "enabled": True}],
+    )
+
+    payload = overview_service.get_cron_token_distribution(period="today")
+
+    assert set(payload.keys()) == {
+        "period",
+        "total_cron_tokens",
+        "non_cron_tokens",
+        "grand_total",
+        "cron_percent",
+        "jobs",
+    }
+    assert payload["period"] == "today"
+    assert isinstance(payload["jobs"], list)
+    assert payload["jobs"]
+    assert set(payload["jobs"][0].keys()) == {
+        "job_id",
+        "name",
+        "runs",
+        "input_tokens",
+        "output_tokens",
+        "io_tokens",
+        "cache_read",
+        "cache_write",
+        "percent_of_cron",
+        "percent_of_total",
+    }
