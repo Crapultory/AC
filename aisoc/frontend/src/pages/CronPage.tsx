@@ -28,17 +28,21 @@ function renderSchedule(schedule: CronJob["schedule"]): string {
 export function CronPage() {
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
   const [selectedJobId, setSelectedJobId] = useState("");
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
 
   async function loadJobs() {
+    setLoading(true);
     try {
       const payload = await fetchJSON<CronJob[]>("/api/cron/jobs");
       setJobs(payload || []);
     } catch {
       setError("Failed to load cron jobs.");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -79,7 +83,8 @@ export function CronPage() {
       <div className="detail-layout" style={{ marginTop: 14 }}>
         <article className="detail-panel">
           <h3>Jobs</h3>
-          {jobs.length === 0 ? <p className="subtle-copy">No cron jobs found.</p> : null}
+          {loading ? <p className="subtle-copy">Loading cron jobs...</p> : null}
+          {!loading && jobs.length === 0 ? <p className="subtle-copy">No cron jobs found.</p> : null}
           <ul className="list-grid" style={{ display: "grid", gap: 10 }}>
             {jobs.map((job) => (
               <li

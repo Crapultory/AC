@@ -11,13 +11,17 @@ type SkillRow = {
 export function SkillsPage() {
   const [skills, setSkills] = useState<SkillRow[]>([]);
   const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
 
   async function loadSkills() {
+    setLoading(true);
     try {
       const payload = await fetchJSON<SkillRow[]>("/api/skills");
       setSkills(payload || []);
     } catch {
       setError("Failed to load skills.");
+    } finally {
+      setLoading(false);
     }
   }
 
@@ -42,7 +46,8 @@ export function SkillsPage() {
       </header>
       <section className="detail-panel" style={{ marginTop: 14 }}>
         <h3>Installed Skills</h3>
-        {!error && skills.length === 0 ? <p className="subtle-copy">No skills found.</p> : null}
+        {loading ? <p className="subtle-copy">Loading skills...</p> : null}
+        {!loading && !error && skills.length === 0 ? <p className="subtle-copy">No skills found.</p> : null}
         <ul
           className="list-grid"
           style={{
