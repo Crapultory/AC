@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime
+import sqlite3
+import threading
 
 from hermes_state import SessionDB
 
@@ -338,3 +340,63 @@ def test_get_cron_token_distribution_returns_totals_and_jobs_shape(monkeypatch, 
         "percent_of_cron",
         "percent_of_total",
     }
+
+
+def test_get_cron_token_distribution_counts_null_source_as_non_cron(monkeypatch, tmp_path) -> None:
+    now_ts = datetime(2026, 5, 27, 12, 0, 0).timestamp()
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    try:
+        conn.execute(
+            """
+            CREATE TABLE sessions (
+              id TEXT PRIMARY KEY,
+              source TEXT,
+              started_at REAL,
+              input_tokens INTEGER DEFAULT 0,
+              output_tokens INTEGER DEFAULT 0,
+              cache_read_tokens INTEGER DEFAULT 0,
+              cache_write_tokens INTEGER DEFAULT 0
+            )
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO sessions(id, source, started_at, input_tokens, output_tokens)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("cron_alpha001_run_2", "cron", now_ts - 600, 80, 20),
+        )
+        conn.execute(
+            """
+            INSERT INTO sessions(id, source, started_at, input_tokens, output_tokens)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("s_null_source_1", None, now_ts - 500, 30, 10),
+        )
+        conn.commit()
+
+        class _FakeDB:
+            def __init__(self, raw_conn):
+                self._conn = raw_conn
+                self._lock = threading.RLock()
+
+            def close(self) -> None:
+                pass
+
+        monkeypatch.setattr(overview_service, "SessionDB", lambda: _FakeDB(conn))
+        monkeypatch.setattr(overview_service.time, "time", lambda: now_ts)
+        monkeypatch.setattr(
+            overview_service.cron_service,
+            "list_jobs",
+            lambda profile="all": [{"id": "alpha001", "name": "Alpha Job", "enabled": True}],
+        )
+
+        payload = overview_service.get_cron_token_distribution(period="today")
+
+        assert payload["total_cron_tokens"] == 100
+        assert payload["non_cron_tokens"] == 40
+        assert payload["grand_total"] == 140
+        assert payload["cron_percent"] == 71.4
+    finally:
+        conn.close()

@@ -810,7 +810,7 @@ def get_cron_token_distribution(period: str) -> dict[str, Any]:
             """
             SELECT COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0) AS io_tokens
             FROM sessions
-            WHERE source != 'cron'
+            WHERE (source != 'cron' OR source IS NULL)
               AND started_at >= ?
             """,
             (since,),
