@@ -14,36 +14,114 @@ import {
 } from "../lib/overview";
 
 type OverviewData = {
-  status: OverviewStatus;
-  stats: OverviewStats;
-  trend: TokenTrendPoint[];
-  cronjobs: Cronjob[];
-  events: SecurityEvent[];
+  status?: OverviewStatus;
+  stats?: OverviewStats;
+  trend?: TokenTrendPoint[];
+  cronjobs?: Cronjob[];
+  events?: SecurityEvent[];
 };
 
 type OverviewPageProps = {
   initialData?: OverviewData;
 };
 
+export type OverviewLoaderDeps = {
+  getOverviewStatus: typeof getOverviewStatus;
+  getOverviewStats: typeof getOverviewStats;
+  getOverviewTokenTrend: typeof getOverviewTokenTrend;
+  getCronjobs: typeof getCronjobs;
+  listOverviewSecurityEvents: typeof listOverviewSecurityEvents;
+};
+
+type OverviewLoadResult = {
+  data: OverviewData | null;
+  error: string;
+};
+
 function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
 }
 
-function formatDateTime(unixSeconds: number | null): string {
-  if (!unixSeconds) return "-";
+function formatNumberOrUnavailable(value: number | undefined): string {
+  if (typeof value !== "number") return "Unavailable";
+  return formatNumber(value);
+}
+
+export function formatDateTime(unixSeconds: number | null | undefined): string {
+  if (unixSeconds === null || unixSeconds === undefined) return "-";
   return new Date(unixSeconds * 1000).toLocaleString();
 }
 
-async function loadOverviewData(): Promise<OverviewData> {
-  const [status, stats, trend, cronjobs, events] = await Promise.all([
-    getOverviewStatus(),
-    getOverviewStats(),
-    getOverviewTokenTrend(7),
-    getCronjobs(),
-    listOverviewSecurityEvents(15),
-  ]);
+const defaultOverviewLoaderDeps: OverviewLoaderDeps = {
+  getOverviewStatus,
+  getOverviewStats,
+  getOverviewTokenTrend,
+  getCronjobs,
+  listOverviewSecurityEvents,
+};
 
-  return { status, stats, trend, cronjobs, events };
+export async function loadOverviewDataResilient(
+  deps: OverviewLoaderDeps = defaultOverviewLoaderDeps,
+): Promise<OverviewLoadResult> {
+  const requests = [
+    { key: "status", label: "status", run: () => deps.getOverviewStatus() },
+    { key: "stats", label: "stats", run: () => deps.getOverviewStats() },
+    { key: "trend", label: "token trend", run: () => deps.getOverviewTokenTrend(7) },
+    { key: "cronjobs", label: "cron jobs", run: () => deps.getCronjobs() },
+    {
+      key: "events",
+      label: "security events",
+      run: () => deps.listOverviewSecurityEvents(15),
+    },
+  ] as const;
+
+  const settled = await Promise.allSettled(requests.map((request) => request.run()));
+  const data: OverviewData = {};
+  const failedLabels: string[] = [];
+  let successCount = 0;
+
+  settled.forEach((result, index) => {
+    const request = requests[index];
+    if (result.status === "fulfilled") {
+      successCount += 1;
+      switch (request.key) {
+        case "status":
+          data.status = result.value as OverviewStatus;
+          break;
+        case "stats":
+          data.stats = result.value as OverviewStats;
+          break;
+        case "trend":
+          data.trend = result.value as TokenTrendPoint[];
+          break;
+        case "cronjobs":
+          data.cronjobs = result.value as Cronjob[];
+          break;
+        case "events":
+          data.events = result.value as SecurityEvent[];
+          break;
+      }
+      return;
+    }
+    failedLabels.push(request.label);
+  });
+
+  if (successCount === 0) {
+    const errorSuffix = failedLabels.length > 0 ? ` Unable to load: ${failedLabels.join(", ")}.` : "";
+    return {
+      data: null,
+      error: `Failed to load overview data.${errorSuffix}`,
+    };
+  }
+
+  if (failedLabels.length > 0) {
+    return {
+      data,
+      error: `Some overview panels failed to load: ${failedLabels.join(", ")}.`,
+    };
+  }
+
+  return { data, error: "" };
 }
 
 export function OverviewPage({ initialData }: OverviewPageProps) {
@@ -59,19 +137,11 @@ export function OverviewPage({ initialData }: OverviewPageProps) {
     async function run() {
       setLoading(true);
       setError("");
-      try {
-        const payload = await loadOverviewData();
-        if (!cancelled) {
-          setData(payload);
-        }
-      } catch {
-        if (!cancelled) {
-          setError("Failed to load overview data.");
-        }
-      } finally {
-        if (!cancelled) {
-          setLoading(false);
-        }
+      const result = await loadOverviewDataResilient();
+      if (!cancelled) {
+        setData(result.data);
+        setError(result.error);
+        setLoading(false);
       }
     }
 
@@ -91,16 +161,26 @@ export function OverviewPage({ initialData }: OverviewPageProps) {
     );
   }
 
+  if (!data) {
+    return (
+      <section>
+        <h2>Overview</h2>
+        <p className="subtle-copy">Overview data is currently unavailable.</p>
+        {error ? <p className="error-text">{error}</p> : null}
+      </section>
+    );
+  }
+
   return (
     <section>
       <header>
         <h2>Overview</h2>
         <p className="subtle-copy">
-          Status: {data?.status.status ?? "unknown"} | Model: {data?.status.model ?? "-"} |
-          Provider: {data?.status.provider ?? "-"}
+          Status: {data.status?.status ?? "Unavailable"} | Model: {data.status?.model ?? "Unavailable"} |
+          Provider: {data.status?.provider ?? "Unavailable"}
         </p>
         <p className="subtle-copy">
-          Profile: {data?.status.profile ?? "-"} | Last Activity: {formatDateTime(data?.status.last_activity ?? null)}
+          Profile: {data.status?.profile ?? "Unavailable"} | Last Activity: {formatDateTime(data.status?.last_activity)}
         </p>
         {error ? <p className="error-text">{error}</p> : null}
       </header>
@@ -110,20 +190,23 @@ export function OverviewPage({ initialData }: OverviewPageProps) {
         <ul className="list-grid" style={{ gridTemplateColumns: "repeat(auto-fit, minmax(180px, 1fr))" }}>
           <li>
             <strong>Total Sessions</strong>
-            <p>{formatNumber(data?.stats.total_sessions ?? 0)}</p>
+            <p>{formatNumberOrUnavailable(data.stats?.total_sessions)}</p>
           </li>
           <li>
             <strong>Active Sessions</strong>
-            <p>{formatNumber(data?.stats.active_sessions ?? 0)}</p>
+            <p>{formatNumberOrUnavailable(data.stats?.active_sessions)}</p>
           </li>
           <li>
             <strong>Today Tokens</strong>
-            <p>{formatNumber(data?.stats.today_tokens ?? 0)}</p>
+            <p>{formatNumberOrUnavailable(data.stats?.today_tokens)}</p>
           </li>
           <li>
             <strong>Cron Jobs Enabled</strong>
             <p>
-              {formatNumber(data?.stats.cron_jobs_enabled ?? 0)} / {formatNumber(data?.stats.cron_jobs_total ?? 0)}
+              {typeof data.stats?.cron_jobs_enabled === "number" &&
+              typeof data.stats?.cron_jobs_total === "number"
+                ? `${formatNumber(data.stats.cron_jobs_enabled)} / ${formatNumber(data.stats.cron_jobs_total)}`
+                : "Unavailable"}
             </p>
           </li>
         </ul>
@@ -135,13 +218,18 @@ export function OverviewPage({ initialData }: OverviewPageProps) {
           <article className="detail-panel">
             <h4>7-Day Tokens</h4>
             <canvas aria-label="token trend chart placeholder" height={140} />
-            <p className="subtle-copy">Points: {formatNumber(data?.trend.length ?? 0)}</p>
+            <p className="subtle-copy">
+              Points: {data.trend ? formatNumber(data.trend.length) : "Unavailable"}
+            </p>
           </article>
           <article className="detail-panel">
             <h4>Source Distribution</h4>
             <canvas aria-label="source distribution chart placeholder" height={140} />
             <p className="subtle-copy">
-              Sources: {formatNumber(Object.keys(data?.stats.source_distribution ?? {}).length)}
+              Sources:{" "}
+              {data.stats?.source_distribution
+                ? formatNumber(Object.keys(data.stats.source_distribution).length)
+                : "Unavailable"}
             </p>
           </article>
         </div>
@@ -161,16 +249,20 @@ export function OverviewPage({ initialData }: OverviewPageProps) {
               </tr>
             </thead>
             <tbody>
-              {(data?.cronjobs ?? []).map((job) => (
+              {(data.cronjobs ?? []).map((job) => (
                 <tr key={job.id}>
                   <td>{job.name}</td>
                   <td>{job.schedule}</td>
                   <td>{job.enabled ? "Yes" : "No"}</td>
-                  <td>{formatDateTime(job.last_run?.started_at ?? null)}</td>
+                  <td>{formatDateTime(job.last_run?.started_at)}</td>
                   <td>{formatNumber(job.last_run?.tokens ?? 0)}</td>
                 </tr>
               ))}
-              {(data?.cronjobs.length ?? 0) === 0 ? (
+              {data.cronjobs === undefined ? (
+                <tr>
+                  <td colSpan={5}>Cron jobs are unavailable.</td>
+                </tr>
+              ) : data.cronjobs.length === 0 ? (
                 <tr>
                   <td colSpan={5}>No cron jobs found.</td>
                 </tr>
@@ -183,7 +275,7 @@ export function OverviewPage({ initialData }: OverviewPageProps) {
       <section style={{ marginTop: 16 }}>
         <h3>Security Events</h3>
         <ul className="list-grid">
-          {(data?.events ?? []).map((event) => (
+          {(data.events ?? []).map((event) => (
             <li key={`${event.session_id}-${event.type}-${event.time ?? "none"}`}>
               <strong>
                 {event.icon} {event.type_label}
@@ -194,7 +286,11 @@ export function OverviewPage({ initialData }: OverviewPageProps) {
               </p>
             </li>
           ))}
-          {(data?.events.length ?? 0) === 0 ? (
+          {data.events === undefined ? (
+            <li>
+              <p>Security events are unavailable.</p>
+            </li>
+          ) : data.events.length === 0 ? (
             <li>
               <p>No security events found.</p>
             </li>
