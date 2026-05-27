@@ -106,7 +106,7 @@ h2 {
   gap: 10px;
 }
 
-input,
+input:is([type="text"], [type="search"], [type="password"], [type="email"], [type="number"], [type="url"], [type="tel"]),
 textarea,
 select,
 .login-form input,
@@ -122,7 +122,7 @@ select,
   transition: border-color var(--aisoc-transition), box-shadow var(--aisoc-transition), background var(--aisoc-transition);
 }
 
-input:focus,
+input:is([type="text"], [type="search"], [type="password"], [type="email"], [type="number"], [type="url"], [type="tel"]):focus,
 textarea:focus,
 select:focus {
   outline: none;
@@ -131,9 +131,15 @@ select:focus {
   background: rgba(10, 28, 44, 0.94);
 }
 
-button,
-.login-form button,
-.ghost-button {
+:is(
+  .app-shell button,
+  .login-card button,
+  .detail-panel button,
+  .list-grid button,
+  .button-row button,
+  .memory-nav button,
+  .ghost-button
+) {
   position: relative;
   overflow: hidden;
   border: 1px solid var(--aisoc-border-strong);
@@ -146,9 +152,15 @@ button,
   transition: transform var(--aisoc-transition), box-shadow var(--aisoc-transition), border-color var(--aisoc-transition);
 }
 
-button::after,
-.login-form button::after,
-.ghost-button::after,
+:is(
+  .app-shell button,
+  .login-card button,
+  .detail-panel button,
+  .list-grid button,
+  .button-row button,
+  .memory-nav button,
+  .ghost-button
+)::after,
 .hover-sweep::after {
   content: "";
   position: absolute;
@@ -159,23 +171,41 @@ button::after,
   pointer-events: none;
 }
 
-button:hover,
-.login-form button:hover,
-.ghost-button:hover {
+:is(
+  .app-shell button,
+  .login-card button,
+  .detail-panel button,
+  .list-grid button,
+  .button-row button,
+  .memory-nav button,
+  .ghost-button
+):hover {
   transform: translateY(-1px);
   box-shadow: 0 0 0 1px rgba(18, 252, 186, 0.4), 0 8px 20px rgba(8, 232, 190, 0.26);
 }
 
-button:hover::after,
-.login-form button:hover::after,
-.ghost-button:hover::after,
+:is(
+  .app-shell button,
+  .login-card button,
+  .detail-panel button,
+  .list-grid button,
+  .button-row button,
+  .memory-nav button,
+  .ghost-button
+):hover::after,
 .hover-sweep:hover::after {
   transform: translateX(140%);
 }
 
-button:disabled,
-.login-form button:disabled,
-.ghost-button:disabled {
+:is(
+  .app-shell button,
+  .login-card button,
+  .detail-panel button,
+  .list-grid button,
+  .button-row button,
+  .memory-nav button,
+  .ghost-button
+):disabled {
   opacity: 0.56;
   cursor: not-allowed;
   transform: none;
@@ -387,7 +417,8 @@ button:disabled,
 }
 
 .table,
-table {
+.main-panel table,
+.detail-panel table {
   width: 100%;
   border-collapse: collapse;
   border-radius: var(--aisoc-radius-sm);
@@ -398,15 +429,18 @@ table {
 
 .table th,
 .table td,
-table th,
-table td {
+.main-panel table th,
+.main-panel table td,
+.detail-panel table th,
+.detail-panel table td {
   padding: 10px 12px;
   border-bottom: 1px solid rgba(44, 241, 224, 0.2);
   text-align: left;
 }
 
 .table th,
-table th {
+.main-panel table th,
+.detail-panel table th {
   color: var(--aisoc-accent-strong);
   font-weight: 600;
   background: rgba(13, 35, 53, 0.72);
@@ -469,6 +503,10 @@ table th {
 }
 
 @media (max-width: 920px) {
+  body {
+    background-attachment: scroll;
+  }
+
   .app-shell {
     grid-template-columns: 1fr;
   }
@@ -491,5 +529,16 @@ table th {
 
   .terminal-host {
     height: 56vh;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
 }
