@@ -7,17 +7,9 @@ import { CronPage } from "./pages/CronPage";
 import { LoginPage } from "./pages/LoginPage";
 import { MemoryPage } from "./pages/MemoryPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
+import { OverviewPage } from "./pages/OverviewPage";
 import { SessionsPage } from "./pages/SessionsPage";
 import { SkillsPage } from "./pages/SkillsPage";
-
-function OverviewPagePlaceholder() {
-  return (
-    <section>
-      <h2>Overview</h2>
-      <p>Overview page is coming soon.</p>
-    </section>
-  );
-}
 
 export function App() {
   return (
@@ -26,7 +18,7 @@ export function App() {
       <Route element={<RequireAuth />}>
         <Route element={<AppShell />}>
           <Route index element={<Navigate to="/overview" replace />} />
-          <Route path="/overview" element={<OverviewPagePlaceholder />} />
+          <Route path="/overview" element={<OverviewPage />} />
           <Route path="/chat" element={<ChatPage />} />
           <Route path="/sessions" element={<SessionsPage />} />
           <Route path="/cron" element={<CronPage />} />
