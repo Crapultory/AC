@@ -75,7 +75,10 @@ def _format_schedule(schedule: Any) -> str:
 
 
 def get_cronjobs() -> list[dict[str, Any]]:
-    jobs = cron_service.list_jobs(profile="all")
+    try:
+        jobs = cron_service.list_jobs(profile="all")
+    except Exception:
+        return []
     db = SessionDB()
     try:
         result: list[dict[str, Any]] = []
@@ -128,7 +131,12 @@ def get_cronjobs() -> list[dict[str, Any]]:
 
 
 def get_cronjob_history(job_id: str) -> list[dict[str, Any]] | None:
-    if not cron_service.get_job(job_id):
+    try:
+        job = cron_service.get_job(job_id)
+    except Exception:
+        return []
+
+    if not job:
         return None
 
     db = SessionDB()

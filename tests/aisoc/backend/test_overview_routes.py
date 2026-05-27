@@ -120,6 +120,30 @@ def test_overview_cronjob_history_not_found(monkeypatch) -> None:
     assert response.json() == {"detail": "Job not found"}
 
 
+def test_overview_cronjobs_handles_cron_backend_failure(monkeypatch) -> None:
+    def _boom(*args, **kwargs):
+        raise RuntimeError("cron backend down")
+
+    monkeypatch.setattr(overview_service.cron_service, "list_jobs", _boom)
+    client, headers = _auth_client(monkeypatch)
+
+    response = client.get("/api/overview/cronjobs", headers=headers)
+    assert response.status_code == 200
+    assert response.json() == []
+
+
+def test_overview_cronjob_history_handles_cron_backend_failure(monkeypatch) -> None:
+    def _boom(*args, **kwargs):
+        raise RuntimeError("cron backend down")
+
+    monkeypatch.setattr(overview_service.cron_service, "get_job", _boom)
+    client, headers = _auth_client(monkeypatch)
+
+    response = client.get("/api/overview/cronjobs/any/history", headers=headers)
+    assert response.status_code == 200
+    assert response.json() == []
+
+
 def test_overview_session_detail_not_found(monkeypatch) -> None:
     client, headers = _auth_client(monkeypatch)
 
