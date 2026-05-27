@@ -19,6 +19,7 @@ from aisoc.backend.routes.chat import build_chat_router
 from aisoc.backend.routes.cron import build_cron_router
 from aisoc.backend.routes.logs import build_logs_router
 from aisoc.backend.routes.memory import build_memory_router
+from aisoc.backend.routes.overview import build_overview_router
 from aisoc.backend.routes.sessions import build_sessions_router
 from aisoc.backend.routes.skills import build_skills_router
 from aisoc.backend.routes.system import build_system_router
@@ -109,6 +110,7 @@ def create_app(settings: AisocSettings | None = None) -> FastAPI:
     app.include_router(build_skills_router())
     app.include_router(build_memory_router())
     app.include_router(build_logs_router())
+    app.include_router(build_overview_router())
     _install_docs_bearer_auth(app)
 
     dist_index = None
