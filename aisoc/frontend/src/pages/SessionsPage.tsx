@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { PageMissionHeader } from "../components/PageMissionHeader";
@@ -27,6 +27,14 @@ type SessionMessagesResponse = {
   }>;
 };
 
+export function isLatestSessionSelectionRequest(requestId: number, latestRequestId: number): boolean {
+  return requestId === latestRequestId;
+}
+
+export function isSessionActivationKey(key: string): boolean {
+  return key === "Enter" || key === " ";
+}
+
 export function SessionsPage() {
   const navigate = useNavigate();
   const [rows, setRows] = useState<SessionRow[]>([]);
@@ -36,6 +44,7 @@ export function SessionsPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [messages, setMessages] = useState<SessionMessagesResponse["messages"]>([]);
+  const detailRequestIdRef = useRef(0);
   const visibleMessages = messages.filter((msg) => (msg.role || "").toLowerCase() !== "system");
   const selectedSession = rows.find((row) => (row.id || row.session_id || "") === selectedSessionId);
 
@@ -66,6 +75,7 @@ export function SessionsPage() {
 
   async function selectSession(rawSessionId: string) {
     if (!rawSessionId) return;
+    const requestId = ++detailRequestIdRef.current;
     setSelectedSessionId(rawSessionId);
     setDetailLoading(true);
     setDetailError("");
@@ -73,11 +83,14 @@ export function SessionsPage() {
       const messagePayload = await fetchJSON<SessionMessagesResponse>(
         `/api/sessions/${encodeURIComponent(rawSessionId)}/messages`,
       );
+      if (!isLatestSessionSelectionRequest(requestId, detailRequestIdRef.current)) return;
       setMessages(messagePayload.messages || []);
     } catch {
+      if (!isLatestSessionSelectionRequest(requestId, detailRequestIdRef.current)) return;
       setMessages([]);
       setDetailError("Failed to load session messages.");
     } finally {
+      if (!isLatestSessionSelectionRequest(requestId, detailRequestIdRef.current)) return;
       setDetailLoading(false);
     }
   }
@@ -112,7 +125,14 @@ export function SessionsPage() {
                     ? "clickable-card active"
                     : "clickable-card"
                 }
+                role="button"
+                tabIndex={0}
                 onClick={() => selectSession(row.id || row.session_id || "")}
+                onKeyDown={(event) => {
+                  if (!isSessionActivationKey(event.key)) return;
+                  event.preventDefault();
+                  void selectSession(row.id || row.session_id || "");
+                }}
               >
                 <strong>{row.title || row.id || row.session_id}</strong>
                 <p>{row.model || "unknown-model"}</p>

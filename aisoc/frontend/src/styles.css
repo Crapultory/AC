@@ -426,6 +426,12 @@ select:focus {
   transform: translateY(-1px);
 }
 
+.clickable-card:focus-visible {
+  outline: 2px solid var(--aisoc-accent-strong);
+  outline-offset: 2px;
+  border-color: var(--aisoc-border-strong);
+}
+
 .clickable-card.active {
   border-color: var(--aisoc-accent);
   box-shadow: 0 0 0 1px rgba(45, 255, 222, 0.32), 0 14px 30px rgba(2, 7, 16, 0.8);
