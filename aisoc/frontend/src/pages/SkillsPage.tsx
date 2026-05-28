@@ -18,14 +18,16 @@ export function SkillsPage() {
   const [actionError, setActionError] = useState("");
   const [actionSuccess, setActionSuccess] = useState("");
 
-  async function loadSkills() {
+  async function loadSkills(): Promise<boolean> {
     setLoading(true);
     setError("");
     try {
       const payload = await fetchJSON<SkillRow[]>("/api/skills");
       setSkills(payload || []);
+      return true;
     } catch {
       setError("Failed to load skills.");
+      return false;
     } finally {
       setLoading(false);
     }
@@ -40,7 +42,11 @@ export function SkillsPage() {
         method: "PUT",
         body: JSON.stringify({ name, enabled }),
       });
-      await loadSkills();
+      const refreshSucceeded = await loadSkills();
+      if (!refreshSucceeded) {
+        setActionError(`Updated ${name}, but failed to refresh skills from /api/skills.`);
+        return;
+      }
       setActionSuccess(`${name} ${enabled ? "enabled" : "disabled"} successfully.`);
     } catch {
       setActionError(`Failed to ${enabled ? "enable" : "disable"} ${name}.`);
