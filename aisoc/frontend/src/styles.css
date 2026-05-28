@@ -245,9 +245,39 @@ select:focus {
   background: rgba(5, 14, 25, 0.92);
   padding: 20px 16px;
   display: grid;
-  align-content: start;
+  grid-template-rows: auto 1fr auto;
+  align-content: stretch;
   gap: 20px;
   backdrop-filter: blur(10px);
+}
+
+.side-nav-workbench {
+  min-width: 0;
+}
+
+.side-nav-header h1 {
+  margin: 0;
+  font-size: 36px;
+  text-shadow: 0 0 18px rgba(45, 255, 222, 0.26);
+}
+
+.side-nav-groups {
+  display: grid;
+  align-content: start;
+  gap: 14px;
+}
+
+.side-nav-group {
+  display: grid;
+  gap: 8px;
+}
+
+.side-nav-group-label {
+  margin: 0;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--aisoc-muted);
 }
 
 .side-nav h1 {
@@ -282,9 +312,21 @@ select:focus {
   box-shadow: inset 0 0 0 1px rgba(16, 252, 160, 0.32);
 }
 
+.side-nav-footer {
+  display: flex;
+}
+
+.side-nav-footer .ghost-button {
+  width: 100%;
+}
+
 .main-panel {
   padding: 30px;
   animation: aisoc-fade-in 320ms ease;
+}
+
+.workbench-main {
+  min-width: 0;
 }
 
 .page-mission-header {

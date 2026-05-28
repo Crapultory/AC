@@ -20,7 +20,13 @@ describe("AppShell layout", () => {
 
     expect(html).toContain("app-shell");
     expect(html).toContain("side-nav");
+    expect(html).toContain("side-nav-workbench");
+    expect(html).toContain("side-nav-header");
+    expect(html).toContain("side-nav-group");
     expect(html).toContain("main-panel");
+    expect(html).toContain("workbench-main");
+    expect(html).toContain("Workbench navigation");
+    expect(html).toContain("Sign Out");
     expect(html).toContain("Overview content");
   });
 });

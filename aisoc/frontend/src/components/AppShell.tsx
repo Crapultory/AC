@@ -16,34 +16,41 @@ export function AppShell() {
 
   return (
     <div className="app-shell">
-      <aside className="side-nav">
-        <div>
+      <aside className="side-nav side-nav-workbench">
+        <header className="side-nav-header">
           <p className="brand-kicker">Hermes</p>
           <h1>AISOC</h1>
+        </header>
+        <div className="side-nav-groups">
+          <section className="side-nav-group">
+            <p className="side-nav-group-label">Workbench</p>
+            <nav aria-label="Workbench navigation">
+              {NAV_ITEMS.map((item) => (
+                <Link
+                  key={item.path}
+                  to={item.path}
+                  className={location.pathname.startsWith(item.path) ? "active" : ""}
+                >
+                  {item.label}
+                </Link>
+              ))}
+            </nav>
+          </section>
         </div>
-        <nav>
-          {NAV_ITEMS.map((item) => (
-            <Link
-              key={item.path}
-              to={item.path}
-              className={location.pathname.startsWith(item.path) ? "active" : ""}
-            >
-              {item.label}
-            </Link>
-          ))}
-        </nav>
-        <button
-          className="ghost-button"
-          type="button"
-          onClick={() => {
-            clearStoredToken();
-            window.location.href = "/login";
-          }}
-        >
-          Sign Out
-        </button>
+        <footer className="side-nav-footer">
+          <button
+            className="ghost-button"
+            type="button"
+            onClick={() => {
+              clearStoredToken();
+              window.location.href = "/login";
+            }}
+          >
+            Sign Out
+          </button>
+        </footer>
       </aside>
-      <main className="main-panel">
+      <main className="main-panel workbench-main">
         <Outlet />
       </main>
     </div>
