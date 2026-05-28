@@ -1,5 +1,8 @@
 import { getStoredToken } from "./auth";
 
+const CHAT_SESSION_KEY = "aisoc.chat.resumeSessionId";
+export const CHAT_SESSION_CHANGED_EVENT = "aisoc:chat-session-changed";
+
 export function generateChannelId(): string {
   if (typeof crypto !== "undefined" && "randomUUID" in crypto) {
     return crypto.randomUUID();
@@ -41,4 +44,21 @@ export function buildGatewayUrl(channel: string): string {
     channel,
   });
   return `${wsBaseUrl()}/api/chat/ws?${qs.toString()}`;
+}
+
+export function getStoredChatResumeSession(): string {
+  if (typeof window === "undefined") return "";
+  return localStorage.getItem(CHAT_SESSION_KEY) || "";
+}
+
+export function setStoredChatResumeSession(sessionId: string): void {
+  if (typeof window === "undefined") return;
+  localStorage.setItem(CHAT_SESSION_KEY, sessionId);
+  window.dispatchEvent(new CustomEvent(CHAT_SESSION_CHANGED_EVENT, { detail: { sessionId } }));
+}
+
+export function clearStoredChatResumeSession(): void {
+  if (typeof window === "undefined") return;
+  localStorage.removeItem(CHAT_SESSION_KEY);
+  window.dispatchEvent(new CustomEvent(CHAT_SESSION_CHANGED_EVENT, { detail: { sessionId: "" } }));
 }

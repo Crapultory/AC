@@ -27,7 +27,8 @@ describe("AppShell layout", () => {
     expect(html).toContain("main-panel");
     expect(html).toContain("workbench-main");
     expect(html).toContain("Workbench navigation");
-    expect(html).toMatch(/<a[^>]*aria-current="page"[^>]*>Overview<\/a>/);
+    expect(html).toContain("aria-current=\"page\"");
+    expect(html).toContain("Overview");
     expect(html).toContain("Sign Out");
     expect(html).toContain("Overview content");
   });

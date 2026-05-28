@@ -126,19 +126,6 @@ export function MemoryPage() {
 
   return (
     <section className="memory-workbench-page">
-      <header className="page-mission-header memory-mission-header">
-        <div>
-          <h2>Memory</h2>
-          <p className="subtle-copy">
-            Edit `SOUL.md`, `USER.md`, and built-in memory files.
-          </p>
-        </div>
-        <div className="page-mission-meta">
-          <span className="badge">
-            {(memoryIndex?.memory_files || []).length} indexed files
-          </span>
-        </div>
-      </header>
       <div className="memory-layout memory-workbench">
         <div className="detail-panel memory-editor memory-editor-pane">
           <h3>{selectedLabel}</h3>

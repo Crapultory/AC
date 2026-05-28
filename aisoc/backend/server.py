@@ -114,6 +114,7 @@ def create_app(settings: AisocSettings | None = None) -> FastAPI:
     _install_docs_bearer_auth(app)
 
     dist_index = None
+    dist_root = active_settings.dist_dir
     if active_settings.dist_dir:
         candidate = active_settings.dist_dir / "index.html"
         if candidate.exists():
@@ -132,6 +133,16 @@ def create_app(settings: AisocSettings | None = None) -> FastAPI:
         async def spa_fallback(front_path: str):
             if front_path.startswith("api/") or front_path == "health":
                 return JSONResponse(status_code=404, content={"detail": "Not Found"})
+            # Serve real static files from web_dist root (favicon/logo/manifest/etc.)
+            # before falling back to SPA index for client-side routing.
+            if dist_root:
+                candidate = (dist_root / front_path).resolve()
+                try:
+                    candidate.relative_to(dist_root.resolve())
+                except ValueError:
+                    candidate = None
+                if candidate and candidate.is_file():
+                    return FileResponse(candidate)
             return FileResponse(dist_index)
 
     return app

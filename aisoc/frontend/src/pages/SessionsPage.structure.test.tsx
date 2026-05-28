@@ -5,7 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { isLatestSessionSelectionRequest, isSessionActivationKey, SessionsPage } from "./SessionsPage";
 
 describe("SessionsPage structure", () => {
-  it("renders scan, message detail, and context workbench zones", () => {
+  it("renders history + message master-detail zones", () => {
     const html = renderToStaticMarkup(
       <MemoryRouter initialEntries={["/sessions"]}>
         <SessionsPage />
@@ -14,12 +14,11 @@ describe("SessionsPage structure", () => {
 
     expect(html).toContain("sessions-workbench-page");
     expect(html).toContain("sessions-workbench");
-    expect(html).toContain("sessions-scan-pane");
+    expect(html).toContain("sessions-history-pane");
     expect(html).toContain("sessions-message-pane");
-    expect(html).toContain("sessions-context-rail");
-    expect(html).toContain("Recent Sessions");
+    expect(html).toContain("Session History");
     expect(html).toContain("Session Messages");
-    expect(html).toContain("Analysis Context");
+    expect(html).toContain("Page 1 / 1");
     expect(html).toContain("Detail view shows message payloads only. System role messages are filtered out.");
   });
 

@@ -170,7 +170,7 @@ describe("SessionsPage behavior", () => {
 
     await waitForAssert(() => {
       const text = (containerRef as HTMLElement).textContent || "";
-      expect(text).toContain("Selected: b");
+      expect(text).toContain("Selected session: b");
       expect(text).toContain("message-from-b");
       expect(text).not.toContain("system-from-b");
     });
@@ -185,7 +185,7 @@ describe("SessionsPage behavior", () => {
 
     await waitForAssert(() => {
       const text = (containerRef as HTMLElement).textContent || "";
-      expect(text).toContain("Selected: b");
+      expect(text).toContain("Selected session: b");
       expect(text).toContain("message-from-b");
       expect(text).not.toContain("stale-message-from-a");
     });
@@ -234,7 +234,7 @@ describe("SessionsPage behavior", () => {
 
     await waitForAssert(() => {
       const text = (containerRef as HTMLElement).textContent || "";
-      expect(text).toContain("Selected: a");
+      expect(text).toContain("Selected session: a");
       expect(text).toContain("kbd-enter-a");
     });
 
@@ -245,8 +245,118 @@ describe("SessionsPage behavior", () => {
 
     await waitForAssert(() => {
       const text = (containerRef as HTMLElement).textContent || "";
-      expect(text).toContain("Selected: b");
+      expect(text).toContain("Selected session: b");
       expect(text).toContain("kbd-space-b");
+    });
+  });
+
+  it("renders assistant tool calls and supports expand/collapse for long tool messages", async () => {
+    const longToolOutput = `${"A".repeat(125)}TAIL`;
+    fetchJSONMock.mockImplementation((url: string) => {
+      if (url === "/api/sessions?limit=20") {
+        return Promise.resolve({
+          sessions: [{ id: "s-tool", title: "Tool Session", model: "gpt-5.4", source: "slack" }],
+        }) as Promise<unknown>;
+      }
+      if (url === "/api/sessions/s-tool/messages") {
+        return Promise.resolve({
+          session_id: "s-tool",
+          messages: [
+            {
+              id: 1473,
+              role: "assistant",
+              content: "",
+              tool_calls: [
+                {
+                  id: "call_P42Mr2kNlD4VOPPAEMTmDTvu",
+                  type: "function",
+                  function: {
+                    name: "slack_block_kit",
+                    arguments:
+                      "{\"action\":\"send\",\"card\":{\"text\":\"测试交互卡片\",\"blocks\":[{\"type\":\"section\",\"text\":\"这是一个用于交互测试的 Block Card\"}]}}",
+                  },
+                },
+              ],
+            },
+            { id: 1474, role: "tool", content: longToolOutput },
+          ],
+        }) as Promise<unknown>;
+      }
+      throw new Error(`Unexpected URL in test: ${url}`);
+    });
+
+    const mounted = await mountSessionsPage();
+    rootRef = mounted.root;
+    containerRef = mounted.container;
+
+    await waitForAssert(() => {
+      expect(containerRef?.querySelectorAll('li[role="button"]').length).toBe(1);
+    });
+
+    const row = findRowByTitle(containerRef as HTMLElement, "Tool Session");
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    await waitForAssert(() => {
+      const text = (containerRef as HTMLElement).textContent || "";
+      expect(text).toContain("slack_block_kit");
+      expect(text).toContain("tool_calls");
+      expect(text).toContain("Expand");
+      expect(text).not.toContain(longToolOutput);
+    });
+
+    const expandButton = (containerRef as HTMLElement).querySelector(
+      'button[aria-label="Expand tool message"]',
+    ) as HTMLButtonElement | null;
+    expect(expandButton).not.toBeNull();
+
+    await act(async () => {
+      expandButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    await waitForAssert(() => {
+      const text = (containerRef as HTMLElement).textContent || "";
+      expect(text).toContain(longToolOutput);
+      expect(text).toContain("Collapse");
+    });
+  });
+
+  it("does not duplicate plain string user content", async () => {
+    fetchJSONMock.mockImplementation((url: string) => {
+      if (url === "/api/sessions?limit=20") {
+        return Promise.resolve({
+          sessions: [{ id: "s-user", title: "User Session", model: "gpt-5.4", source: "cli" }],
+        }) as Promise<unknown>;
+      }
+      if (url === "/api/sessions/s-user/messages") {
+        return Promise.resolve({
+          session_id: "s-user",
+          messages: [{ id: 1, role: "user", content: "hello world" }],
+        }) as Promise<unknown>;
+      }
+      throw new Error(`Unexpected URL in test: ${url}`);
+    });
+
+    const mounted = await mountSessionsPage();
+    rootRef = mounted.root;
+    containerRef = mounted.container;
+
+    await waitForAssert(() => {
+      expect(containerRef?.querySelectorAll('li[role="button"]').length).toBe(1);
+    });
+
+    const row = findRowByTitle(containerRef as HTMLElement, "User Session");
+    await act(async () => {
+      row.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    await waitForAssert(() => {
+      const pre = (containerRef as HTMLElement).querySelector(".sessions-message-stream .detail-message pre");
+      expect(pre?.textContent).toBe("hello world");
     });
   });
 });

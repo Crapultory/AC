@@ -120,7 +120,9 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 
 ### 4.6 Skills
 前缀：`/api/skills`
-- `GET /`
+- `GET /` （skill item 含 `path` 字段）
+- `GET /{skill_name}` （返回 `content` + `appendix[]`）
+- `GET /{skill_name}/appendix?path={path}` （返回附件文本内容）
 - `PUT /toggle`
 - `POST /reload`
 

@@ -67,15 +67,60 @@ async function mountSkillsPage() {
   containerRef = container;
 }
 
-function findButton(container: HTMLElement, label: string): HTMLButtonElement {
-  const button = Array.from(container.querySelectorAll<HTMLButtonElement>("button")).find((candidate) =>
-    candidate.textContent?.includes(label),
-  );
-  if (!button) throw new Error(`Button not found: ${label}`);
-  return button;
-}
-
 describe("SkillsPage behavior", () => {
+  it("loads detail and appendix content from the new skills APIs", async () => {
+    fetchJSONMock.mockImplementation((url: string) => {
+      if (url === "/api/skills") {
+        return Promise.resolve([
+          { name: "s1", description: "skill one", enabled: true, category: "", path: "/tmp/s1" },
+          { name: "s2", description: "skill two", enabled: false, category: "devops", path: "/tmp/s2" },
+        ]) as Promise<unknown>;
+      }
+      if (url === "/api/skills/s1") {
+        return Promise.resolve({
+          name: "s1",
+          path: "/tmp/s1",
+          content: "# S1",
+          appendix: [{ name: "a.md", path: "references/a.md" }],
+        }) as Promise<unknown>;
+      }
+      if (url === "/api/skills/s1/appendix?path=references%2Fa.md") {
+        return Promise.resolve({
+          name: "a.md",
+          path: "references/a.md",
+          content: "appendix-body",
+        }) as Promise<unknown>;
+      }
+      throw new Error(`Unexpected URL in test: ${url}`);
+    });
+
+    await mountSkillsPage();
+
+    await waitForAssert(() => {
+      const text = (containerRef as HTMLElement).textContent || "";
+      expect(text).toContain("misc");
+      expect(text).toContain("devops");
+      expect(text).toContain("# S1");
+      expect(text).toContain("references/a.md");
+    });
+
+    const appendixButton = Array.from(
+      (containerRef as HTMLElement).querySelectorAll<HTMLButtonElement>("button"),
+    ).find((button) => button.textContent?.includes("references/a.md"));
+    expect(appendixButton).not.toBeNull();
+
+    await act(async () => {
+      appendixButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    await waitForAssert(() => {
+      const text = (containerRef as HTMLElement).textContent || "";
+      expect(text).toContain("appendix-body");
+      expect(text).toContain("Appendix: references/a.md");
+    });
+  });
+
   it("does not show success when toggle succeeds but refresh fails", async () => {
     let skillsLoadCount = 0;
 
@@ -84,16 +129,22 @@ describe("SkillsPage behavior", () => {
         skillsLoadCount += 1;
         if (skillsLoadCount === 1) {
           return Promise.resolve([
-            { name: "threat-hunt", description: "Threat Hunt", enabled: false },
+            { name: "threat-hunt", description: "Threat Hunt", enabled: false, category: "", path: "/tmp" },
           ]) as Promise<unknown>;
         }
         return Promise.reject(new Error("refresh failed")) as Promise<unknown>;
       }
-
+      if (url === "/api/skills/threat-hunt") {
+        return Promise.resolve({
+          name: "threat-hunt",
+          path: "/tmp",
+          content: "# threat-hunt",
+          appendix: [],
+        }) as Promise<unknown>;
+      }
       if (url === "/api/skills/toggle") {
         return Promise.resolve({ ok: true }) as Promise<unknown>;
       }
-
       throw new Error(`Unexpected URL in test: ${url}`);
     });
 
@@ -101,14 +152,27 @@ describe("SkillsPage behavior", () => {
 
     await waitForAssert(() => {
       const text = (containerRef as HTMLElement).textContent || "";
-      expect(text).toContain("Disabled Skills");
       expect(text).toContain("threat-hunt");
     });
 
-    const enableButton = findButton(containerRef as HTMLElement, "Enable");
+    const miscToggle = (containerRef as HTMLElement).querySelector(
+      'button[aria-label="Toggle misc category"]',
+    ) as HTMLButtonElement | null;
+    expect(miscToggle).not.toBeNull();
 
     await act(async () => {
-      enableButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      miscToggle?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    const toggleButton = (containerRef as HTMLElement).querySelector(
+      ".skills-mini-toggle",
+    ) as HTMLButtonElement | null;
+    expect(toggleButton).not.toBeNull();
+
+    await act(async () => {
+      toggleButton?.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
     });
 
     await waitForAssert(() => {

@@ -8,6 +8,12 @@ import time
 from hermes_state import SessionDB
 
 
+def _strip_sensitive_session_fields(item: dict[str, Any]) -> dict[str, Any]:
+    """Remove heavy/sensitive fields that should not be exposed in list APIs."""
+    item.pop("system_prompt", None)
+    return item
+
+
 def list_sessions(limit: int = 20, offset: int = 0) -> dict[str, Any]:
     db = SessionDB()
     try:
@@ -19,6 +25,7 @@ def list_sessions(limit: int = 20, offset: int = 0) -> dict[str, Any]:
                 item.get("ended_at") is None
                 and (now - item.get("last_active", item.get("started_at", 0))) < 300
             )
+            _strip_sensitive_session_fields(item)
         return {"sessions": sessions, "total": total, "limit": limit, "offset": offset}
     finally:
         db.close()
@@ -164,4 +171,3 @@ def delete_session(session_id: str) -> bool:
         return bool(db.delete_session(session_id))
     finally:
         db.close()
-

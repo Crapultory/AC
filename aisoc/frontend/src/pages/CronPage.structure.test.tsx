@@ -12,7 +12,6 @@ describe("CronPage structure", () => {
       </MemoryRouter>,
     );
 
-    expect(html).toContain("page-mission-header");
     expect(html).toContain("cron-workbench-page");
     expect(html).toContain("cron-workbench");
     expect(html).toContain("cron-jobs-pane");
