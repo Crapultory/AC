@@ -240,6 +240,10 @@ select:focus {
   min-height: 100%;
 }
 
+.app-shell.nav-collapsed {
+  grid-template-columns: 1fr;
+}
+
 .side-nav {
   border-right: 1px solid var(--aisoc-border);
   background: rgba(5, 14, 25, 0.92);
@@ -249,6 +253,10 @@ select:focus {
   align-content: stretch;
   gap: 20px;
   backdrop-filter: blur(10px);
+}
+
+.app-shell.nav-collapsed .side-nav {
+  display: none;
 }
 
 .side-nav-workbench {
@@ -278,6 +286,17 @@ select:focus {
   margin: 0;
   font-size: 36px;
   text-shadow: 0 0 18px rgba(45, 255, 222, 0.26);
+}
+
+.side-nav-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.side-nav-toggle {
+  min-width: 44px;
 }
 
 .side-nav nav {
@@ -321,6 +340,12 @@ select:focus {
 
 .workbench-main {
   min-width: 0;
+}
+
+.workbench-shell-toolbar {
+  display: flex;
+  justify-content: flex-start;
+  margin: 0 0 12px;
 }
 
 .page-mission-header {
@@ -562,7 +587,7 @@ select:focus {
 
 .chat-workbench {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr);
   gap: 14px;
   align-items: start;
 }

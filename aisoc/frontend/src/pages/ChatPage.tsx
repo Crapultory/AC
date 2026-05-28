@@ -7,10 +7,9 @@ import "@xterm/xterm/css/xterm.css";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { ChatSidebar } from "../components/ChatSidebar";
 import { PageMissionHeader } from "../components/PageMissionHeader";
 import { fetchJSON } from "../lib/api";
-import { buildEventsUrl, buildGatewayUrl, buildPtyUrl, generateChannelId } from "../lib/chat";
+import { buildGatewayUrl, buildPtyUrl, generateChannelId } from "../lib/chat";
 
 type ChatStatus = {
   embedded_chat: boolean;
@@ -37,7 +36,6 @@ export function ChatPage() {
   const resume = searchParams.get("resume");
   const channel = useMemo(() => generateChannelId(), [resume]);
   const [status, setStatus] = useState<ChatStatus | null>(null);
-  const [events, setEvents] = useState<string[]>([]);
   const [banner, setBanner] = useState<string | null>(null);
 
   useEffect(() => {
@@ -161,23 +159,6 @@ export function ChatPage() {
     });
     resizeObserver.observe(host);
 
-    const eventsWs = new WebSocket(buildEventsUrl(channel));
-    eventsWs.onclose = (event) => {
-      if (event.code === 4401) {
-        setBanner("Session token expired. Please sign in again.");
-      } else if (event.code === 4403) {
-        setBanner("Embedded chat is disabled on the server. Start with --tui.");
-      }
-    };
-    eventsWs.onmessage = (event) => {
-      const text = typeof event.data === "string" ? event.data : "";
-      if (!text) return;
-      setEvents((prev) => {
-        const next = [...prev, text];
-        return next.slice(-120);
-      });
-    };
-
     const gatewayWs = new WebSocket(buildGatewayUrl(channel));
     gatewayWs.onclose = (event) => {
       if (event.code === 4401) {
@@ -192,7 +173,6 @@ export function ChatPage() {
       disposeResize.dispose();
       resizeObserver.disconnect();
       gatewayWs.close();
-      eventsWs.close();
       ptyWs.close();
       term.dispose();
       wsRef.current = null;
@@ -204,7 +184,7 @@ export function ChatPage() {
     <section className="chat-workbench-page">
       <PageMissionHeader
         title="Chat Workbench"
-        subtitle="Embedded terminal session via PTY with realtime gateway event feed."
+        subtitle="Embedded terminal session via PTY."
         status={
           <span className={`status-badge ${status?.ready ? "status-live" : ""}`}>
             {status?.ready ? "Runtime Connected" : "Runtime Offline"}
@@ -232,9 +212,6 @@ export function ChatPage() {
           {banner ? <p className="error-text">{banner}</p> : null}
           <div className="terminal-host" ref={hostRef} />
         </article>
-        <div className="chat-context-rail">
-          <ChatSidebar events={events} />
-        </div>
       </div>
     </section>
   );

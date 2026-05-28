@@ -15,7 +15,7 @@ describe("ChatPage structure", () => {
     expect(html).toContain("page-mission-header");
     expect(html).toContain("chat-workbench");
     expect(html).toContain("chat-terminal-pane");
-    expect(html).toContain("chat-sidebar");
+    expect(html).toContain("Terminal");
     expect(html).toContain("Resume target: session-42");
   });
 });

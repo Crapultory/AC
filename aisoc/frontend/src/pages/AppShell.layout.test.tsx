@@ -23,6 +23,7 @@ describe("AppShell layout", () => {
     expect(html).toContain("side-nav-workbench");
     expect(html).toContain("side-nav-header");
     expect(html).toContain("side-nav-group");
+    expect(html).toContain("side-nav-toggle");
     expect(html).toContain("main-panel");
     expect(html).toContain("workbench-main");
     expect(html).toContain("Workbench navigation");

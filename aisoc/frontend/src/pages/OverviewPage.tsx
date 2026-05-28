@@ -25,6 +25,7 @@ import {
   type SessionDetail,
   type TokenTrendPoint,
 } from "../lib/overview";
+import "./OverviewPageReplica.css";
 
 type OverviewData = {
   status?: OverviewStatus;
@@ -849,32 +850,32 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
 
   return (
     <section className="overview-cyber-wrap workbench-overview">
-      <div className="ov-bg-grid" aria-hidden="true" />
-      <div className="ov-scanline" aria-hidden="true" />
+      <div className="bg-grid" aria-hidden="true" />
+      <div className="scanline" aria-hidden="true" />
 
-      <div className="ov-container">
-        <header className="ov-header">
-          <div className="ov-header-left">
-            <div className="ov-logo-glyph">⬡</div>
-            <div className="ov-logo-block">
-              <span className="ov-logo-text">AISOC</span>
-              <span className="ov-logo-sub">SECURITY OPERATIONS CENTER</span>
+      <div className="container">
+        <header className="header">
+          <div className="header-left">
+            <div className="logo-glyph">⬡</div>
+            <div className="logo-block">
+              <span className="logo-text">AISOC</span>
+              <span className="logo-sub">SECURITY OPERATIONS CENTER</span>
             </div>
           </div>
-          <div className="ov-header-center">
-            <div className="ov-clock">{clock}</div>
-            <div className="ov-uptime">{uptimeText}</div>
-            <div className="ov-refresh-indicator">
-              <span className="ov-live-dot" />
+          <div className="header-center">
+            <div className="clock">{clock}</div>
+            <div className="uptime">{uptimeText}</div>
+            <div className="refresh-indicator">
+              <span className="live-dot" />
               LIVE · 30s
             </div>
           </div>
-          <div className="ov-header-right">
-            <div className={`ov-status-badge ${getStatusIsOnline(data.status?.status) ? "" : "idle"}`.trim()}>
-              <span className="ov-status-dot" />
-              <span className="ov-status-text">{getStatusText(data.status)}</span>
+          <div className="header-right">
+            <div className={`status-badge ${getStatusIsOnline(data.status?.status) ? "" : "idle"}`.trim()}>
+              <span className="status-dot" />
+              <span className="status-text">{getStatusText(data.status)}</span>
             </div>
-            <div className="ov-model-tag">
+            <div className="model-tag">
               {(data.status?.model ?? "--") + " · " + (data.status?.provider ?? "--")}
             </div>
           </div>
@@ -882,85 +883,94 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
 
         {error ? <p className="error-text" style={{ marginBottom: 10 }}>{error}</p> : null}
 
-        <section className="ov-stats-row">
-          <article className="ov-stat-card card">
-            <div className="ov-stat-icon-wrap">
-              <span>⚡</span>
+        <section className="stats-row">
+          <article className="stat-card card" style={{ animationDelay: "0.1s" }}>
+            <div className="stat-icon-wrap">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
             </div>
-            <div className="ov-stat-body">
-              <div className="ov-stat-value">{formatNumberOrUnavailable(data.stats?.active_sessions)}</div>
-              <div className="ov-stat-label">
-                活跃会话 <span className="ov-stat-sub">/ {formatNumberOrUnavailable(data.stats?.total_sessions)} total</span>
+            <div className="stat-body">
+              <div className="stat-value">{formatNumberOrUnavailable(data.stats?.active_sessions)}</div>
+              <div className="stat-label">
+                活跃会话 <span className="stat-sub">/ {formatNumberOrUnavailable(data.stats?.total_sessions)} total</span>
               </div>
             </div>
           </article>
-          <article className="ov-stat-card card">
-            <div className="ov-stat-icon-wrap accent-green">
-              <span>⏱</span>
+          <article className="stat-card card" style={{ animationDelay: "0.2s" }}>
+            <div className="stat-icon-wrap accent-green">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
             </div>
-            <div className="ov-stat-body">
-              <div className="ov-stat-value">{formatNumberOrUnavailable(data.stats?.cron_jobs_total)}</div>
-              <div className="ov-stat-label">
-                计划任务 <span className="ov-stat-sub">/ {formatNumberOrUnavailable(data.stats?.cron_jobs_enabled)} 启用</span>
+            <div className="stat-body">
+              <div className="stat-value">{formatNumberOrUnavailable(data.stats?.cron_jobs_total)}</div>
+              <div className="stat-label">
+                计划任务 <span className="stat-sub">/ {formatNumberOrUnavailable(data.stats?.cron_jobs_enabled)} 启用</span>
               </div>
             </div>
           </article>
-          <article className="ov-stat-card card">
-            <div className="ov-stat-icon-wrap accent-purple">
-              <span>◉</span>
+          <article className="stat-card card" style={{ animationDelay: "0.3s" }}>
+            <div className="stat-icon-wrap accent-purple">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M9.75 3.104v5.714a2.25 2.25 0 01-.659 1.591L5 14.5M9.75 3.104c-.251.023-.501.05-.75.082m.75-.082a24.3 24.3 0 014.5 0m0 0v5.714c0 .597.237 1.17.659 1.591L19.8 15.3M14.25 3.104c.251.023.501.05.75.082M19.8 15.3l-1.57.393A9.065 9.065 0 0112 15a9.065 9.065 0 00-6.23.693L5 14.5m14.8.8l1.402 1.402c1.232 1.232.65 3.318-1.067 3.611A48.309 48.309 0 0112 21c-2.773 0-5.491-.235-8.135-.687-1.718-.293-2.3-2.379-1.067-3.61L5 14.5" />
+              </svg>
             </div>
-            <div className="ov-stat-body">
-              <div className="ov-stat-value">{memoryPercent}%</div>
-              <div className="ov-stat-label">Memory 容量</div>
-              <div className="ov-memory-bar">
-                <div className="ov-memory-fill" style={{ width: `${Math.max(0, Math.min(100, memoryPercent))}%` }} />
+            <div className="stat-body">
+              <div className="stat-value">{memoryPercent}%</div>
+              <div className="stat-label">Memory 容量</div>
+              <div className="memory-bar">
+                <div className="memory-fill" style={{ width: `${Math.max(0, Math.min(100, memoryPercent))}%` }} />
               </div>
             </div>
           </article>
-          <article className="ov-stat-card card glow">
-            <div className="ov-stat-icon-wrap accent-orange">
-              <span>🔥</span>
+          <article className="stat-card card glow" style={{ animationDelay: "0.4s" }}>
+            <div className="stat-icon-wrap accent-orange">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M15.362 5.214A8.252 8.252 0 0112 21 8.25 8.25 0 016.038 7.048 8.287 8.287 0 009 9.6a8.983 8.983 0 013.361-6.867 8.21 8.21 0 003 2.48z" />
+                <path d="M12 18a3.75 3.75 0 00.495-7.467 5.99 5.99 0 00-1.925 3.546 5.974 5.974 0 01-2.133-1A3.75 3.75 0 0012 18z" />
+              </svg>
             </div>
-            <div className="ov-stat-body">
-              <div className="ov-stat-value">{formatCompactTokens(data.stats?.today_tokens)}</div>
-              <div className="ov-stat-label">今日 Token</div>
-              <div className="ov-token-detail">
+            <div className="stat-body">
+              <div className="stat-value">{formatCompactTokens(data.stats?.today_tokens)}</div>
+              <div className="stat-label">今日 Token</div>
+              <div className="token-detail">
                 IN: {formatCompactTokens(data.stats?.today_input_tokens)} / OUT: {formatCompactTokens(data.stats?.today_output_tokens)}
               </div>
             </div>
           </article>
         </section>
 
-        <section className="ov-charts-row">
-          <article className="ov-panel panel">
-            <div className="ov-panel-header">
+        <section className="charts-row">
+          <article className="panel panel-trend" style={{ animationDelay: "0.5s" }}>
+            <div className="panel-header">
               <h3>
-                <span className="ov-panel-icon">◈</span>TOKEN 使用趋势
+                <span className="panel-icon">◈</span>TOKEN 使用趋势
               </h3>
-              <div className="ov-panel-tabs">
-                <button className={`ov-tab ${trendDays === 7 ? "active" : ""}`} type="button" onClick={() => void handleTrendSwitch(7)}>
+              <div className="panel-tabs">
+                <button className={`tab ${trendDays === 7 ? "active" : ""}`} type="button" onClick={() => void handleTrendSwitch(7)}>
                   7D
                 </button>
-                <button className={`ov-tab ${trendDays === 30 ? "active" : ""}`} type="button" onClick={() => void handleTrendSwitch(30)}>
+                <button className={`tab ${trendDays === 30 ? "active" : ""}`} type="button" onClick={() => void handleTrendSwitch(30)}>
                   30D
                 </button>
               </div>
             </div>
-            <div className="ov-panel-body ov-chart-body">
+            <div className="panel-body chart-body">
               <canvas ref={trendCanvasRef} aria-label="trend chart" />
               {trendLoading ? <p className="subtle-copy">Loading trend range...</p> : null}
               {trendError ? <p className="error-text">{trendError}</p> : null}
             </div>
           </article>
-          <article className="ov-panel panel">
-            <div className="ov-panel-header">
+          <article className="panel panel-source" style={{ animationDelay: "0.6s" }}>
+            <div className="panel-header">
               <h3>
-                <span className="ov-panel-icon">◈</span>会话来源
+                <span className="panel-icon">◈</span>会话来源
               </h3>
             </div>
-            <div className="ov-panel-body ov-source-layout">
+            <div className="panel-body source-layout">
               <canvas ref={sourceCanvasRef} aria-label="source chart" />
-              <div className="ov-source-legend">
+              <div className="source-legend">
                 {sourceEntries.map(([source, count], index) => {
                   const pct = data.stats?.source_distribution
                     ? ((count / Object.values(data.stats.source_distribution).reduce((s, x) => s + x, 0)) * 100).toFixed(1)
@@ -968,11 +978,11 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
                   const label = source === "api_server" ? "API" : source === "cron" ? "CRON" : source.toUpperCase();
                   const color = SOURCE_COLORS[index % SOURCE_COLORS.length];
                   return (
-                    <div key={source} className="ov-legend-item">
-                      <span className="ov-legend-dot" style={{ background: color, boxShadow: `0 0 6px ${color}` }} />
-                      <span className="ov-legend-label">{label}</span>
-                      <span className="ov-legend-value">{pct}%</span>
-                      <span className="ov-legend-count">({count})</span>
+                    <div key={source} className="legend-item">
+                      <span className="legend-dot" style={{ background: color, boxShadow: `0 0 6px ${color}` }} />
+                      <span className="legend-label">{label}</span>
+                      <span className="legend-value">{pct}%</span>
+                      <span className="legend-count">({count})</span>
                     </div>
                   );
                 })}
@@ -981,17 +991,17 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
           </article>
         </section>
 
-        <section className="ov-panel panel ov-panel-keywords">
-          <div className="ov-panel-header">
+        <section className="panel panel-keywords" style={{ animationDelay: "0.7s" }}>
+          <div className="panel-header">
             <h3>
-              <span className="ov-panel-icon">◈</span>会话关键词
+              <span className="panel-icon">◈</span>会话关键词
             </h3>
-            <span className="ov-panel-hint">CLICK TO DRILL DOWN</span>
+            <span className="panel-hint">CLICK TO DRILL DOWN</span>
           </div>
-          <div className="ov-panel-body">
+          <div className="panel-body">
             {keywordsLoading ? <p className="subtle-copy">Loading keywords...</p> : null}
             {keywordsError ? <p className="error-text">{keywordsError}</p> : null}
-            <div className="ov-keywords-cloud">
+            <div className="keywords-cloud">
               {keywords.map((keyword) => {
                 const maxCount = Math.max(...keywords.map((item) => item.count), 1);
                 const hot = keyword.count > maxCount * 0.4;
@@ -999,11 +1009,11 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
                   <button
                     key={`${keyword.lang}-${keyword.word}`}
                     type="button"
-                    className={`ov-kw-tag ${keyword.lang === "zh" ? "zh" : ""} ${hot ? "hot" : ""}`.trim()}
+                    className={`kw-tag ${keyword.lang === "zh" ? "zh" : ""} ${hot ? "hot" : ""}`.trim()}
                     onClick={() => void openKeywordSessions(keyword.word)}
                   >
                     {keyword.word}
-                    <span className="ov-kw-count">{keyword.count}</span>
+                    <span className="kw-count">{keyword.count}</span>
                   </button>
                 );
               })}
@@ -1011,55 +1021,55 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
           </div>
         </section>
 
-        <section className="ov-panel panel ov-panel-cron-tokens">
-          <div className="ov-panel-header">
+        <section className="panel panel-cron-tokens" style={{ animationDelay: "0.75s" }}>
+          <div className="panel-header">
             <h3>
-              <span className="ov-panel-icon">◈</span>计划任务 Token 消耗占比
+              <span className="panel-icon">◈</span>计划任务 Token 消耗占比
             </h3>
-            <div className="ov-panel-tabs">
-              <button className={`ov-tab ${cronPeriod === "today" ? "active" : ""}`} type="button" onClick={() => handleCronPeriodSwitch("today")}>
+            <div className="panel-tabs">
+              <button className={`tab ${cronPeriod === "today" ? "active" : ""}`} type="button" onClick={() => handleCronPeriodSwitch("today")}>
                 今日
               </button>
-              <button className={`ov-tab ${cronPeriod === "7d" ? "active" : ""}`} type="button" onClick={() => handleCronPeriodSwitch("7d")}>
+              <button className={`tab ${cronPeriod === "7d" ? "active" : ""}`} type="button" onClick={() => handleCronPeriodSwitch("7d")}>
                 7天
               </button>
-              <button className={`ov-tab ${cronPeriod === "30d" ? "active" : ""}`} type="button" onClick={() => handleCronPeriodSwitch("30d")}>
+              <button className={`tab ${cronPeriod === "30d" ? "active" : ""}`} type="button" onClick={() => handleCronPeriodSwitch("30d")}>
                 30天
               </button>
             </div>
           </div>
-          <div className="ov-panel-body">
+          <div className="panel-body">
             {cronDistLoading ? <p className="subtle-copy">Loading cron token distribution...</p> : null}
             {cronDistError ? <p className="error-text">{cronDistError}</p> : null}
-            <div className="ov-cron-token-layout">
-              <div className="ov-cron-token-chart-wrap">
+            <div className="cron-token-layout">
+              <div className="cron-token-chart-wrap">
                 <canvas ref={cronCanvasRef} aria-label="cron token chart" />
               </div>
-              <div className="ov-cron-token-list">
+              <div className="cron-token-list">
                 {(cronDist?.jobs ?? []).map((job, index) => {
                   const color = CRON_COLORS[index % CRON_COLORS.length];
                   return (
-                    <div key={job.job_id} className="ov-cron-token-item">
-                      <div className="ov-cron-token-dot" style={{ background: color, boxShadow: `0 0 6px ${color}88` }} />
-                      <div className="ov-cron-token-name">{job.name}</div>
-                      <div className="ov-cron-token-value">{formatCompactTokens(job.io_tokens)}</div>
-                      <div className="ov-cron-token-pct">{job.percent_of_cron}%</div>
-                      <div className="ov-cron-token-bar-wrap">
-                        <div className="ov-cron-token-bar-fill" style={{ width: `${job.percent_of_cron}%`, background: `linear-gradient(90deg, ${color}22, ${color})` }} />
+                    <div key={job.job_id} className="cron-token-item">
+                      <div className="cron-token-dot" style={{ background: color, boxShadow: `0 0 6px ${color}88` }} />
+                      <div className="cron-token-name">{job.name}</div>
+                      <div className="cron-token-value">{formatCompactTokens(job.io_tokens)}</div>
+                      <div className="cron-token-pct">{job.percent_of_cron}%</div>
+                      <div className="cron-token-bar-wrap">
+                        <div className="cron-token-bar-fill" style={{ width: `${job.percent_of_cron}%`, background: `linear-gradient(90deg, ${color}22, ${color})` }} />
                       </div>
                     </div>
                   );
                 })}
                 {cronDist && cronDist.non_cron_tokens > 0 ? (
-                  <div className="ov-cron-token-item muted">
-                    <div className="ov-cron-token-dot" style={{ background: "#3a5a7a" }} />
-                    <div className="ov-cron-token-name">非 Cron 会话 (API/CLI/Slack)</div>
-                    <div className="ov-cron-token-value">{formatCompactTokens(cronDist.non_cron_tokens)}</div>
-                    <div className="ov-cron-token-pct">{Math.round((cronDist.non_cron_tokens / Math.max(cronDist.grand_total, 1)) * 100)}%</div>
+                  <div className="cron-token-item muted">
+                    <div className="cron-token-dot" style={{ background: "#3a5a7a" }} />
+                    <div className="cron-token-name">非 Cron 会话 (API/CLI/Slack)</div>
+                    <div className="cron-token-value">{formatCompactTokens(cronDist.non_cron_tokens)}</div>
+                    <div className="cron-token-pct">{Math.round((cronDist.non_cron_tokens / Math.max(cronDist.grand_total, 1)) * 100)}%</div>
                   </div>
                 ) : null}
                 {cronDist ? (
-                  <div className="ov-cron-token-summary">
+                  <div className="cron-token-summary">
                     <span>
                       总计 Cron: <strong>{formatCompactTokens(cronDist.total_cron_tokens)}</strong>
                     </span>
@@ -1076,16 +1086,16 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
           </div>
         </section>
 
-        <section className="ov-bottom-row">
-          <article className="ov-panel panel">
-            <div className="ov-panel-header">
+        <section className="bottom-row">
+          <article className="panel panel-cron" style={{ animationDelay: "0.8s" }}>
+            <div className="panel-header">
               <h3>
-                <span className="ov-panel-icon">◈</span>计划任务
+                <span className="panel-icon">◈</span>计划任务
               </h3>
-              <span className="ov-panel-hint">{(data.cronjobs?.length ?? 0) + " TASKS"}</span>
+              <span className="panel-hint">{(data.cronjobs?.length ?? 0) + " TASKS"}</span>
             </div>
-            <div className="ov-table-wrap">
-              <table className="ov-data-table table">
+            <div className="table-wrap">
+              <table className="data-table">
                 <thead>
                   <tr>
                     <th>STATUS</th>
@@ -1101,15 +1111,15 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
                   {(data.cronjobs ?? []).map((job) => (
                     <tr key={job.id}>
                       <td>
-                        <span className={`ov-badge ${job.enabled ? "green" : "gray"}`}>{job.enabled ? "ACTIVE" : "OFF"}</span>
+                        <span className={`badge ${job.enabled ? "badge-green" : "badge-gray"}`}>{job.enabled ? "ACTIVE" : "OFF"}</span>
                       </td>
-                      <td className="ov-col-strong">{job.name}</td>
+                      <td style={{ color: "var(--text-primary)" }}>{job.name}</td>
                       <td>{job.schedule}</td>
                       <td>{formatMiniDateTime(job.last_run?.started_at)}</td>
                       <td>{formatCompactTokens(job.last_run?.tokens ?? 0)}</td>
                       <td>{job.run_count}</td>
                       <td>
-                        <button type="button" className="ov-btn-sm" onClick={() => void openCronHistory(job)}>
+                        <button type="button" className="btn-sm" onClick={() => void openCronHistory(job)}>
                           HIST
                         </button>
                       </td>
@@ -1120,15 +1130,15 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
             </div>
           </article>
 
-          <article className="ov-panel panel">
-            <div className="ov-panel-header">
+          <article className="panel panel-events" style={{ animationDelay: "0.9s" }}>
+            <div className="panel-header">
               <h3>
-                <span className="ov-panel-icon">◈</span>安全事件
+                <span className="panel-icon">◈</span>安全事件
               </h3>
-              <span className="ov-panel-hint">RECENT INVESTIGATIONS</span>
+              <span className="panel-hint">RECENT INVESTIGATIONS</span>
             </div>
-            <div className="ov-panel-body">
-              <div className="ov-events-list" id="events-list">
+            <div className="panel-body">
+              <div className="events-list" id="events-list">
                 {(eventsPanel?.items ?? []).map((event) => {
                   const riskColor = getEventRiskColor(event.risk_level);
                   const statusClass = getEventStatusClass(event.status);
@@ -1138,35 +1148,35 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
                     <button
                       type="button"
                       key={`${event.session_id}-${event.type}-${event.time ?? "none"}`}
-                      className="ov-ev-row"
+                      className="ev-row"
                       onClick={() => void openSessionDetail(event.session_id)}
                     >
-                      <div className="ov-ev-indicator" style={{ background: riskColor }} />
-                      <div className="ov-ev-icon">{resolveEventIcon(event.icon)}</div>
-                      <div className="ov-ev-main">
-                        <div className="ov-ev-title-row">
-                          <span className="ov-ev-type">{event.type_label}</span>
-                          <span className="ov-ev-risk" style={{ color: riskColor }}>{event.risk_level}</span>
-                          {event.verdict ? <span className={`ov-ev-verdict ov-ev-verdict-${verdictClass}`}>{event.verdict}</span> : null}
+                      <div className="ev-indicator" style={{ background: riskColor }} />
+                      <div className="ev-icon">{resolveEventIcon(event.icon)}</div>
+                      <div className="ev-main">
+                        <div className="ev-title-row">
+                          <span className="ev-type">{event.type_label}</span>
+                          <span className="ev-risk" style={{ color: riskColor }}>{event.risk_level}</span>
+                          {event.verdict ? <span className={`ev-verdict ev-verdict-${verdictClass}`}>{event.verdict}</span> : null}
                         </div>
-                        <div className="ov-ev-summary">{event.summary}</div>
-                        <div className="ov-ev-entities">
+                        <div className="ev-summary">{event.summary}</div>
+                        <div className="ev-entities">
                           {event.entities.slice(0, 4).map((entity) => (
-                            <span key={entity} className="ov-ev-entity">
+                            <span key={entity} className="ev-entity">
                               {entity}
                             </span>
                           ))}
                         </div>
                       </div>
-                      <div className="ov-ev-meta">
-                        <div className="ov-ev-time">{formatMiniDateTime(event.time)}</div>
-                        <div className="ov-ev-stats">
-                          <span className={`ov-ev-status ov-ev-status-${statusClass}`}>{statusIcon}</span>
+                      <div className="ev-meta">
+                        <div className="ev-time">{formatMiniDateTime(event.time)}</div>
+                        <div className="ev-stats">
+                          <span className={`ev-status ev-status-${statusClass}`}>{statusIcon}</span>
                           <span>{formatDuration(event.duration)}</span>
                           <span>{formatCompactTokens(event.tokens)}</span>
                         </div>
                       </div>
-                      <div className="ov-ev-arrow">▸</div>
+                      <div className="ev-arrow">▸</div>
                     </button>
                   );
                 })}
@@ -1178,21 +1188,21 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
                   <p className="subtle-copy">No security events found.</p>
                 ) : null}
 
-                <div className="ov-ev-pagination">
+                <div className="ev-pagination">
                   <button
                     type="button"
-                    className="ov-ev-page-btn"
+                    className="ev-page-btn"
                     onClick={() => void handleEventsPageChange(eventsPage - 1)}
                     disabled={eventsLoading || !(eventsPanel?.has_prev ?? false)}
                   >
                     ◂ PREV
                   </button>
-                  <span className="ov-ev-page-info">
+                  <span className="ev-page-info">
                     {(eventsPanel?.page ?? eventsPage) + " / " + Math.max(eventsPage, eventsPanel?.has_next ? eventsPage + 1 : eventsPage)}
                   </span>
                   <button
                     type="button"
-                    className="ov-ev-page-btn"
+                    className="ev-page-btn"
                     onClick={() => void handleEventsPageChange(eventsPage + 1)}
                     disabled={eventsLoading || !(eventsPanel?.has_next ?? false)}
                   >
@@ -1205,27 +1215,27 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
         </section>
       </div>
 
-      <div className={`ov-modal-overlay ov-modal-overlay-cron ${cronHistoryModal.open ? "active" : ""}`} onClick={() => setCronHistoryModal({ open: false, jobId: "", jobName: "", loading: false, error: "", items: [] })}>
-        <div className="ov-modal" onClick={(event) => event.stopPropagation()}>
-          <div className="ov-modal-header">
+      <div className={`modal-overlay modal-overlay-cron ${cronHistoryModal.open ? "active" : ""}`} onClick={() => setCronHistoryModal({ open: false, jobId: "", jobName: "", loading: false, error: "", items: [] })}>
+        <div className="modal" onClick={(event) => event.stopPropagation()}>
+          <div className="modal-header">
             <h3>{cronHistoryModal.jobName || "执行历史"}</h3>
-            <button type="button" className="ov-modal-close" onClick={() => setCronHistoryModal({ open: false, jobId: "", jobName: "", loading: false, error: "", items: [] })}>
+            <button type="button" className="modal-close" onClick={() => setCronHistoryModal({ open: false, jobId: "", jobName: "", loading: false, error: "", items: [] })}>
               ✕
             </button>
           </div>
-          <div className="ov-modal-body">
+          <div className="modal-body">
             {cronHistoryModal.loading ? <p className="subtle-copy">LOADING...</p> : null}
             {cronHistoryModal.error ? <p className="error-text">{cronHistoryModal.error}</p> : null}
             {cronHistoryModal.items.map((item) => (
-              <button type="button" className="ov-history-item" key={`${item.session_id}-${item.started_at ?? "none"}`} onClick={() => void openSessionDetail(item.session_id)}>
-                <div>
-                  <div className="ov-history-time">{formatMiniDateTime(item.started_at)}</div>
+              <button type="button" className="history-item" key={`${item.session_id}-${item.started_at ?? "none"}`} onClick={() => void openSessionDetail(item.session_id)}>
+                <div className="history-main">
+                  <div className="history-time">{formatMiniDateTime(item.started_at)}</div>
                 </div>
-                <div className="ov-history-meta">
+                <div className="history-meta">
                   <span>{formatDuration(item.duration_seconds)}</span>
                   <span>{formatCompactTokens(item.tokens)} tkn</span>
                   <span>{item.messages} msg</span>
-                  <span className={`ov-badge ${item.status === "completed" ? "green" : "red"}`}>{item.status}</span>
+                  <span className={`badge ${item.status === "completed" ? "badge-green" : "badge-red"}`}>{item.status}</span>
                 </div>
               </button>
             ))}
@@ -1233,53 +1243,53 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
         </div>
       </div>
 
-      <div className={`ov-modal-overlay ov-modal-overlay-session ${sessionModal.open ? "active" : ""}`} onClick={() => setSessionModal({ open: false, sessionId: "", loading: false, error: "", detail: null })}>
-        <div className="ov-modal ov-modal-lg" onClick={(event) => event.stopPropagation()}>
-          <div className="ov-modal-header">
+      <div className={`modal-overlay modal-overlay-session ${sessionModal.open ? "active" : ""}`} onClick={() => setSessionModal({ open: false, sessionId: "", loading: false, error: "", detail: null })}>
+        <div className="modal modal-lg" onClick={(event) => event.stopPropagation()}>
+          <div className="modal-header">
             <h3>SESSION DETAIL</h3>
-            <button type="button" className="ov-modal-close" onClick={() => setSessionModal({ open: false, sessionId: "", loading: false, error: "", detail: null })}>
+            <button type="button" className="modal-close" onClick={() => setSessionModal({ open: false, sessionId: "", loading: false, error: "", detail: null })}>
               ✕
             </button>
           </div>
-          <div className="ov-modal-body">
+          <div className="modal-body">
             {sessionModal.loading ? <p className="subtle-copy">LOADING...</p> : null}
             {sessionModal.error ? <p className="error-text">{sessionModal.error}</p> : null}
             {(sessionModal.detail?.messages ?? []).map((message, index) => (
-              <div key={`${message.role}-${message.timestamp ?? index}-${index}`} className={`ov-msg-item ov-msg-${message.role}`}>
-                <div className="ov-msg-role">{(message.tool_name ? `${message.role} (${message.tool_name})` : message.role).toUpperCase()}</div>
-                <div className="ov-msg-content">{message.content}</div>
+              <div key={`${message.role}-${message.timestamp ?? index}-${index}`} className={`msg-item msg-${message.role}`}>
+                <div className="msg-role">{(message.tool_name ? `${message.role} (${message.tool_name})` : message.role).toUpperCase()}</div>
+                <div className="msg-content">{message.content}</div>
               </div>
             ))}
           </div>
         </div>
       </div>
 
-      <div className={`ov-modal-overlay ov-modal-overlay-keyword ${keywordModal.open ? "active" : ""}`} onClick={() => setKeywordModal({ open: false, keyword: "", loading: false, error: "", items: [] })}>
-        <div className="ov-modal" onClick={(event) => event.stopPropagation()}>
-          <div className="ov-modal-header">
+      <div className={`modal-overlay modal-overlay-keyword ${keywordModal.open ? "active" : ""}`} onClick={() => setKeywordModal({ open: false, keyword: "", loading: false, error: "", items: [] })}>
+        <div className="modal" onClick={(event) => event.stopPropagation()}>
+          <div className="modal-header">
             <h3>{`"${keywordModal.keyword}" — RELATED`}</h3>
-            <button type="button" className="ov-modal-close" onClick={() => setKeywordModal({ open: false, keyword: "", loading: false, error: "", items: [] })}>
+            <button type="button" className="modal-close" onClick={() => setKeywordModal({ open: false, keyword: "", loading: false, error: "", items: [] })}>
               ✕
             </button>
           </div>
-          <div className="ov-modal-body">
+          <div className="modal-body">
             {keywordModal.loading ? <p className="subtle-copy">LOADING...</p> : null}
             {keywordModal.error ? <p className="error-text">{keywordModal.error}</p> : null}
             {keywordModal.items.map((item) => (
               <button
                 type="button"
-                className="ov-history-item"
+                className="history-item"
                 key={item.session_id}
                 onClick={() => {
                   setKeywordModal({ open: false, keyword: "", loading: false, error: "", items: [] });
                   void openSessionDetail(item.session_id);
                 }}
               >
-                <div>
-                  <div className="ov-history-title">{item.title}</div>
-                  <div className="ov-history-time">{`${formatMiniDateTime(item.started_at)} · ${item.source}`}</div>
+                <div className="history-main">
+                  <div className="history-title">{item.title}</div>
+                  <div className="history-time">{`${formatMiniDateTime(item.started_at)} · ${item.source}`}</div>
                 </div>
-                <div className="ov-history-meta">
+                <div className="history-meta">
                   <span>{item.messages} msg</span>
                   <span>{formatCompactTokens(item.tokens)} tkn</span>
                 </div>

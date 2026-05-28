@@ -1,0 +1,194 @@
+# AISOC Backend (FastAPI)
+
+## 1. 模块定位
+AISOC Backend 是 `hermes aisoc` 的 API 服务层，负责：
+- 统一认证（Bearer Token）
+- 会话、Cron、Skill、Memory、Logs、Overview 数据读取/写入
+- Chat TUI 的 PTY/WebSocket 网关
+- 托管前端静态资源（`web_dist`）
+
+核心入口：`aisoc/backend/server.py`
+
+---
+
+## 2. 开发与启动
+
+### 2.1 推荐启动方式（集成前后端）
+在仓库根目录执行：
+
+```bash
+hermes aisoc --port 9120 --tui
+```
+
+常用参数：
+- `--port 9120`：服务端口（默认 9120）
+- `--host 127.0.0.1`：监听地址（默认 loopback）
+- `--no-open`：不自动打开浏览器
+- `--insecure`：允许非 loopback 绑定（有安全风险）
+- `--tui`：启用嵌入式 chat PTY/WS 能力
+- `--skip-build`：跳过前端构建（需已有 `backend/web_dist`）
+
+### 2.2 直接以 Python 启动（调试后端）
+
+```bash
+python -c "from aisoc.backend.server import start_server; start_server(host='127.0.0.1', port=9120, open_browser=False, embedded_chat=True)"
+```
+
+### 2.3 Token 配置
+- `AISOC_SESSION_TOKEN`：若设置，则使用静态 token（`token_source=env`）
+- 未设置时：进程启动自动生成随机 token（`token_source=generated`）
+
+---
+
+## 3. 架构与设计
+
+### 3.1 分层架构
+- `server.py`
+  - FastAPI app 组装
+  - CORS + 认证中间件
+  - 路由注册 + Swagger Bearer 认证注入
+  - SPA 静态文件与 fallback
+- `routes/*.py`
+  - API 路由层（参数校验、状态码转换）
+- `services/*.py`
+  - 业务编排层（调用 Hermes 现有能力）
+- `models.py`
+  - Pydantic 请求/响应模型
+- `auth.py` + `config.py`
+  - token 校验与配置装配
+
+### 3.2 认证机制
+- 所有 `/api/*` 默认受保护
+- 白名单（无需认证）：
+  - `/api/auth/login`
+  - `/api/auth/session`
+  - `/api/auth/logout`
+  - `/api/system/bootstrap`
+  - `/health`
+- HTTP：`Authorization: Bearer <token>`
+- WebSocket：`?token=<token>`（浏览器 WS 升级不便带自定义 Authorization）
+
+### 3.3 Chat（`--tui`）链路设计
+当 `embedded_chat=True`（CLI `--tui`）时启用：
+- `/api/chat/pty`：浏览器 <-> PTY 双向字节流
+- `/api/chat/ws`：JSON-RPC sidecar（tui_gateway）
+- `/api/chat/pub`、`/api/chat/events`：事件分发通道
+
+非 `--tui` 模式下上述 WS 返回 `4403`。
+
+---
+
+## 4. API 模块清单
+
+### 4.1 Auth
+前缀：`/api/auth`
+- `POST /login`
+- `GET /session`
+- `POST /logout`
+
+### 4.2 System
+- `GET /health`
+- `GET /api/system/bootstrap`
+
+### 4.3 Chat
+前缀：`/api/chat`
+- `GET /status`
+- `WS /pty`
+- `WS /ws`
+- `WS /pub`
+- `WS /events`
+
+### 4.4 Sessions
+前缀：`/api/sessions`
+- `GET /`
+- `GET /search`
+- `GET /{session_id}`
+- `GET /{session_id}/latest-descendant`
+- `GET /{session_id}/messages`
+- `DELETE /{session_id}`
+
+### 4.5 Cron
+前缀：`/api/cron`
+- `GET /jobs`
+- `GET /jobs/{job_id}`
+- `POST /jobs`
+- `PUT /jobs/{job_id}`
+- `POST /jobs/{job_id}/pause`
+- `POST /jobs/{job_id}/resume`
+- `POST /jobs/{job_id}/trigger`
+- `DELETE /jobs/{job_id}`
+
+### 4.6 Skills
+前缀：`/api/skills`
+- `GET /`
+- `PUT /toggle`
+- `POST /reload`
+
+### 4.7 Memory
+前缀：`/api/memory`
+- `GET /`
+- `GET/PUT /soul`
+- `GET/PUT /user`
+- `GET/PUT /files/{name}`
+
+### 4.8 Logs
+前缀：`/api/logs`
+- `GET /`
+
+### 4.9 Overview
+前缀：`/api/overview`
+- `GET /status`
+- `GET /stats`
+- `GET /token-trend`
+- `GET /security-events`
+- `GET /keywords`
+- `GET /keywords/{keyword}/sessions`
+- `GET /cron-token-dist`
+- `GET /cronjobs`
+- `GET /cronjobs/{job_id}/history`
+- `GET /sessions/{session_id}/detail`
+
+---
+
+## 5. 关键实现与依赖
+
+- FastAPI + Uvicorn：轻量、类型友好、便于 WS 与 docs 扩展
+- Pydantic：请求模型和约束统一
+- Hermes 内核复用：
+  - `SessionDB`（会话）
+  - `cron.jobs`（任务）
+  - `skills_config` / `skills_tool`
+  - `hermes_cli.logs`
+- PTY/TUI 桥接：`services/tui_embed.py` + `tui_gateway`
+
+---
+
+## 6. 技术栈选择（为什么）
+
+- **FastAPI**：
+  - 同时处理 REST + WebSocket 方便
+  - 自动 OpenAPI，便于前端/agent 调试
+- **服务层拆分（routes + services）**：
+  - 路由层保持薄，业务逻辑集中，便于 agent 定位改动点
+- **Bearer Token 简模型**：
+  - 局域网本地工具场景下实现成本低、调试效率高
+- **复用 Hermes 核心数据源**：
+  - 避免双写与数据漂移，确保 CLI 与 Dashboard 一致
+
+---
+
+## 7. 开发建议（给其他 Agent）
+
+1. 新增接口优先放在 `routes/*.py + services/*.py`，避免在 `server.py` 堆逻辑。
+2. 涉及安全策略改动时，先检查：
+   - `PUBLIC_API_PATHS`
+   - `auth_middleware`
+   - WS token 校验逻辑
+3. 如果改动 Overview/Chat 接口，务必联动前端 `src/lib/*.ts` 的调用契约。
+4. 发布前至少做一次：
+
+```bash
+cd aisoc/frontend && npm run build
+```
+
+确保 `backend/web_dist` 已更新可用。

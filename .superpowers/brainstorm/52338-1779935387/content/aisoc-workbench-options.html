@@ -1,0 +1,81 @@
+<h2>AISOC Frontend Visual Refactor - Workbench Options</h2>
+<p class="subtitle">Goal: cyber-tech unified style, clearer layout, better task flow for desktop-first operations.</p>
+
+<div class="cards">
+  <div class="card" data-choice="A" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">A. Control Center Grid</div>
+        <div class="mockup-body">
+          <div class="mock-nav">Top command rail + compact sidebar</div>
+          <div style="display:grid;grid-template-columns:2fr 1fr;gap:8px;margin-top:8px;">
+            <div class="mock-content">Main: List/Table + Detail split</div>
+            <div class="mock-sidebar">Right: Context, actions, alerts</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Control Center Grid</h3>
+      <p>Higher information density, strong monitoring feel. Best for cron/sessions operations.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="B" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">B. Analyst Workbench (Recommended)</div>
+        <div class="mockup-body">
+          <div class="mock-nav">Persistent left nav + page mission header</div>
+          <div style="display:grid;grid-template-columns:2.2fr 1fr;gap:8px;margin-top:8px;">
+            <div class="mock-content">Main: Task-first content (chat/rows/editors)</div>
+            <div class="mock-sidebar">Right: Timeline, metadata, quick actions</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Analyst Workbench</h3>
+      <p>Clear hierarchy + focused task flow. Most balanced for chat, sessions deep-dive, and memory editing.</p>
+    </div>
+  </div>
+
+  <div class="card" data-choice="C" onclick="toggleSelect(this)">
+    <div class="card-image">
+      <div class="mockup">
+        <div class="mockup-header">C. Command Canvas</div>
+        <div class="mockup-body">
+          <div class="mock-nav">Minimal chrome + floating modules</div>
+          <div style="display:grid;grid-template-columns:1fr;gap:8px;margin-top:8px;">
+            <div class="mock-content">Single-column narrative panels with drawers</div>
+          </div>
+        </div>
+      </div>
+    </div>
+    <div class="card-body">
+      <h3>Command Canvas</h3>
+      <p>Most visual and immersive. Lower density, better for presentation than heavy operations.</p>
+    </div>
+  </div>
+</div>
+
+<div class="section">
+  <div class="pros-cons">
+    <div class="pros">
+      <h4>Recommendation</h4>
+      <ul>
+        <li>Pick B as base architecture for all pages.</li>
+        <li>Keep Overview as visual anchor, extend same language to Chat/Sessions/Cron/Skills/Memory.</li>
+        <li>Use strict z-index layers and consistent modal behavior.</li>
+      </ul>
+    </div>
+    <div class="cons">
+      <h4>Tradeoff Notes</h4>
+      <ul>
+        <li>A can feel crowded for non-ops users.</li>
+        <li>C risks lower scan efficiency for operational tasks.</li>
+        <li>B requires page-by-page structure normalization.</li>
+      </ul>
+    </div>
+  </div>
+</div>

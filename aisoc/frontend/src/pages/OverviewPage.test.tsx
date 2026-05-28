@@ -100,7 +100,7 @@ describe("OverviewPage", () => {
     expect(html).toContain("计划任务 Token 消耗占比");
     expect(html).toContain("安全事件");
     expect(html).toContain("overview-cyber-wrap workbench-overview");
-    expect(html).toContain("ov-panel panel");
+    expect(html).toContain("panel panel-trend");
   });
 });
 
