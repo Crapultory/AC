@@ -40,6 +40,18 @@ export function MemoryPage() {
     return selected.replace("file:", "");
   }, [selected]);
 
+  const selectedSourceName = useMemo(() => {
+    if (selected === "soul") return memoryIndex?.soul.name ?? "SOUL.md";
+    if (selected === "user") return memoryIndex?.user_preferences.name ?? "USER.md";
+    return selected.replace("file:", "");
+  }, [memoryIndex, selected]);
+
+  const selectedApiPath = useMemo(() => {
+    if (selected === "soul") return "/api/memory/soul";
+    if (selected === "user") return "/api/memory/user";
+    return `/api/memory/files/${selected.replace("file:", "")}`;
+  }, [selected]);
+
   async function loadEditor(kind: EditorKind) {
     setSelected(kind);
     setError("");
@@ -93,36 +105,73 @@ export function MemoryPage() {
   }, [selected]);
 
   return (
-    <section>
-      <header className="detail-panel">
-        <h2>Memory</h2>
-        <p className="subtle-copy">Edit `SOUL.md`, `USER.md`, and built-in memory files.</p>
+    <section className="memory-workbench-page">
+      <header className="page-mission-header memory-mission-header">
+        <div>
+          <h2>Memory</h2>
+          <p className="subtle-copy">
+            Edit `SOUL.md`, `USER.md`, and built-in memory files.
+          </p>
+        </div>
+        <div className="page-mission-meta">
+          <span className="badge">
+            {(memoryIndex?.memory_files || []).length} indexed files
+          </span>
+        </div>
       </header>
-      <div className="memory-layout" style={{ marginTop: 14 }}>
-        <aside className="detail-panel memory-nav">
-          <h3>Memory Files</h3>
-          <button type="button" onClick={() => setSelected("soul")}>
-            Agent Soul
-          </button>
-          <button type="button" onClick={() => setSelected("user")}>
-            User Preferences
-          </button>
-          {(memoryIndex?.memory_files || []).map((file) => (
-            <button key={file.name} type="button" onClick={() => setSelected(`file:${file.name}`)}>
-              {file.name}
-            </button>
-          ))}
-        </aside>
-        <div className="detail-panel memory-editor">
+      <div className="memory-layout memory-workbench">
+        <div className="detail-panel memory-editor memory-editor-pane">
           <h3>{selectedLabel}</h3>
+          <p className="subtle-copy">Primary editor pane. Save writes directly to the selected memory file.</p>
           <textarea value={content} onChange={(event) => setContent(event.target.value)} rows={20} />
-          <div>
+          <div className="memory-save-row">
             <button type="button" onClick={save} disabled={saving}>
               {saving ? "Saving..." : "Save"}
             </button>
           </div>
           {error ? <p className="error-text">{error}</p> : null}
         </div>
+        <aside className="memory-context-rail">
+          <section className="detail-panel memory-nav memory-index-panel">
+            <h3>Memory Files</h3>
+            <button
+              className={selected === "soul" ? "active" : ""}
+              type="button"
+              onClick={() => setSelected("soul")}
+            >
+              Agent Soul
+            </button>
+            <button
+              className={selected === "user" ? "active" : ""}
+              type="button"
+              onClick={() => setSelected("user")}
+            >
+              User Preferences
+            </button>
+            {(memoryIndex?.memory_files || []).map((file) => {
+              const key = `file:${file.name}` as const;
+              return (
+                <button
+                  key={file.name}
+                  className={selected === key ? "active" : ""}
+                  type="button"
+                  onClick={() => setSelected(key)}
+                >
+                  {file.name}
+                </button>
+              );
+            })}
+          </section>
+          <section className="detail-panel memory-file-context">
+            <h3>File Context</h3>
+            <p className="subtle-copy">Current selection: {selectedLabel}</p>
+            <p className="subtle-copy">Source: {selectedSourceName}</p>
+            <p className="subtle-copy">
+              Save target:{" "}
+              <code>{selectedApiPath}</code>
+            </p>
+          </section>
+        </aside>
       </div>
     </section>
   );
