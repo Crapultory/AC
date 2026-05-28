@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 import { PageMissionHeader } from "../components/PageMissionHeader";
 import { StateBlock } from "../components/StateBlock";
@@ -27,6 +27,14 @@ function renderSchedule(schedule: CronJob["schedule"]): string {
   return "no schedule";
 }
 
+export function isLatestCronDetailRequest(requestId: number, latestRequestId: number): boolean {
+  return requestId === latestRequestId;
+}
+
+export function isCronActivationKey(key: string): boolean {
+  return key === "Enter" || key === " ";
+}
+
 export function CronPage() {
   const [jobs, setJobs] = useState<CronJob[]>([]);
   const [error, setError] = useState("");
@@ -37,8 +45,14 @@ export function CronPage() {
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
   const [actionError, setActionError] = useState("");
   const [pendingAction, setPendingAction] = useState<string>("");
+  const detailRequestIdRef = useRef(0);
+  const selectedJobIdRef = useRef("");
 
   const selectedJob = jobs.find((job) => String(job.id || job.name || "") === selectedJobId);
+
+  useEffect(() => {
+    selectedJobIdRef.current = selectedJobId;
+  }, [selectedJobId]);
 
   async function loadJobs() {
     setLoading(true);
@@ -58,11 +72,10 @@ export function CronPage() {
     setActionError("");
     setPendingAction(actionKey);
     try {
-      await fetchJSON(`/api/cron/jobs/${jobId}/${verb}`, { method: "POST" });
+      await fetchJSON(`/api/cron/jobs/${encodeURIComponent(jobId)}/${verb}`, { method: "POST" });
       await loadJobs();
-      if (selectedJobId === jobId) {
-        await selectJob(jobId);
-      }
+      if (selectedJobIdRef.current !== jobId) return;
+      await selectJob(jobId);
     } catch {
       setActionError(`Failed to ${verb} cron job.`);
     } finally {
@@ -72,18 +85,24 @@ export function CronPage() {
 
   async function selectJob(rawId: string) {
     if (!rawId) return;
+    const requestId = ++detailRequestIdRef.current;
+    selectedJobIdRef.current = rawId;
     setSelectedJobId(rawId);
     setDetailLoading(true);
     setDetailError("");
+    setDetail(null);
     try {
       const payload = await fetchJSON<Record<string, unknown>>(
         `/api/cron/jobs/${encodeURIComponent(rawId)}`,
       );
+      if (!isLatestCronDetailRequest(requestId, detailRequestIdRef.current)) return;
       setDetail(payload);
     } catch {
+      if (!isLatestCronDetailRequest(requestId, detailRequestIdRef.current)) return;
       setDetail(null);
       setDetailError("Failed to load cron job details.");
     } finally {
+      if (!isLatestCronDetailRequest(requestId, detailRequestIdRef.current)) return;
       setDetailLoading(false);
     }
   }
@@ -128,7 +147,14 @@ export function CronPage() {
                     ? "clickable-card active"
                     : "clickable-card"
                 }
+                role="button"
+                tabIndex={0}
                 onClick={() => selectJob(String(job.id || job.name || ""))}
+                onKeyDown={(event) => {
+                  if (!isCronActivationKey(event.key)) return;
+                  event.preventDefault();
+                  void selectJob(String(job.id || job.name || ""));
+                }}
               >
                 <div className="cron-job-head">
                   <strong>{job.name || job.id}</strong>
