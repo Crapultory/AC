@@ -255,12 +255,6 @@ select:focus {
   min-width: 0;
 }
 
-.side-nav-header h1 {
-  margin: 0;
-  font-size: 36px;
-  text-shadow: 0 0 18px rgba(45, 255, 222, 0.26);
-}
-
 .side-nav-groups {
   display: grid;
   align-content: start;
