@@ -762,84 +762,6 @@ select:focus {
   margin-top: 10px;
 }
 
-.workbench-overview {
-  position: relative;
-}
-
-.workbench-overview .ov-container {
-  display: grid;
-  gap: 14px;
-}
-
-.workbench-overview .ov-stats-row {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-}
-
-.workbench-overview .ov-charts-row,
-.workbench-overview .ov-bottom-row {
-  display: grid;
-  gap: 12px;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-}
-
-.workbench-overview .ov-panel,
-.workbench-overview .ov-stat-card {
-  min-width: 0;
-  border-radius: var(--aisoc-radius-md);
-}
-
-.workbench-overview .ov-panel-header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 10px;
-  flex-wrap: wrap;
-}
-
-.workbench-overview .ov-panel-tabs {
-  display: inline-flex;
-  gap: 8px;
-}
-
-.workbench-overview .ov-table-wrap {
-  overflow-x: auto;
-}
-
-.workbench-overview .ov-modal-overlay {
-  position: fixed;
-  inset: 0;
-  display: none;
-  place-items: center;
-  padding: 20px;
-  background: rgba(2, 7, 16, 0.72);
-  z-index: var(--z-modal);
-}
-
-.workbench-overview .ov-modal-overlay.active {
-  display: grid;
-}
-
-.workbench-overview .ov-modal-overlay-session {
-  z-index: calc(var(--z-modal) + 1);
-}
-
-.workbench-overview .ov-modal-overlay-keyword {
-  z-index: calc(var(--z-modal) + 2);
-}
-
-.workbench-overview .ov-modal {
-  width: min(840px, 92vw);
-  max-height: 80vh;
-  overflow: auto;
-  border-radius: var(--aisoc-radius-md);
-}
-
-.workbench-overview .ov-modal-lg {
-  width: min(1040px, 94vw);
-}
-
 .table,
 .main-panel table,
 .detail-panel table {
@@ -946,9 +868,6 @@ select:focus {
 
   .memory-layout,
   .filter-row,
-  .workbench-overview .ov-stats-row,
-  .workbench-overview .ov-charts-row,
-  .workbench-overview .ov-bottom-row,
   .sessions-workbench,
   .cron-workbench,
   .skills-workbench,
