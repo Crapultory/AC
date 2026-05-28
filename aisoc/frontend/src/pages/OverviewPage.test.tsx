@@ -94,13 +94,13 @@ describe("OverviewPage", () => {
       />,
     );
 
-    expect(html).toContain("Overview");
-    expect(html).toContain("Key Stats");
-    expect(html).toContain("Token Trend");
-    expect(html).toContain("Cron Jobs");
-    expect(html).toContain("Security Events");
-    expect(html).toContain("workbench-overview");
-    expect(html).toContain("detail-panel panel");
+    expect(html).toContain("AISOC");
+    expect(html).toContain("TOKEN 使用趋势");
+    expect(html).toContain("会话关键词");
+    expect(html).toContain("计划任务 Token 消耗占比");
+    expect(html).toContain("安全事件");
+    expect(html).toContain("overview-cyber-wrap workbench-overview");
+    expect(html).toContain("ov-panel panel");
   });
 });
 
