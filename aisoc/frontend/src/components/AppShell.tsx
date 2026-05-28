@@ -25,15 +25,20 @@ export function AppShell() {
           <section className="side-nav-group">
             <p className="side-nav-group-label">Workbench</p>
             <nav aria-label="Workbench navigation">
-              {NAV_ITEMS.map((item) => (
-                <Link
-                  key={item.path}
-                  to={item.path}
-                  className={location.pathname.startsWith(item.path) ? "active" : ""}
-                >
-                  {item.label}
-                </Link>
-              ))}
+              {NAV_ITEMS.map((item) => {
+                const isActive = location.pathname.startsWith(item.path);
+
+                return (
+                  <Link
+                    key={item.path}
+                    to={item.path}
+                    className={isActive ? "active" : ""}
+                    aria-current={isActive ? "page" : undefined}
+                  >
+                    {item.label}
+                  </Link>
+                );
+              })}
             </nav>
           </section>
         </div>
