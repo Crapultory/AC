@@ -8,6 +8,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
 import { ChatSidebar } from "../components/ChatSidebar";
+import { PageMissionHeader } from "../components/PageMissionHeader";
 import { fetchJSON } from "../lib/api";
 import { buildEventsUrl, buildGatewayUrl, buildPtyUrl, generateChannelId } from "../lib/chat";
 
@@ -200,27 +201,40 @@ export function ChatPage() {
   }, [channel, resume, status?.ready]);
 
   return (
-    <section>
-      <header className="detail-panel">
-        <h2>Chat</h2>
-        <p className="subtle-copy">
-          Embedded terminal session via PTY with realtime gateway event feed.
-        </p>
-        {resume ? <p className="subtle-copy">Resume target: {resume}</p> : null}
-        {!status?.ready ? (
-          <p className="subtle-copy">
-            Embedded chat is disabled. Start AISOC with `hermes aisoc --tui`.
-          </p>
-        ) : null}
-        {banner ? <p className="error-text">{banner}</p> : null}
-      </header>
-      <div className="chat-layout" style={{ marginTop: 14 }}>
-        <article className="detail-panel chat-terminal-pane">
-          <h3>Terminal</h3>
-          <p className="subtle-copy">Interactive Hermes TUI stream (PTY over websocket).</p>
+    <section className="chat-workbench-page">
+      <PageMissionHeader
+        title="Chat Workbench"
+        subtitle="Embedded terminal session via PTY with realtime gateway event feed."
+        status={
+          <span className={`status-badge ${status?.ready ? "status-live" : ""}`}>
+            {status?.ready ? "Runtime Connected" : "Runtime Offline"}
+          </span>
+        }
+        actions={
+          resume ? (
+            <span className="status-badge" title={resume}>
+              Resume target: {resume}
+            </span>
+          ) : null
+        }
+      />
+      <div className="chat-workbench">
+        <article className="detail-panel chat-terminal-zone chat-terminal-pane">
+          <header className="chat-zone-header">
+            <h3>Terminal</h3>
+            <p className="subtle-copy">Interactive Hermes TUI stream (PTY over websocket).</p>
+          </header>
+          {!status?.ready ? (
+            <p className="subtle-copy">
+              Embedded chat is disabled. Start AISOC with `hermes aisoc --tui`.
+            </p>
+          ) : null}
+          {banner ? <p className="error-text">{banner}</p> : null}
           <div className="terminal-host" ref={hostRef} />
         </article>
-        <ChatSidebar events={events} />
+        <div className="chat-context-rail">
+          <ChatSidebar events={events} />
+        </div>
       </div>
     </section>
   );
