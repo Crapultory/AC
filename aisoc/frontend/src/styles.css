@@ -17,6 +17,11 @@
   --aisoc-radius-md: 14px;
   --aisoc-radius-lg: 18px;
   --aisoc-transition: 160ms ease;
+  --z-content: 10;
+  --z-sticky: 20;
+  --z-drawer: 30;
+  --z-modal: 50;
+  --z-modal-critical: 60;
 }
 
 * {
