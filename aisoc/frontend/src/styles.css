@@ -287,6 +287,79 @@ select:focus {
   animation: aisoc-fade-in 320ms ease;
 }
 
+.page-mission-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 14px;
+  background: var(--aisoc-panel);
+  border: 1px solid var(--aisoc-border);
+  border-radius: var(--aisoc-radius-md);
+  box-shadow: var(--aisoc-shadow);
+  padding: 14px;
+  backdrop-filter: blur(10px);
+}
+
+.page-mission-header h2 {
+  margin: 0 0 6px;
+}
+
+.page-mission-header .subtle-copy {
+  margin: 0;
+}
+
+.page-mission-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.page-mission-actions {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.state-block {
+  background: var(--aisoc-panel);
+  border: 1px solid var(--aisoc-border);
+  border-radius: var(--aisoc-radius-md);
+  box-shadow: var(--aisoc-shadow);
+  padding: 14px;
+}
+
+.state-block h3 {
+  margin: 0 0 6px;
+}
+
+.state-block .subtle-copy {
+  margin: 0;
+}
+
+.state-block-actions {
+  margin-top: 10px;
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.state-block-loading {
+  border-color: rgba(45, 255, 222, 0.4);
+}
+
+.state-block-empty {
+  border-color: rgba(126, 162, 191, 0.42);
+}
+
+.state-block-error {
+  border-color: rgba(255, 101, 136, 0.6);
+}
+
+.state-block-success {
+  border-color: rgba(16, 252, 160, 0.54);
+}
+
 .list-grid {
   list-style: none;
   padding: 0;
