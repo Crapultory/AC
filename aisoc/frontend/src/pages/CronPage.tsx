@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 
+import { PageMissionHeader } from "../components/PageMissionHeader";
+import { StateBlock } from "../components/StateBlock";
 import { fetchJSON } from "../lib/api";
 
 type CronJob = {
@@ -33,9 +35,14 @@ export function CronPage() {
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
+  const [actionError, setActionError] = useState("");
+  const [pendingAction, setPendingAction] = useState<string>("");
+
+  const selectedJob = jobs.find((job) => String(job.id || job.name || "") === selectedJobId);
 
   async function loadJobs() {
     setLoading(true);
+    setError("");
     try {
       const payload = await fetchJSON<CronJob[]>("/api/cron/jobs");
       setJobs(payload || []);
@@ -47,8 +54,20 @@ export function CronPage() {
   }
 
   async function action(jobId: string, verb: "pause" | "resume" | "trigger") {
-    await fetchJSON(`/api/cron/jobs/${jobId}/${verb}`, { method: "POST" });
-    await loadJobs();
+    const actionKey = `${jobId}:${verb}`;
+    setActionError("");
+    setPendingAction(actionKey);
+    try {
+      await fetchJSON(`/api/cron/jobs/${jobId}/${verb}`, { method: "POST" });
+      await loadJobs();
+      if (selectedJobId === jobId) {
+        await selectJob(jobId);
+      }
+    } catch {
+      setActionError(`Failed to ${verb} cron job.`);
+    } finally {
+      setPendingAction("");
+    }
   }
 
   async function selectJob(rawId: string) {
@@ -74,18 +93,33 @@ export function CronPage() {
   }, []);
 
   return (
-    <section>
-      <header className="detail-panel">
-        <h2>Cron</h2>
-        <p className="subtle-copy">Inspect and control scheduled jobs.</p>
-        {error ? <p className="error-text">{error}</p> : null}
-      </header>
-      <div className="detail-layout" style={{ marginTop: 14 }}>
-        <article className="detail-panel">
+    <section className="cron-workbench-page">
+      <PageMissionHeader
+        title="Cron Operations"
+        subtitle="Monitor scheduled jobs, execute interventions, and inspect runtime detail from one analyst workspace."
+        status={<span className="status-badge">Jobs: {jobs.length}</span>}
+        actions={
+          selectedJobId ? (
+            <span className="status-badge" title={selectedJobId}>
+              Focus: {selectedJobId}
+            </span>
+          ) : null
+        }
+      />
+      {error ? (
+        <StateBlock kind="error" title="Cron Load Failed" message={error} />
+      ) : null}
+      <div className="cron-workbench">
+        <article className="detail-panel cron-jobs-pane">
           <h3>Jobs</h3>
-          {loading ? <p className="subtle-copy">Loading cron jobs...</p> : null}
-          {!loading && jobs.length === 0 ? <p className="subtle-copy">No cron jobs found.</p> : null}
-          <ul className="list-grid" style={{ display: "grid", gap: 10 }}>
+          <p className="subtle-copy">Select a job to inspect detail and dispatch trigger/pause/resume actions.</p>
+          {loading ? (
+            <StateBlock kind="loading" title="Loading Cron Jobs" message="Fetching scheduler inventory from /api/cron/jobs." />
+          ) : null}
+          {!loading && jobs.length === 0 ? (
+            <StateBlock kind="empty" title="No Cron Jobs Found" message="No jobs are currently registered for this profile." />
+          ) : null}
+          <ul className="list-grid cron-jobs-list">
             {jobs.map((job) => (
               <li
                 key={job.id || job.name}
@@ -96,56 +130,83 @@ export function CronPage() {
                 }
                 onClick={() => selectJob(String(job.id || job.name || ""))}
               >
-                <strong>{job.name || job.id}</strong>
-                <p>{renderSchedule(job.schedule)}</p>
-                <p>Profile: {job.profile || "default"}</p>
+                <div className="cron-job-head">
+                  <strong>{job.name || job.id}</strong>
+                  <span className="status-badge">{job.paused ? "Paused" : "Running"}</span>
+                </div>
+                <div className="cron-job-meta">
+                  <p>Schedule: {renderSchedule(job.schedule)}</p>
+                  <p>Profile: {job.profile || "default"}</p>
+                </div>
                 {job.id ? (
-                  <div className="button-row">
+                  <div className="button-row cron-action-zone">
                     <button
                       type="button"
+                      disabled={pendingAction === `${job.id}:trigger`}
                       onClick={(event) => {
                         event.stopPropagation();
                         void action(job.id as string, "trigger");
                       }}
                     >
-                      Trigger
+                      {pendingAction === `${job.id}:trigger` ? "Triggering..." : "Trigger"}
                     </button>
                     <button
                       type="button"
+                      disabled={pendingAction === `${job.id}:pause`}
                       onClick={(event) => {
                         event.stopPropagation();
                         void action(job.id as string, "pause");
                       }}
                     >
-                      Pause
+                      {pendingAction === `${job.id}:pause` ? "Pausing..." : "Pause"}
                     </button>
                     <button
                       type="button"
+                      disabled={pendingAction === `${job.id}:resume`}
                       onClick={(event) => {
                         event.stopPropagation();
                         void action(job.id as string, "resume");
                       }}
                     >
-                      Resume
+                      {pendingAction === `${job.id}:resume` ? "Resuming..." : "Resume"}
                     </button>
                   </div>
                 ) : null}
               </li>
             ))}
           </ul>
+          <div className="cron-action-zone">
+            <p className="subtle-copy">Action zone: trigger/pause/resume controls are available on each job row.</p>
+          </div>
+          {actionError ? <p className="error-text">{actionError}</p> : null}
         </article>
-        <aside className="detail-panel">
+        <aside className="detail-panel cron-detail-pane">
           <h3>Cron Job Detail</h3>
+          <p className="subtle-copy">Detail payload and context for the selected scheduler entry.</p>
           {!selectedJobId ? (
-            <p className="subtle-copy">Click a cron row to inspect details.</p>
+            <StateBlock kind="empty" title="No Job Selected" message="Click a cron row to inspect details and context." />
           ) : null}
-          {detailLoading ? <p>Loading detail...</p> : null}
-          {detailError ? <p className="error-text">{detailError}</p> : null}
+          {detailLoading ? <StateBlock kind="loading" title="Loading Detail" message="Fetching selected job payload." /> : null}
+          {detailError ? <StateBlock kind="error" title="Detail Unavailable" message={detailError} /> : null}
           {detail ? (
             <div className="detail-content">
               <pre>{JSON.stringify(detail, null, 2)}</pre>
             </div>
           ) : null}
+          <div className="cron-context-grid">
+            <p>
+              <strong>Selected Job</strong>
+            </p>
+            <p>{selectedJobId || "none"}</p>
+            <p>
+              <strong>Profile</strong>
+            </p>
+            <p>{selectedJob?.profile || "default"}</p>
+            <p>
+              <strong>State</strong>
+            </p>
+            <p>{selectedJob ? (selectedJob.paused ? "paused" : "running") : "unknown"}</p>
+          </div>
         </aside>
       </div>
     </section>

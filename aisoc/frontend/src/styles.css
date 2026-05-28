@@ -612,6 +612,66 @@ select:focus {
   margin: 0;
 }
 
+.cron-workbench-page {
+  display: grid;
+  gap: 14px;
+}
+
+.cron-workbench {
+  display: grid;
+  grid-template-columns: minmax(280px, 1fr) minmax(340px, 1.05fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.cron-jobs-pane,
+.cron-detail-pane {
+  min-width: 0;
+}
+
+.cron-jobs-list {
+  display: grid;
+  gap: 10px;
+  margin-top: 10px;
+}
+
+.cron-job-head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.cron-job-meta {
+  margin-top: 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.cron-job-meta p {
+  margin: 0;
+}
+
+.cron-action-zone {
+  margin-top: 10px;
+}
+
+.cron-action-zone button:disabled {
+  opacity: 0.72;
+}
+
+.cron-context-grid {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: minmax(100px, auto) 1fr;
+  gap: 6px 10px;
+}
+
+.cron-context-grid p {
+  margin: 0;
+}
+
 .table,
 .main-panel table,
 .detail-panel table {
@@ -719,6 +779,7 @@ select:focus {
   .memory-layout,
   .filter-row,
   .sessions-workbench,
+  .cron-workbench,
   .chat-workbench,
   .chat-layout,
   .detail-layout {
