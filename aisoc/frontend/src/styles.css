@@ -561,6 +561,51 @@ select:focus {
   overflow: auto;
 }
 
+.sessions-workbench-page {
+  display: grid;
+  gap: 14px;
+}
+
+.sessions-workbench {
+  display: grid;
+  grid-template-columns: minmax(250px, 0.9fr) minmax(320px, 1.2fr) minmax(220px, 0.8fr);
+  gap: 14px;
+  align-items: start;
+}
+
+.sessions-scan-pane,
+.sessions-message-pane,
+.sessions-context-rail {
+  min-width: 0;
+}
+
+.sessions-scan-list {
+  display: grid;
+  gap: 10px;
+}
+
+.sessions-message-stream {
+  margin-top: 10px;
+}
+
+.sessions-context-grid {
+  display: grid;
+  grid-template-columns: minmax(96px, auto) 1fr;
+  gap: 6px 10px;
+}
+
+.sessions-context-grid p {
+  margin: 0;
+}
+
+.sessions-context-actions {
+  margin-top: 10px;
+}
+
+.sessions-context-actions .subtle-copy {
+  margin: 0;
+}
+
 .table,
 .main-panel table,
 .detail-panel table {
@@ -667,6 +712,7 @@ select:focus {
 
   .memory-layout,
   .filter-row,
+  .sessions-workbench,
   .chat-workbench,
   .chat-layout,
   .detail-layout {

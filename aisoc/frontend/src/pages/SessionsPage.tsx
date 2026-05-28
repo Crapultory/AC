@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { PageMissionHeader } from "../components/PageMissionHeader";
 import { fetchJSON } from "../lib/api";
 
 type SessionRow = {
@@ -36,6 +37,7 @@ export function SessionsPage() {
   const [detailError, setDetailError] = useState("");
   const [messages, setMessages] = useState<SessionMessagesResponse["messages"]>([]);
   const visibleMessages = messages.filter((msg) => (msg.role || "").toLowerCase() !== "system");
+  const selectedSession = rows.find((row) => (row.id || row.session_id || "") === selectedSessionId);
 
   useEffect(() => {
     async function load() {
@@ -81,18 +83,27 @@ export function SessionsPage() {
   }
 
   return (
-    <section>
-      <header className="detail-panel">
-        <h2>Sessions</h2>
-        <p className="subtle-copy">Browse recent sessions and inspect message-only history.</p>
-        {error ? <p className="error-text">{error}</p> : null}
-      </header>
-      <div className="detail-layout" style={{ marginTop: 14 }}>
-        <article className="detail-panel">
+    <section className="sessions-workbench-page">
+      <PageMissionHeader
+        title="Sessions"
+        subtitle="Scan recent runs, deep-dive message trails, and keep investigation context aligned."
+        status={<span className="status-badge">Loaded: {rows.length}</span>}
+        actions={
+          selectedSessionId ? (
+            <span className="status-badge" title={selectedSessionId}>
+              Selected: {selectedSessionId}
+            </span>
+          ) : null
+        }
+      />
+      {error ? <p className="error-text">{error}</p> : null}
+      <div className="sessions-workbench">
+        <article className="detail-panel sessions-scan-pane">
           <h3>Recent Sessions</h3>
+          <p className="subtle-copy">Click a row to inspect message-only detail and relaunch from the same lineage.</p>
           {loading ? <p>Loading sessions...</p> : null}
           {!loading && rows.length === 0 ? <p className="subtle-copy">No sessions found.</p> : null}
-          <ul className="list-grid" style={{ display: "grid", gap: 10 }}>
+          <ul className="list-grid sessions-scan-list">
             {rows.map((row) => (
               <li
                 key={row.id || row.session_id}
@@ -120,8 +131,11 @@ export function SessionsPage() {
             ))}
           </ul>
         </article>
-        <aside className="detail-panel">
+        <article className="detail-panel sessions-message-pane">
           <h3>Session Messages</h3>
+          <p className="subtle-copy">
+            Detail view shows message payloads only. System role messages are filtered out.
+          </p>
           {!selectedSessionId ? (
             <p className="subtle-copy">Click a session row to inspect messages.</p>
           ) : null}
@@ -131,7 +145,7 @@ export function SessionsPage() {
             <p className="subtle-copy">No non-system messages available for this session.</p>
           ) : null}
           {visibleMessages.length > 0 ? (
-            <div className="detail-messages">
+            <div className="detail-messages sessions-message-stream">
               <h4>Recent Messages</h4>
               {visibleMessages.slice(-20).map((msg, index) => (
                 <div key={`${index}-${msg.role || "unknown"}`} className="detail-message">
@@ -143,6 +157,37 @@ export function SessionsPage() {
               ))}
             </div>
           ) : null}
+        </article>
+        <aside className="detail-panel sessions-context-rail">
+          <h3>Analysis Context</h3>
+          <p className="subtle-copy">Use this rail to keep session identity and scan-to-detail workflow grounded.</p>
+          {!selectedSession ? (
+            <p className="subtle-copy">No session selected.</p>
+          ) : (
+            <div className="sessions-context-grid">
+              <p>
+                <strong>Session ID</strong>
+              </p>
+              <p>{selectedSessionId}</p>
+              <p>
+                <strong>Model</strong>
+              </p>
+              <p>{selectedSession.model || "unknown-model"}</p>
+              <p>
+                <strong>Source</strong>
+              </p>
+              <p>{selectedSession.source || "unknown-source"}</p>
+              <p>
+                <strong>Visible Messages</strong>
+              </p>
+              <p>{visibleMessages.length}</p>
+            </div>
+          )}
+          <div className="sessions-context-actions">
+            <p className="subtle-copy">
+              Relaunch is best-effort to latest descendant and falls back to the selected session.
+            </p>
+          </div>
         </aside>
       </div>
     </section>
