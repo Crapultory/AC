@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { fetchJSON } from "../lib/api";
 
@@ -19,8 +19,10 @@ export function MemoryPage() {
   const [memoryIndex, setMemoryIndex] = useState<MemoryIndex | null>(null);
   const [selected, setSelected] = useState<EditorKind>("soul");
   const [content, setContent] = useState("");
+  const [loadedContent, setLoadedContent] = useState("");
   const [error, setError] = useState("");
   const [saving, setSaving] = useState(false);
+  const loadRequestIdRef = useRef(0);
 
   useEffect(() => {
     async function bootstrap() {
@@ -49,11 +51,24 @@ export function MemoryPage() {
   const selectedApiPath = useMemo(() => {
     if (selected === "soul") return "/api/memory/soul";
     if (selected === "user") return "/api/memory/user";
-    return `/api/memory/files/${selected.replace("file:", "")}`;
+    return `/api/memory/files/${encodeURIComponent(selected.replace("file:", ""))}`;
   }, [selected]);
 
-  async function loadEditor(kind: EditorKind) {
+  const hasUnsavedEdits = content !== loadedContent;
+
+  function selectWithUnsavedGuard(kind: EditorKind) {
+    if (kind === selected) return;
+    if (
+      hasUnsavedEdits &&
+      !window.confirm("You have unsaved edits. Discard changes and switch files?")
+    ) {
+      return;
+    }
     setSelected(kind);
+  }
+
+  async function loadEditor(kind: EditorKind) {
+    const requestId = ++loadRequestIdRef.current;
     setError("");
     try {
       let payload: MemoryFilePayload;
@@ -63,11 +78,15 @@ export function MemoryPage() {
         payload = await fetchJSON<MemoryFilePayload>("/api/memory/user");
       } else {
         payload = await fetchJSON<MemoryFilePayload>(
-          `/api/memory/files/${kind.replace("file:", "")}`,
+          `/api/memory/files/${encodeURIComponent(kind.replace("file:", ""))}`,
         );
       }
-      setContent(payload.content || "");
+      if (requestId !== loadRequestIdRef.current) return;
+      const nextContent = payload.content || "";
+      setContent(nextContent);
+      setLoadedContent(nextContent);
     } catch {
+      if (requestId !== loadRequestIdRef.current) return;
       setError("Failed to load memory content.");
     }
   }
@@ -87,11 +106,12 @@ export function MemoryPage() {
           body: JSON.stringify({ content }),
         });
       } else {
-        await fetchJSON(`/api/memory/files/${selected.replace("file:", "")}`, {
+        await fetchJSON(`/api/memory/files/${encodeURIComponent(selected.replace("file:", ""))}`, {
           method: "PUT",
           body: JSON.stringify({ content }),
         });
       }
+      setLoadedContent(content);
     } catch {
       setError("Failed to save memory content.");
     } finally {
@@ -123,7 +143,15 @@ export function MemoryPage() {
         <div className="detail-panel memory-editor memory-editor-pane">
           <h3>{selectedLabel}</h3>
           <p className="subtle-copy">Primary editor pane. Save writes directly to the selected memory file.</p>
-          <textarea value={content} onChange={(event) => setContent(event.target.value)} rows={20} />
+          <label className="memory-editor-label" htmlFor="memory-editor-textarea">
+            Editor Content
+          </label>
+          <textarea
+            id="memory-editor-textarea"
+            value={content}
+            onChange={(event) => setContent(event.target.value)}
+            rows={20}
+          />
           <div className="memory-save-row">
             <button type="button" onClick={save} disabled={saving}>
               {saving ? "Saving..." : "Save"}
@@ -136,15 +164,17 @@ export function MemoryPage() {
             <h3>Memory Files</h3>
             <button
               className={selected === "soul" ? "active" : ""}
+              aria-pressed={selected === "soul"}
               type="button"
-              onClick={() => setSelected("soul")}
+              onClick={() => selectWithUnsavedGuard("soul")}
             >
               Agent Soul
             </button>
             <button
               className={selected === "user" ? "active" : ""}
+              aria-pressed={selected === "user"}
               type="button"
-              onClick={() => setSelected("user")}
+              onClick={() => selectWithUnsavedGuard("user")}
             >
               User Preferences
             </button>
@@ -154,8 +184,9 @@ export function MemoryPage() {
                 <button
                   key={file.name}
                   className={selected === key ? "active" : ""}
+                  aria-pressed={selected === key}
                   type="button"
-                  onClick={() => setSelected(key)}
+                  onClick={() => selectWithUnsavedGuard(key)}
                 >
                   {file.name}
                 </button>
