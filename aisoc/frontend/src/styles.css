@@ -18,16 +18,16 @@
   --aisoc-radius-lg: 18px;
   --aisoc-transition: 160ms ease;
   /* Canonical workbench layers; legacy hardcoded z-index values migrate in later tasks. */
-  --z-content: 10;
-  --z-sticky: 20;
-  --z-drawer: 30;
-  --z-modal: 50;
-  --z-modal-critical: 60;
-  --aisoc-z-content: var(--z-content);
-  --aisoc-z-sticky: var(--z-sticky);
-  --aisoc-z-drawer: var(--z-drawer);
-  --aisoc-z-modal: var(--z-modal);
-  --aisoc-z-modal-critical: var(--z-modal-critical);
+  --aisoc-z-content: 10;
+  --aisoc-z-sticky: 20;
+  --aisoc-z-drawer: 30;
+  --aisoc-z-modal: 50;
+  --aisoc-z-modal-critical: 60;
+  --z-content: var(--aisoc-z-content);
+  --z-sticky: var(--aisoc-z-sticky);
+  --z-drawer: var(--aisoc-z-drawer);
+  --z-modal: var(--aisoc-z-modal);
+  --z-modal-critical: var(--aisoc-z-modal-critical);
 }
 
 * {
