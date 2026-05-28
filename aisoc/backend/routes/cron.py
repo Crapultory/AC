@@ -22,6 +22,13 @@ def build_cron_router() -> APIRouter:
             raise HTTPException(status_code=404, detail="Job not found")
         return job
 
+    @router.get("/jobs/{job_id}/history")
+    async def get_job_history(job_id: str):
+        payload = cron_service.get_job_history(job_id)
+        if payload is None:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return payload
+
     @router.post("/jobs")
     async def create_job(body: CronJobCreate, profile: str = "default"):
         return cron_service.create_job(
@@ -67,4 +74,3 @@ def build_cron_router() -> APIRouter:
         return {"ok": True}
 
     return router
-

@@ -5,7 +5,7 @@ from hermes_state import SessionDB
 
 from aisoc.backend.config import load_aisoc_settings
 from aisoc.backend.server import create_app
-from aisoc.backend.services import overview_service
+from aisoc.backend.services import cron_service, overview_service, session_service
 
 
 REQUIRED_STATUS_KEYS = {
@@ -115,7 +115,7 @@ def test_overview_cronjobs_requires_auth(monkeypatch) -> None:
 def test_overview_cronjob_history_not_found(monkeypatch) -> None:
     client, headers = _auth_client(monkeypatch)
 
-    response = client.get("/api/overview/cronjobs/missing/history", headers=headers)
+    response = client.get("/api/cron/jobs/missing/history", headers=headers)
     assert response.status_code == 404
     assert response.json() == {"detail": "Job not found"}
 
@@ -136,10 +136,10 @@ def test_overview_cronjob_history_handles_cron_backend_failure(monkeypatch) -> N
     def _boom(*args, **kwargs):
         raise RuntimeError("cron backend down")
 
-    monkeypatch.setattr(overview_service.cron_service, "get_job", _boom)
+    monkeypatch.setattr(cron_service, "get_job", _boom)
     client, headers = _auth_client(monkeypatch)
 
-    response = client.get("/api/overview/cronjobs/any/history", headers=headers)
+    response = client.get("/api/cron/jobs/any/history", headers=headers)
     assert response.status_code == 200
     assert response.json() == []
 
@@ -147,7 +147,7 @@ def test_overview_cronjob_history_handles_cron_backend_failure(monkeypatch) -> N
 def test_overview_session_detail_not_found(monkeypatch) -> None:
     client, headers = _auth_client(monkeypatch)
 
-    response = client.get("/api/overview/sessions/missing/detail", headers=headers)
+    response = client.get("/api/sessions/missing/detail", headers=headers)
     assert response.status_code == 404
     assert response.json() == {"detail": "Session not found"}
 
@@ -164,10 +164,10 @@ def test_overview_session_detail_truncates_tool_and_skips_empty_assistant(monkey
     finally:
         db.close()
 
-    monkeypatch.setattr(overview_service, "SessionDB", lambda: SessionDB(db_path=db_path))
+    monkeypatch.setattr(session_service, "SessionDB", lambda: SessionDB(db_path=db_path))
     client, headers = _auth_client(monkeypatch)
 
-    response = client.get("/api/overview/sessions/sess_1/detail", headers=headers)
+    response = client.get("/api/sessions/sess_1/detail", headers=headers)
     assert response.status_code == 200
     payload = response.json()
     assert payload["session_id"] == "sess_1"

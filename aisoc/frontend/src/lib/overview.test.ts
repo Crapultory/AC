@@ -79,14 +79,14 @@ describe("overview api helpers", () => {
   it("escapes job id when requesting cron history", async () => {
     await getCronjobHistory("job/123");
 
-    expect(mockedFetchJSON).toHaveBeenCalledWith("/api/overview/cronjobs/job%2F123/history");
+    expect(mockedFetchJSON).toHaveBeenCalledWith("/api/cron/jobs/job%2F123/history");
   });
 
   it("escapes session id when requesting session detail", async () => {
     await getSessionDetail("session/123");
 
     expect(mockedFetchJSON).toHaveBeenCalledWith(
-      "/api/overview/sessions/session%2F123/detail",
+      "/api/sessions/session%2F123/detail",
     );
   });
 });

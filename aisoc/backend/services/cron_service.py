@@ -7,6 +7,7 @@ from typing import Any, Optional
 import threading
 
 from fastapi import HTTPException
+from hermes_state import SessionDB
 
 
 _CRON_PROFILE_LOCK = threading.RLock()
@@ -162,3 +163,63 @@ def remove_job(job_id: str, profile: str | None = None) -> bool:
         return False
     return bool(_call_cron_for_profile(selected, "remove_job", job_id))
 
+
+def _escape_like(value: str) -> str:
+    return value.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+
+
+def _cron_session_pattern(job_id: str) -> str:
+    return f"cron_{_escape_like(job_id)}%"
+
+
+def get_job_history(job_id: str) -> list[dict[str, Any]] | None:
+    try:
+        job = get_job(job_id)
+    except Exception:
+        return []
+
+    if not job:
+        return None
+
+    db = SessionDB()
+    try:
+        with db._lock:
+            rows = db._conn.execute(
+                """
+                SELECT id, started_at, ended_at, message_count,
+                       COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) AS total_tokens,
+                       end_reason
+                FROM sessions
+                WHERE id LIKE ? ESCAPE '\\'
+                ORDER BY started_at DESC
+                LIMIT 20
+                """,
+                (_cron_session_pattern(job_id),),
+            ).fetchall()
+        records = [dict(row) for row in rows]
+    finally:
+        db.close()
+
+    history: list[dict[str, Any]] = []
+    for row in records:
+        started_at = row.get("started_at")
+        ended_at = row.get("ended_at")
+        duration = None
+        if started_at is not None and ended_at is not None:
+            try:
+                duration = int(float(ended_at) - float(started_at))
+            except Exception:
+                duration = None
+        history.append(
+            {
+                "session_id": str(row.get("id") or ""),
+                "started_at": started_at,
+                "ended_at": ended_at,
+                "duration_seconds": duration,
+                "messages": int(row.get("message_count") or 0),
+                "tokens": int(row.get("total_tokens") or 0),
+                "status": str(row.get("end_reason") or "completed"),
+            }
+        )
+
+    return history

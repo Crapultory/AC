@@ -19,7 +19,6 @@ _STATUS_RECENT_WINDOW_SECONDS = 6 * 3600
 _ACTIVE_SESSION_WINDOW_SECONDS = 24 * 3600
 _DEFAULT_MEMORY_LIMIT = 2200
 _DEFAULT_USER_LIMIT = 1375
-_TOOL_OUTPUT_TRUNCATE_CHARS = 500
 _KEYWORD_WINDOW_SECONDS = 7 * 86400
 _EVENT_SUMMARY_MAX_CHARS = 180
 
@@ -298,109 +297,6 @@ def get_cronjobs() -> list[dict[str, Any]]:
         return result
     finally:
         db.close()
-
-
-def get_cronjob_history(job_id: str) -> list[dict[str, Any]] | None:
-    try:
-        job = cron_service.get_job(job_id)
-    except Exception:
-        return []
-
-    if not job:
-        return None
-
-    db = SessionDB()
-    try:
-        rows = _query_all(
-            db,
-            """
-            SELECT id, started_at, ended_at, message_count,
-                   COALESCE(input_tokens, 0) + COALESCE(output_tokens, 0) AS total_tokens,
-                   end_reason
-            FROM sessions
-            WHERE id LIKE ? ESCAPE '\\'
-            ORDER BY started_at DESC
-            LIMIT 20
-            """,
-            (_cron_session_pattern(job_id),),
-        )
-    finally:
-        db.close()
-
-    history: list[dict[str, Any]] = []
-    for row in rows:
-        started_at = row.get("started_at")
-        ended_at = row.get("ended_at")
-        duration = None
-        if started_at is not None and ended_at is not None:
-            try:
-                duration = int(float(ended_at) - float(started_at))
-            except Exception:
-                duration = None
-        history.append(
-            {
-                "session_id": str(row.get("id") or ""),
-                "started_at": started_at,
-                "ended_at": ended_at,
-                "duration_seconds": duration,
-                "messages": int(row.get("message_count") or 0),
-                "tokens": int(row.get("total_tokens") or 0),
-                "status": str(row.get("end_reason") or "completed"),
-            }
-        )
-    return history
-
-
-def get_session_detail(session_id: str) -> dict[str, Any] | None:
-    db = SessionDB()
-    try:
-        sid = db.resolve_session_id(session_id)
-        if not sid:
-            return None
-
-        session = db.get_session(sid)
-        if not session:
-            return None
-
-        raw_messages = db.get_messages(sid)
-    finally:
-        db.close()
-
-    messages: list[dict[str, Any]] = []
-    for msg in raw_messages:
-        role = str(msg.get("role") or "")
-        content = msg.get("content")
-        if content is None:
-            text = ""
-        elif isinstance(content, str):
-            text = content
-        else:
-            text = str(content)
-
-        if role == "tool" and len(text) > _TOOL_OUTPUT_TRUNCATE_CHARS:
-            text = text[:_TOOL_OUTPUT_TRUNCATE_CHARS] + "...[truncated]"
-        if role == "assistant" and not text:
-            continue
-
-        messages.append(
-            {
-                "role": role,
-                "content": text,
-                "tool_name": msg.get("tool_name"),
-                "timestamp": msg.get("timestamp"),
-            }
-        )
-
-    return {
-        "session_id": sid,
-        "source": str(session.get("source") or ""),
-        "model": str(session.get("model") or ""),
-        "started_at": session.get("started_at"),
-        "ended_at": session.get("ended_at"),
-        "message_count": int(session.get("message_count") or 0),
-        "tokens": int(session.get("input_tokens") or 0) + int(session.get("output_tokens") or 0),
-        "messages": messages,
-    }
 
 
 def get_status() -> dict[str, Any]:

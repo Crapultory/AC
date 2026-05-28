@@ -46,18 +46,4 @@ def build_overview_router() -> APIRouter:
     async def cronjobs():
         return overview_service.get_cronjobs()
 
-    @router.get("/cronjobs/{job_id}/history")
-    async def cronjob_history(job_id: str):
-        payload = overview_service.get_cronjob_history(job_id)
-        if payload is None:
-            raise HTTPException(status_code=404, detail="Job not found")
-        return payload
-
-    @router.get("/sessions/{session_id}/detail")
-    async def session_detail(session_id: str):
-        payload = overview_service.get_session_detail(session_id)
-        if payload is None:
-            raise HTTPException(status_code=404, detail="Session not found")
-        return payload
-
     return router

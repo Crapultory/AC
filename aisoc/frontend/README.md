@@ -105,6 +105,12 @@ hermes aisoc --port 9120 --tui
 - `/api/skills/*`
 - `/api/memory/*`
 
+Overview 页面接口说明（2026-05 更新）：
+- 总览聚合数据：`/api/overview/*`（如 status/stats/token-trend/security-events/keywords/cron-token-dist/cronjobs）
+- Cron 历史下钻：`GET /api/cron/jobs/{job_id}/history`
+- Session 明细下钻：`GET /api/sessions/{session_id}/detail`
+- 不再使用旧路径：`/api/overview/cronjobs/{job_id}/history`、`/api/overview/sessions/{session_id}/detail`
+
 接口契约主要集中在：
 - `src/lib/api.ts`
 - `src/lib/overview.ts`
@@ -143,3 +149,6 @@ npm run build
 ```
 
 确保类型、测试与产物同步通过。
+
+5. 偏好（开发流程约定）：
+   - 每完成一次 AISOC 前端开发测试（如执行 `npm run test`）后，需继续执行 `npm run build` 完成构建校验。

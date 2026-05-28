@@ -5,6 +5,7 @@
 __pycache__/
 .venv/
 .claude
+.codex
 .vscode/
 .env
 .env.local
@@ -76,3 +77,4 @@ hermes_cli/scripts/
 
 server.pid
 server-stoped
+web_dist/

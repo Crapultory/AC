@@ -103,6 +103,7 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 - `GET /`
 - `GET /search`
 - `GET /{session_id}`
+- `GET /{session_id}/detail`
 - `GET /{session_id}/latest-descendant`
 - `GET /{session_id}/messages`
 - `DELETE /{session_id}`
@@ -111,6 +112,7 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 前缀：`/api/cron`
 - `GET /jobs`
 - `GET /jobs/{job_id}`
+- `GET /jobs/{job_id}/history`
 - `POST /jobs`
 - `PUT /jobs/{job_id}`
 - `POST /jobs/{job_id}/pause`
@@ -147,8 +149,11 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 - `GET /keywords/{keyword}/sessions`
 - `GET /cron-token-dist`
 - `GET /cronjobs`
-- `GET /cronjobs/{job_id}/history`
-- `GET /sessions/{session_id}/detail`
+
+说明（2026-05 更新）：
+- 原 `GET /api/overview/cronjobs/{job_id}/history` 已迁移到 `GET /api/cron/jobs/{job_id}/history`
+- 原 `GET /api/overview/sessions/{session_id}/detail` 已迁移到 `GET /api/sessions/{session_id}/detail`
+- Overview 仅保留总览/聚合接口；明细下钻接口归属到对应业务模块（Cron / Sessions）
 
 ---
 

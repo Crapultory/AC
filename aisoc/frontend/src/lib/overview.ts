@@ -201,7 +201,7 @@ export function getCronjobs(): Promise<Cronjob[]> {
 
 export function getCronjobHistory(jobId: string): Promise<CronjobHistoryItem[]> {
   const encodedJobId = encodeURIComponent(jobId);
-  return fetchJSON<CronjobHistoryItem[]>(`/api/overview/cronjobs/${encodedJobId}/history`);
+  return fetchJSON<CronjobHistoryItem[]>(`/api/cron/jobs/${encodedJobId}/history`);
 }
 
 export function getCronjobHistoryDrilldown(jobId: string): Promise<CronjobHistoryItem[]> {
@@ -210,7 +210,7 @@ export function getCronjobHistoryDrilldown(jobId: string): Promise<CronjobHistor
 
 export function getSessionDetail(sessionId: string): Promise<SessionDetail> {
   const encodedSessionId = encodeURIComponent(sessionId);
-  return fetchJSON<SessionDetail>(`/api/overview/sessions/${encodedSessionId}/detail`);
+  return fetchJSON<SessionDetail>(`/api/sessions/${encodedSessionId}/detail`);
 }
 
 export function getSessionDetailDrilldown(sessionId: string): Promise<SessionDetail> {

@@ -1161,7 +1161,7 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
                         </div>
                         <div className="ev-summary">{event.summary}</div>
                         <div className="ev-entities">
-                          {event.entities.slice(0, 4).map((entity) => (
+                          {event.entities.slice(0, 2).map((entity) => (
                             <span key={entity} className="ev-entity">
                               {entity}
                             </span>

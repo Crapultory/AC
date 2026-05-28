@@ -7,6 +7,8 @@ import time
 
 from hermes_state import SessionDB
 
+_TOOL_OUTPUT_TRUNCATE_CHARS = 500
+
 
 def _strip_sensitive_session_fields(item: dict[str, Any]) -> dict[str, Any]:
     """Remove heavy/sensitive fields that should not be exposed in list APIs."""
@@ -140,6 +142,58 @@ def get_session_detail(session_id: str) -> dict[str, Any] | None:
         return db.get_session(sid) if sid else None
     finally:
         db.close()
+
+
+def get_session_detail_with_messages(session_id: str) -> dict[str, Any] | None:
+    db = SessionDB()
+    try:
+        sid = db.resolve_session_id(session_id)
+        if not sid:
+            return None
+
+        session = db.get_session(sid)
+        if not session:
+            return None
+
+        raw_messages = db.get_messages(sid)
+    finally:
+        db.close()
+
+    messages: list[dict[str, Any]] = []
+    for msg in raw_messages:
+        role = str(msg.get("role") or "")
+        content = msg.get("content")
+        if content is None:
+            text = ""
+        elif isinstance(content, str):
+            text = content
+        else:
+            text = str(content)
+
+        if role == "tool" and len(text) > _TOOL_OUTPUT_TRUNCATE_CHARS:
+            text = text[:_TOOL_OUTPUT_TRUNCATE_CHARS] + "...[truncated]"
+        if role == "assistant" and not text:
+            continue
+
+        messages.append(
+            {
+                "role": role,
+                "content": text,
+                "tool_name": msg.get("tool_name"),
+                "timestamp": msg.get("timestamp"),
+            }
+        )
+
+    return {
+        "session_id": sid,
+        "source": str(session.get("source") or ""),
+        "model": str(session.get("model") or ""),
+        "started_at": session.get("started_at"),
+        "ended_at": session.get("ended_at"),
+        "message_count": int(session.get("message_count") or 0),
+        "tokens": int(session.get("input_tokens") or 0) + int(session.get("output_tokens") or 0),
+        "messages": messages,
+    }
 
 
 def get_latest_descendant(session_id: str) -> dict[str, Any] | None:
