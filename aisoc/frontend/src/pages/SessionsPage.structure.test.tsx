@@ -19,7 +19,6 @@ describe("SessionsPage structure", () => {
     expect(html).toContain("Session History");
     expect(html).toContain("Session Messages");
     expect(html).toContain("Page 1 / 1");
-    expect(html).toContain("Detail view shows message payloads only. System role messages are filtered out.");
   });
 
   it("validates latest-click-wins request guard helper", () => {

@@ -139,7 +139,19 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 前缀：`/api/logs`
 - `GET /`
 
-### 4.9 Overview
+### 4.9 Knowledge Base
+前缀：`/api/kb`
+- `GET /tree?cwd=` （列出指定目录下的文件和文件夹，`cwd` 为空时列出根目录）
+- `GET /documents?path=` （返回指定文件的文本内容）
+
+环境变量：`AISOC_WIKI_PATH` 指定知识库根目录，未设置或路径不存在时返回 503。
+
+安全限制：
+- 禁止路径遍历（`..`）和符号链接逃逸
+- 文件大小上限 2 MB（超出返回 413）
+- 非 UTF-8 文本文件返回 415
+
+### 4.10 Overview
 前缀：`/api/overview`
 - `GET /status`
 - `GET /stats`

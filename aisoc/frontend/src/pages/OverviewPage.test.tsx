@@ -58,22 +58,32 @@ describe("OverviewPage", () => {
               sessions: 2,
             },
           ],
-          cronjobs: [
-            {
-              id: "job-1",
-              name: "Daily summary",
-              enabled: true,
-              schedule: "0 8 * * *",
-              last_run: {
-                session_id: "sess-1",
-                started_at: 1710000100,
-                ended_at: 1710000200,
-                tokens: 200,
-                status: "success",
+          cronjobs: {
+            page: 1,
+            page_size: 8,
+            total: 1,
+            total_pages: 1,
+            has_prev: false,
+            has_next: false,
+            items: [
+              {
+                id: "job-1",
+                name: "Daily summary",
+                enabled: true,
+                schedule: "0 8 * * *",
+                last_run: {
+                  session_id: "sess-1",
+                  started_at: 1710000100,
+                  ended_at: 1710000200,
+                  tokens: 200,
+                  status: "success",
+                },
+                last_run_at: "2026-05-29T14:50:57+08:00",
+                next_run_at: "2026-05-30T09:00:00+08:00",
+                run_count: 21,
               },
-              run_count: 21,
-            },
-          ],
+            ],
+          },
           events: [
             {
               session_id: "sess-2",
@@ -94,7 +104,7 @@ describe("OverviewPage", () => {
       />,
     );
 
-    expect(html).toContain("AISOC");
+    expect(html).toContain("ADIC AISOC OVERVIEW DASHBOARD");
     expect(html).toContain("TOKEN 使用趋势");
     expect(html).toContain("会话关键词");
     expect(html).toContain("计划任务 Token 消耗占比");
@@ -129,7 +139,15 @@ describe("loadOverviewDataResilient", () => {
         source_distribution: { cli: 3 },
       }),
       getOverviewTokenTrend: async () => [],
-      getCronjobs: async () => [],
+      getCronjobs: async () => ({
+        page: 1,
+        page_size: 8,
+        total: 0,
+        total_pages: 1,
+        has_prev: false,
+        has_next: false,
+        items: [],
+      }),
       listOverviewSecurityEvents: async () => [],
       ...overrides,
     };
@@ -298,6 +316,8 @@ describe("Overview interactions", () => {
       enabled: true,
       schedule: "0 8 * * *",
       last_run: null,
+      last_run_at: null,
+      next_run_at: null,
       run_count: 0,
     });
     const sessionState = createSessionModalOpenState("sess-1");

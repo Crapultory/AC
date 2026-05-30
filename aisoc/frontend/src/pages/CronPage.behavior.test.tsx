@@ -20,6 +20,16 @@ type Deferred<T> = {
   reject: (reason?: unknown) => void;
 };
 
+type CronJobsPagePayload = {
+  items: Array<Record<string, unknown>>;
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+  has_prev: boolean;
+  has_next: boolean;
+};
+
 function createDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (reason?: unknown) => void;
@@ -28,6 +38,23 @@ function createDeferred<T>(): Deferred<T> {
     reject = rej;
   });
   return { promise, resolve, reject };
+}
+
+function jobsPage(
+  items: Array<Record<string, unknown>>,
+  page: number,
+  total: number,
+  totalPages: number,
+): CronJobsPagePayload {
+  return {
+    items,
+    page,
+    page_size: 12,
+    total,
+    total_pages: totalPages,
+    has_prev: page > 1,
+    has_next: page < totalPages,
+  };
 }
 
 async function waitForAssert(assertion: () => void, timeoutMs = 2000): Promise<void> {
@@ -54,9 +81,9 @@ function findJobRow(container: HTMLElement, name: string): HTMLLIElement {
   return row;
 }
 
-function findActionButton(row: HTMLLIElement, label: string): HTMLButtonElement {
-  const button = Array.from(row.querySelectorAll<HTMLButtonElement>("button")).find((candidate) =>
-    candidate.textContent?.includes(label),
+function findActionButton(scope: ParentNode, label: string): HTMLButtonElement {
+  const button = Array.from(scope.querySelectorAll<HTMLButtonElement>("button")).find(
+    (candidate) => candidate.getAttribute("aria-label") === label || candidate.textContent?.includes(label),
   );
   if (!button) throw new Error(`Action button not found: ${label}`);
   return button;
@@ -102,139 +129,129 @@ async function mountCronPage() {
 }
 
 describe("CronPage behavior", () => {
-  it("keeps latest selected cron detail when responses resolve out of order", async () => {
-    const aDeferred = createDeferred<Record<string, unknown>>();
-    const bDeferred = createDeferred<Record<string, unknown>>();
+  it("creates cron job from New modal and refreshes list", async () => {
+    const createdPayload = {
+      name: "daily-test-msg",
+      prompt: "向当前对话发送一条测试消息，内容为：这是一条每日测试消息。",
+      schedule: "* * * * *",
+      deliver: "slack",
+      skills: [],
+      skill: null,
+      enabled_toolsets: null,
+      model: "deepseek-v4-flash",
+      provider: null,
+      base_url: null,
+      script: null,
+      workdir: null,
+      no_agent: false,
+    };
 
-    fetchJSONMock.mockImplementation((url: string) => {
-      if (url === "/api/cron/jobs") {
-        return Promise.resolve([
-          { id: "a", name: "Job A", profile: "p-a", paused: false },
-          { id: "b", name: "Job B", profile: "p-b", paused: false },
-        ]) as Promise<unknown>;
-      }
-      if (url === "/api/cron/jobs/a") {
-        return aDeferred.promise as Promise<unknown>;
-      }
-      if (url === "/api/cron/jobs/b") {
-        return bDeferred.promise as Promise<unknown>;
-      }
-      throw new Error(`Unexpected URL in test: ${url}`);
-    });
-
-    await mountCronPage();
-
-    await waitForAssert(() => {
-      expect(containerRef?.querySelectorAll('li[role="button"]').length).toBe(2);
-    });
-
-    const rowA = findJobRow(containerRef as HTMLElement, "Job A");
-    const rowB = findJobRow(containerRef as HTMLElement, "Job B");
-
-    await act(async () => {
-      rowA.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-
-    await act(async () => {
-      rowB.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-
-    await act(async () => {
-      bDeferred.resolve({ detail: "detail-b" });
-      await Promise.resolve();
-    });
-
-    await waitForAssert(() => {
-      const text = (containerRef as HTMLElement).textContent || "";
-      expect(text).toContain("Focus: b");
-      expect(text).toContain("detail-b");
-    });
-
-    await act(async () => {
-      aDeferred.resolve({ detail: "stale-detail-a" });
-      await Promise.resolve();
-    });
-
-    await waitForAssert(() => {
-      const text = (containerRef as HTMLElement).textContent || "";
-      expect(text).toContain("Focus: b");
-      expect(text).toContain("detail-b");
-      expect(text).not.toContain("stale-detail-a");
-    });
-  });
-
-  it("activates cron row selection via keyboard", async () => {
-    fetchJSONMock.mockImplementation((url: string) => {
-      if (url === "/api/cron/jobs") {
-        return Promise.resolve([
-          { id: "a", name: "Job A", profile: "p-a", paused: false },
-          { id: "b", name: "Job B", profile: "p-b", paused: false },
-        ]) as Promise<unknown>;
-      }
-      if (url === "/api/cron/jobs/a") {
-        return Promise.resolve({ detail: "kbd-a" }) as Promise<unknown>;
-      }
-      if (url === "/api/cron/jobs/b") {
-        return Promise.resolve({ detail: "kbd-b" }) as Promise<unknown>;
-      }
-      throw new Error(`Unexpected URL in test: ${url}`);
-    });
-
-    await mountCronPage();
-
-    await waitForAssert(() => {
-      expect(containerRef?.querySelectorAll('li[role="button"]').length).toBe(2);
-    });
-
-    const rowA = findJobRow(containerRef as HTMLElement, "Job A");
-    const rowB = findJobRow(containerRef as HTMLElement, "Job B");
-
-    await act(async () => {
-      rowA.dispatchEvent(new KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
-      await Promise.resolve();
-    });
-
-    await waitForAssert(() => {
-      const text = (containerRef as HTMLElement).textContent || "";
-      expect(text).toContain("Focus: a");
-      expect(text).toContain("kbd-a");
-    });
-
-    await act(async () => {
-      rowB.dispatchEvent(new KeyboardEvent("keydown", { key: " ", bubbles: true }));
-      await Promise.resolve();
-    });
-
-    await waitForAssert(() => {
-      const text = (containerRef as HTMLElement).textContent || "";
-      expect(text).toContain("Focus: b");
-      expect(text).toContain("kbd-b");
-    });
-  });
-
-  it("does not let stale action follow-up overwrite a newer selection", async () => {
-    const actionDeferred = createDeferred<Record<string, unknown>>();
-    const aDeferred = createDeferred<Record<string, unknown>>();
-    const bDeferred = createDeferred<Record<string, unknown>>();
     let jobsLoadCount = 0;
+    fetchJSONMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === "/api/cron/jobs?page=1&page_size=12" && (!init || !init.method || init.method === "GET")) {
+        jobsLoadCount += 1;
+        if (jobsLoadCount === 1) {
+          return Promise.resolve(jobsPage([], 1, 0, 1)) as Promise<unknown>;
+        }
+        return Promise.resolve(
+          jobsPage([{ id: "job-new", name: "daily-test-msg", profile: "default", paused: false }], 1, 1, 1),
+        ) as Promise<unknown>;
+      }
+      if (url === "/api/cron/jobs" && init?.method === "POST") {
+        expect(init.body).toBe(JSON.stringify(createdPayload));
+        return Promise.resolve({ id: "job-new", ...createdPayload }) as Promise<unknown>;
+      }
+      throw new Error(`Unexpected URL in test: ${url}`);
+    });
+
+    await mountCronPage();
+
+    const newButton = findActionButton(containerRef as HTMLElement, "New");
+
+    await act(async () => {
+      newButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    await waitForAssert(() => {
+      const text = (containerRef as HTMLElement).textContent || "";
+      expect(text).toContain("Create Job");
+      expect(text).not.toContain("Edit JSON payload for");
+    });
+
+    const createButton = findActionButton(containerRef as HTMLElement, "Create Job");
+
+    await act(async () => {
+      createButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    await waitForAssert(() => {
+      const text = (containerRef as HTMLElement).textContent || "";
+      expect(text).toContain("daily-test-msg");
+    });
+  });
+
+  it("shows at most 12 job cards per page and supports pagination buttons", async () => {
+    const page1Items = Array.from({ length: 12 }, (_, index) => ({
+      id: `job-${index + 1}`,
+      name: `Job ${index + 1}`,
+      paused: false,
+      profile: "default",
+    }));
+    const page2Items = [{ id: "job-13", name: "Job 13", paused: false, profile: "default" }];
+
+    fetchJSONMock.mockImplementation((url: string) => {
+      if (url === "/api/cron/jobs?page=1&page_size=12") {
+        return Promise.resolve(jobsPage(page1Items, 1, 13, 2)) as Promise<unknown>;
+      }
+      if (url === "/api/cron/jobs?page=2&page_size=12") {
+        return Promise.resolve(jobsPage(page2Items, 2, 13, 2)) as Promise<unknown>;
+      }
+      throw new Error(`Unexpected URL in test: ${url}`);
+    });
+
+    await mountCronPage();
+
+    await waitForAssert(() => {
+      expect((containerRef as HTMLElement).querySelectorAll('li[role="button"]').length).toBe(12);
+      const text = (containerRef as HTMLElement).textContent || "";
+      expect(text).toContain("Page 1 / 2");
+      expect(text).toContain("Job 12");
+      expect(text).not.toContain("Job 13");
+    });
+
+    const nextButton = findActionButton(containerRef as HTMLElement, "Next");
+
+    await act(async () => {
+      nextButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    await waitForAssert(() => {
+      expect((containerRef as HTMLElement).querySelectorAll('li[role="button"]').length).toBe(1);
+      const text = (containerRef as HTMLElement).textContent || "";
+      expect(text).toContain("Page 2 / 2");
+      expect(text).toContain("Job 13");
+    });
+  });
+
+  it("deletes job card after confirmation", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    let deleted = false;
 
     fetchJSONMock.mockImplementation((url: string, init?: RequestInit) => {
-      if (url === "/api/cron/jobs") {
-        jobsLoadCount += 1;
-        return Promise.resolve([
-          { id: "job/a", name: "Job A", profile: "p-a", paused: false },
-          { id: "b", name: "Job B", profile: "p-b", paused: false },
-        ]) as Promise<unknown>;
+      if (url === "/api/cron/jobs?page=1&page_size=12") {
+        if (!deleted) {
+          return Promise.resolve(
+            jobsPage([{ id: "job-a", name: "Job A", paused: false, profile: "default" }], 1, 1, 1),
+          ) as Promise<unknown>;
+        }
+        return Promise.resolve(jobsPage([], 1, 0, 1)) as Promise<unknown>;
       }
-      if (url === "/api/cron/jobs/job%2Fa") {
-        return aDeferred.promise as Promise<unknown>;
-      }
-      if (url === "/api/cron/jobs/b") {
-        return bDeferred.promise as Promise<unknown>;
-      }
-      if (url === "/api/cron/jobs/job%2Fa/trigger") {
-        expect(init?.method).toBe("POST");
-        return actionDeferred.promise as Promise<unknown>;
+      if (url === "/api/cron/jobs/job-a" && init?.method === "DELETE") {
+        deleted = true;
+        return Promise.resolve({ ok: true }) as Promise<unknown>;
       }
       throw new Error(`Unexpected URL in test: ${url}`);
     });
@@ -242,57 +259,123 @@ describe("CronPage behavior", () => {
     await mountCronPage();
 
     await waitForAssert(() => {
-      expect(containerRef?.querySelectorAll('li[role="button"]').length).toBe(2);
+      expect((containerRef as HTMLElement).textContent || "").toContain("Job A");
+    });
+
+    const row = findJobRow(containerRef as HTMLElement, "Job A");
+    const deleteButton = findActionButton(row, "Delete job");
+
+    await act(async () => {
+      deleteButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    await waitForAssert(() => {
+      const text = (containerRef as HTMLElement).textContent || "";
+      expect(confirmSpy).toHaveBeenCalled();
+      expect(text).not.toContain("Job A");
+      expect(text).toContain("No Cron Jobs Found");
+    });
+
+    confirmSpy.mockRestore();
+  });
+
+  it("shows history list directly and opens session messages for selected run", async () => {
+    const aDeferred = createDeferred<Record<string, unknown>[]>();
+    const bDeferred = createDeferred<Record<string, unknown>[]>();
+
+    fetchJSONMock.mockImplementation((url: string) => {
+      if (url === "/api/cron/jobs?page=1&page_size=12") {
+        return Promise.resolve(
+          jobsPage(
+            [
+              { id: "a", name: "Job A", profile: "default", paused: false },
+              { id: "b", name: "Job B", profile: "default", paused: false },
+            ],
+            1,
+            2,
+            1,
+          ),
+        ) as Promise<unknown>;
+      }
+      if (url === "/api/cron/jobs/a/history") {
+        return aDeferred.promise as Promise<unknown>;
+      }
+      if (url === "/api/cron/jobs/b/history") {
+        return bDeferred.promise as Promise<unknown>;
+      }
+      if (url === "/api/sessions/cron_b_session/detail") {
+        return Promise.resolve({
+          session_id: "cron_b_session",
+          messages: [{ role: "assistant", content: "hello from cron_b" }],
+        }) as Promise<unknown>;
+      }
+      throw new Error(`Unexpected URL in test: ${url}`);
+    });
+
+    await mountCronPage();
+
+    await waitForAssert(() => {
+      expect((containerRef as HTMLElement).querySelectorAll('li[role="button"]').length).toBe(2);
     });
 
     const rowA = findJobRow(containerRef as HTMLElement, "Job A");
     const rowB = findJobRow(containerRef as HTMLElement, "Job B");
-    const triggerButton = findActionButton(rowA, "Trigger");
 
     await act(async () => {
       rowA.dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-
-    await act(async () => {
-      triggerButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
     });
 
     await act(async () => {
       rowB.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
     });
 
     await act(async () => {
-      bDeferred.resolve({ detail: "detail-b" });
+      bDeferred.resolve([
+        {
+          session_id: "cron_b_session",
+          started_at: 1717000000,
+          messages: 5,
+          tokens: 1024,
+          status: "completed",
+        },
+      ]);
+      await Promise.resolve();
+    });
+
+    await act(async () => {
+      aDeferred.resolve([
+        {
+          session_id: "stale_a_session",
+          started_at: 1717000001,
+          messages: 2,
+          tokens: 200,
+          status: "completed",
+        },
+      ]);
       await Promise.resolve();
     });
 
     await waitForAssert(() => {
       const text = (containerRef as HTMLElement).textContent || "";
-      expect(text).toContain("Focus: b");
-      expect(text).toContain("detail-b");
+      expect(text).toContain("cron_b_session");
+      expect(text).not.toContain("stale_a_session");
+      expect(text).not.toContain("Selected Job:");
     });
+
+    const sessionButton = findActionButton(containerRef as HTMLElement, "cron_b_session");
 
     await act(async () => {
-      actionDeferred.resolve({ ok: true });
-      await Promise.resolve();
-    });
-
-    await waitForAssert(() => {
-      expect(jobsLoadCount).toBe(2);
-    });
-
-    await act(async () => {
-      aDeferred.resolve({ detail: "stale-a" });
+      sessionButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       await Promise.resolve();
     });
 
     await waitForAssert(() => {
       const text = (containerRef as HTMLElement).textContent || "";
-      expect(text).toContain("Focus: b");
-      expect(text).toContain("detail-b");
-      expect(text).not.toContain("stale-a");
-      const detailCallsForA = fetchJSONMock.mock.calls.filter(([callUrl]) => callUrl === "/api/cron/jobs/job%2Fa");
-      expect(detailCallsForA.length).toBe(1);
+      expect(text).toContain("Session Messages");
+      expect(text).toContain("hello from cron_b");
     });
   });
 });

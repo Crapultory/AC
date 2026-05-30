@@ -32,10 +32,19 @@ class SystemBootstrapResponse(BaseModel):
 
 
 class CronJobCreate(BaseModel):
+    name: str = ""
     prompt: str
     schedule: str
-    name: str = ""
     deliver: str = "local"
+    skills: list[str] = Field(default_factory=list)
+    skill: str | None = None
+    enabled_toolsets: list[str] | None = None
+    model: str | None = None
+    provider: str | None = None
+    base_url: str | None = None
+    script: str | None = None
+    workdir: str | None = None
+    no_agent: bool = False
 
 
 class CronJobUpdate(BaseModel):

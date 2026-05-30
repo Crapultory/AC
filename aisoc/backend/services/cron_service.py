@@ -52,6 +52,29 @@ def _cron_profile_home(profile: Optional[str]) -> tuple[str, Path]:
     return canon, profiles_mod.get_profile_dir(canon)
 
 
+def get_runtime_profile_name() -> str:
+    """Resolve the startup/runtime profile used by the current AISOC process."""
+    from hermes_cli import profiles as profiles_mod
+
+    try:
+        raw = str(profiles_mod.get_active_profile_name() or "default").strip() or "default"
+    except Exception:
+        return "default"
+
+    if raw == "custom":
+        return "default"
+
+    try:
+        canon = profiles_mod.normalize_profile_name(raw)
+        profiles_mod.validate_profile_name(canon)
+    except ValueError:
+        return "default"
+
+    if canon != "default" and not profiles_mod.profile_exists(canon):
+        return "default"
+    return canon
+
+
 def _annotate_cron_job(job: dict[str, Any], profile: str, home: Path) -> dict[str, Any]:
     annotated = dict(job)
     annotated["profile"] = profile
@@ -61,8 +84,8 @@ def _annotate_cron_job(job: dict[str, Any], profile: str, home: Path) -> dict[st
     return annotated
 
 
-def _call_cron_for_profile(profile: Optional[str], func_name: str, *args, **kwargs):
-    profile_name, home = _cron_profile_home(profile)
+def _call_cron_for_profile(target_profile: Optional[str], func_name: str, *args, **kwargs):
+    profile_name, home = _cron_profile_home(target_profile)
     with _CRON_PROFILE_LOCK:
         from cron import jobs as cron_jobs
 
@@ -97,8 +120,8 @@ def _find_cron_job_profile(job_id: str) -> str | None:
     return None
 
 
-def list_jobs(profile: str = "all") -> list[dict[str, Any]]:
-    requested = (profile or "all").strip()
+def list_jobs(profile: str | None = None) -> list[dict[str, Any]]:
+    requested = (profile or get_runtime_profile_name()).strip() or get_runtime_profile_name()
     if requested.lower() != "all":
         return _call_cron_for_profile(requested, "list_jobs", True)
 
@@ -118,7 +141,23 @@ def get_job(job_id: str, profile: str | None = None):
     return _call_cron_for_profile(selected, "get_job", job_id)
 
 
-def create_job(profile: str, *, prompt: str, schedule: str, name: str, deliver: str):
+def create_job(
+    profile: str,
+    *,
+    prompt: str,
+    schedule: str,
+    name: str,
+    deliver: str,
+    skills: list[str] | None = None,
+    skill: str | None = None,
+    enabled_toolsets: list[str] | None = None,
+    model: str | None = None,
+    provider: str | None = None,
+    base_url: str | None = None,
+    script: str | None = None,
+    workdir: str | None = None,
+    no_agent: bool = False,
+):
     return _call_cron_for_profile(
         profile,
         "create_job",
@@ -126,6 +165,16 @@ def create_job(profile: str, *, prompt: str, schedule: str, name: str, deliver: 
         schedule=schedule,
         name=name,
         deliver=deliver,
+        skills=skills,
+        skill=skill,
+        enabled_toolsets=enabled_toolsets,
+        model=model,
+        provider=provider,
+        base_url=base_url,
+        script=script,
+        workdir=workdir,
+        no_agent=no_agent,
+        profile=profile,
     )
 
 
@@ -172,9 +221,9 @@ def _cron_session_pattern(job_id: str) -> str:
     return f"cron_{_escape_like(job_id)}%"
 
 
-def get_job_history(job_id: str) -> list[dict[str, Any]] | None:
+def get_job_history(job_id: str, profile: str | None = None) -> list[dict[str, Any]] | None:
     try:
-        job = get_job(job_id)
+        job = get_job(job_id, profile=profile)
     except Exception:
         return []
 

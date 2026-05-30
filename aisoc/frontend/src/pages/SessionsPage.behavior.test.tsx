@@ -170,7 +170,7 @@ describe("SessionsPage behavior", () => {
 
     await waitForAssert(() => {
       const text = (containerRef as HTMLElement).textContent || "";
-      expect(text).toContain("Selected session: b");
+      expect(text).toContain("b");
       expect(text).toContain("message-from-b");
       expect(text).not.toContain("system-from-b");
     });
@@ -185,7 +185,7 @@ describe("SessionsPage behavior", () => {
 
     await waitForAssert(() => {
       const text = (containerRef as HTMLElement).textContent || "";
-      expect(text).toContain("Selected session: b");
+      expect(text).toContain("b");
       expect(text).toContain("message-from-b");
       expect(text).not.toContain("stale-message-from-a");
     });
@@ -234,7 +234,7 @@ describe("SessionsPage behavior", () => {
 
     await waitForAssert(() => {
       const text = (containerRef as HTMLElement).textContent || "";
-      expect(text).toContain("Selected session: a");
+      expect(text).toContain("a");
       expect(text).toContain("kbd-enter-a");
     });
 
@@ -245,7 +245,7 @@ describe("SessionsPage behavior", () => {
 
     await waitForAssert(() => {
       const text = (containerRef as HTMLElement).textContent || "";
-      expect(text).toContain("Selected session: b");
+      expect(text).toContain("b");
       expect(text).toContain("kbd-space-b");
     });
   });

@@ -10,6 +10,7 @@ import { NotFoundPage } from "./pages/NotFoundPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { SessionsPage } from "./pages/SessionsPage";
 import { SkillsPage } from "./pages/SkillsPage";
+import { WikiPage } from "./pages/WikiPage";
 
 export function App() {
   return (
@@ -23,6 +24,7 @@ export function App() {
           <Route path="/sessions" element={<SessionsPage />} />
           <Route path="/cron" element={<CronPage />} />
           <Route path="/skills" element={<SkillsPage />} />
+          <Route path="/wiki" element={<WikiPage />} />
           <Route path="/memory" element={<MemoryPage />} />
         </Route>
       </Route>

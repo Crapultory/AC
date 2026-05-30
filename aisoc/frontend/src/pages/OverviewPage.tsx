@@ -20,6 +20,7 @@ import {
   type OverviewKeyword,
   type OverviewStats,
   type OverviewStatus,
+  type PaginatedCronjobs,
   type PaginatedSecurityEvents,
   type SecurityEvent,
   type SessionDetail,
@@ -31,7 +32,7 @@ type OverviewData = {
   status?: OverviewStatus;
   stats?: OverviewStats;
   trend?: TokenTrendPoint[];
-  cronjobs?: Cronjob[];
+  cronjobs?: PaginatedCronjobs;
   events?: SecurityEvent[];
 };
 
@@ -51,6 +52,7 @@ export type OverviewLoaderDeps = {
 export type OverviewInteractionDeps = {
   getOverviewTokenTrend: typeof getOverviewTokenTrend;
   getCronTokenDistribution: typeof getCronTokenDistribution;
+  getCronjobs: typeof getCronjobs;
   listOverviewSecurityEventsPage: typeof listOverviewSecurityEventsPage;
   getCronjobHistoryDrilldown: typeof getCronjobHistoryDrilldown;
   getSessionDetailDrilldown: typeof getSessionDetailDrilldown;
@@ -116,6 +118,7 @@ const defaultOverviewLoaderDeps: OverviewLoaderDeps = {
 const defaultOverviewInteractionDeps: OverviewInteractionDeps = {
   getOverviewTokenTrend,
   getCronTokenDistribution,
+  getCronjobs,
   listOverviewSecurityEventsPage,
   getCronjobHistoryDrilldown,
   getSessionDetailDrilldown,
@@ -164,6 +167,24 @@ function formatMiniDateTime(unixSeconds: number | null | undefined): string {
     hour: "2-digit",
     minute: "2-digit",
   });
+}
+
+function formatIsoMini(iso: string | null | undefined): string {
+  if (!iso) return "--";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "--";
+  return d.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function formatCronSchedule(schedule: Cronjob["schedule"]): string {
+  if (!schedule) return "--";
+  if (typeof schedule === "string") return schedule;
+  return schedule.display || schedule.expr || schedule.kind || "--";
 }
 
 export function formatDateTime(unixSeconds: number | null | undefined): string {
@@ -433,7 +454,7 @@ export async function loadOverviewDataResilient(
           data.trend = result.value as TokenTrendPoint[];
           break;
         case "cronjobs":
-          data.cronjobs = result.value as Cronjob[];
+          data.cronjobs = result.value as PaginatedCronjobs;
           break;
         case "events":
           data.events = result.value as SecurityEvent[];
@@ -586,6 +607,20 @@ function createInitialEventsPage(events: SecurityEvent[] | undefined, pageSize: 
   };
 }
 
+async function loadCronjobsPageForOverview(
+  page: number,
+  pageSize: number,
+  deps: Pick<OverviewInteractionDeps, "getCronjobs"> = defaultOverviewInteractionDeps,
+): Promise<DrilldownResult<PaginatedCronjobs>> {
+  try {
+    const payload = await deps.getCronjobs(page, pageSize);
+    return { payload, error: "" };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load cron jobs page.";
+    return { payload: null, error: message };
+  }
+}
+
 function getStatusText(status: OverviewStatus | undefined): string {
   if (!status) return "INIT";
   return (status.status || "INIT").toUpperCase();
@@ -617,7 +652,13 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
   const [cronDistLoading, setCronDistLoading] = useState(false);
   const [cronDistError, setCronDistError] = useState("");
 
-  const eventsPageSize = 5;
+  const cronPageSize = 8;
+  const [cronPage, setCronPage] = useState(initialData?.cronjobs?.page ?? 1);
+  const [cronPanel, setCronPanel] = useState<PaginatedCronjobs | null>(initialData?.cronjobs ?? null);
+  const [cronJobsLoading, setCronJobsLoading] = useState(false);
+  const [cronJobsError, setCronJobsError] = useState("");
+
+  const eventsPageSize = 8;
   const [eventsPage, setEventsPage] = useState(1);
   const [eventsPanel, setEventsPanel] = useState<PaginatedSecurityEvents | null>(
     createInitialEventsPage(initialData?.events, eventsPageSize),
@@ -692,6 +733,10 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
       setError(result.error);
       setEventsUnavailable(Boolean(result.error) && !result.data?.events);
       if (result.data?.trend?.length) setTrendPoints(result.data.trend);
+      if (result.data?.cronjobs) {
+        setCronPanel(result.data.cronjobs);
+        setCronPage(result.data.cronjobs.page);
+      }
       if (result.data?.events) setEventsPanel(createInitialEventsPage(result.data.events, eventsPageSize));
       setLoading(false);
     }
@@ -782,6 +827,20 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
     setCronPeriod(period);
   }
 
+  async function handleCronPageChange(nextPage: number) {
+    if (nextPage < 1) return;
+    setCronJobsLoading(true);
+    setCronJobsError("");
+    const result = await loadCronjobsPageForOverview(nextPage, cronPageSize, deps);
+    if (result.payload) {
+      setCronPanel(result.payload);
+      setCronPage(result.payload.page);
+    } else {
+      setCronJobsError(result.error);
+    }
+    setCronJobsLoading(false);
+  }
+
   async function handleEventsPageChange(nextPage: number) {
     if (nextPage < 1) return;
     const requestId = ++eventsRequestId.current;
@@ -854,32 +913,9 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
       <div className="scanline" aria-hidden="true" />
 
       <div className="container">
-        <header className="header">
-          <div className="header-left">
-            <div className="logo-glyph">⬡</div>
-            <div className="logo-block">
-              <span className="logo-text">AISOC</span>
-              <span className="logo-sub">SECURITY OPERATIONS CENTER</span>
-            </div>
-          </div>
-          <div className="header-center">
-            <div className="clock">{clock}</div>
-            <div className="uptime">{uptimeText}</div>
-            <div className="refresh-indicator">
-              <span className="live-dot" />
-              LIVE · 30s
-            </div>
-          </div>
-          <div className="header-right">
-            <div className={`status-badge ${getStatusIsOnline(data.status?.status) ? "" : "idle"}`.trim()}>
-              <span className="status-dot" />
-              <span className="status-text">{getStatusText(data.status)}</span>
-            </div>
-            <div className="model-tag">
-              {(data.status?.model ?? "--") + " · " + (data.status?.provider ?? "--")}
-            </div>
-          </div>
-        </header>
+        <div className="overview-title-banner">
+          <span className="overview-title-banner-text">ADIC AISOC OVERVIEW DASHBOARD</span>
+        </div>
 
         {error ? <p className="error-text" style={{ marginBottom: 10 }}>{error}</p> : null}
 
@@ -1092,9 +1128,9 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
               <h3>
                 <span className="panel-icon">◈</span>计划任务
               </h3>
-              <span className="panel-hint">{(data.cronjobs?.length ?? 0) + " TASKS"}</span>
+              <span className="panel-hint">{(cronPanel?.total ?? 0) + " TASKS"}</span>
             </div>
-            <div className="table-wrap">
+            <div className="table-wrap overview-fixed-table-wrap">
               <table className="data-table">
                 <thead>
                   <tr>
@@ -1102,22 +1138,20 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
                     <th>TASK</th>
                     <th>SCHEDULE</th>
                     <th>LAST RUN</th>
-                    <th>TOKENS</th>
                     <th>RUNS</th>
                     <th>OP</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {(data.cronjobs ?? []).map((job) => (
+                  {(cronPanel?.items ?? []).map((job) => (
                     <tr key={job.id}>
                       <td>
                         <span className={`badge ${job.enabled ? "badge-green" : "badge-gray"}`}>{job.enabled ? "ACTIVE" : "OFF"}</span>
                       </td>
                       <td style={{ color: "var(--text-primary)" }}>{job.name}</td>
-                      <td>{job.schedule}</td>
-                      <td>{formatMiniDateTime(job.last_run?.started_at)}</td>
-                      <td>{formatCompactTokens(job.last_run?.tokens ?? 0)}</td>
-                      <td>{job.run_count}</td>
+                      <td>{formatCronSchedule(job.schedule)}</td>
+                      <td>{formatIsoMini(job.last_run_at)}</td>
+                      <td>{job.repeat?.completed ?? job.run_count ?? 0}</td>
                       <td>
                         <button type="button" className="btn-sm" onClick={() => void openCronHistory(job)}>
                           HIST
@@ -1127,6 +1161,32 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
                   ))}
                 </tbody>
               </table>
+              {cronJobsLoading ? <p className="subtle-copy">Loading cron jobs page...</p> : null}
+              {cronJobsError ? <p className="error-text">{cronJobsError}</p> : null}
+              {!cronJobsLoading && (cronPanel?.items.length ?? 0) === 0 ? (
+                <p className="subtle-copy">No cron jobs found.</p>
+              ) : null}
+              <div className="ev-pagination overview-shared-pagination">
+                <button
+                  type="button"
+                  className="ev-page-btn"
+                  onClick={() => void handleCronPageChange(cronPage - 1)}
+                  disabled={cronJobsLoading || !(cronPanel?.has_prev ?? false)}
+                >
+                  ◂ PREV
+                </button>
+                <span className="ev-page-info">
+                  {(cronPanel?.page ?? cronPage) + " / " + Math.max(cronPage, cronPanel?.total_pages ?? cronPage)}
+                </span>
+                <button
+                  type="button"
+                  className="ev-page-btn"
+                  onClick={() => void handleCronPageChange(cronPage + 1)}
+                  disabled={cronJobsLoading || !(cronPanel?.has_next ?? false)}
+                >
+                  NEXT ▸
+                </button>
+              </div>
             </div>
           </article>
 
@@ -1137,58 +1197,55 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
               </h3>
               <span className="panel-hint">RECENT INVESTIGATIONS</span>
             </div>
-            <div className="panel-body">
-              <div className="events-list" id="events-list">
-                {(eventsPanel?.items ?? []).map((event) => {
-                  const riskColor = getEventRiskColor(event.risk_level);
-                  const statusClass = getEventStatusClass(event.status);
-                  const statusIcon = getEventStatusIcon(event.status);
-                  const verdictClass = (event.verdict ?? "").toLowerCase();
-                  return (
-                    <button
-                      type="button"
-                      key={`${event.session_id}-${event.type}-${event.time ?? "none"}`}
-                      className="ev-row"
-                      onClick={() => void openSessionDetail(event.session_id)}
-                    >
-                      <div className="ev-indicator" style={{ background: riskColor }} />
-                      <div className="ev-icon">{resolveEventIcon(event.icon)}</div>
-                      <div className="ev-main">
-                        <div className="ev-title-row">
-                          <span className="ev-type">{event.type_label}</span>
-                          <span className="ev-risk" style={{ color: riskColor }}>{event.risk_level}</span>
-                          {event.verdict ? <span className={`ev-verdict ev-verdict-${verdictClass}`}>{event.verdict}</span> : null}
-                        </div>
-                        <div className="ev-summary">{event.summary}</div>
-                        <div className="ev-entities">
-                          {event.entities.slice(0, 2).map((entity) => (
-                            <span key={entity} className="ev-entity">
-                              {entity}
+            <div className="table-wrap overview-fixed-table-wrap">
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>ICON</th>
+                    <th>TYPE</th>
+                    <th>RISK</th>
+                    <th>SUMMARY</th>
+                    <th>COST</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(eventsPanel?.items ?? []).map((event) => {
+                    const riskColor = getEventRiskColor(event.risk_level);
+                    const statusClass = getEventStatusClass(event.status);
+                    const statusIcon = getEventStatusIcon(event.status);
+                    return (
+                      <tr
+                        key={`${event.session_id}-${event.type}-${event.time ?? "none"}`}
+                        style={{ cursor: "pointer" }}
+                        onClick={() => void openSessionDetail(event.session_id)}
+                      >
+                        <td>{resolveEventIcon(event.icon)}</td>
+                        <td style={{ color: "var(--text-primary)" }}>{event.type_label}</td>
+                        <td><span className="ev-risk-badge" style={{ color: riskColor, borderColor: riskColor }}>{event.risk_level}</span></td>
+                        <td className="ev-summary-cell">{event.summary}</td>
+                        <td>
+                          <div className="ev-cost-cell">
+                            <span className="ev-cost-time">{formatMiniDateTime(event.time)}</span>
+                            <span className="ev-cost-detail">
+                              <span className={`ev-status ev-status-${statusClass}`}>{statusIcon}</span>
+                              <span>{formatDuration(event.duration)}</span>
+                              <span>{formatCompactTokens(event.tokens)}</span>
                             </span>
-                          ))}
-                        </div>
-                      </div>
-                      <div className="ev-meta">
-                        <div className="ev-time">{formatMiniDateTime(event.time)}</div>
-                        <div className="ev-stats">
-                          <span className={`ev-status ev-status-${statusClass}`}>{statusIcon}</span>
-                          <span>{formatDuration(event.duration)}</span>
-                          <span>{formatCompactTokens(event.tokens)}</span>
-                        </div>
-                      </div>
-                      <div className="ev-arrow">▸</div>
-                    </button>
-                  );
-                })}
-
-                {eventsLoading ? <p className="subtle-copy">Loading events page...</p> : null}
-                {eventsError ? <p className="error-text">{eventsError}</p> : null}
-                {!eventsLoading && eventsUnavailable ? <p className="subtle-copy">Security events are unavailable.</p> : null}
-                {!eventsLoading && !eventsUnavailable && (eventsPanel?.items.length ?? 0) === 0 ? (
-                  <p className="subtle-copy">No security events found.</p>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+              {eventsLoading ? <p className="subtle-copy">Loading events page...</p> : null}
+              {eventsError ? <p className="error-text">{eventsError}</p> : null}
+              {!eventsLoading && eventsUnavailable ? <p className="subtle-copy">Security events are unavailable.</p> : null}
+              {!eventsLoading && !eventsUnavailable && (eventsPanel?.items.length ?? 0) === 0 ? (
+                <p className="subtle-copy">No security events found.</p>
                 ) : null}
 
-                <div className="ev-pagination">
+              <div className="ev-pagination overview-shared-pagination">
                   <button
                     type="button"
                     className="ev-page-btn"
@@ -1210,7 +1267,6 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
                   </button>
                 </div>
               </div>
-            </div>
           </article>
         </section>
       </div>

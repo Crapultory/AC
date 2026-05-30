@@ -111,8 +111,30 @@ function formatToolCallsPayload(toolCalls: unknown): string {
 function formatMessagePayload(message: SessionMessagesResponse["messages"][number]): string {
   const sections: string[] = [];
   const rawContent = message.content;
+
   if (typeof rawContent === "string" && rawContent.trim().length > 0) {
     sections.push(normalizeMessageText(rawContent));
+  } else if (Array.isArray(rawContent)) {
+    const parts: string[] = [];
+    for (const block of rawContent) {
+      if (block && typeof block === "object") {
+        const b = block as Record<string, unknown>;
+        if (b.type === "text" && typeof b.text === "string" && b.text.trim()) {
+          parts.push(normalizeMessageText(b.text));
+        } else if (b.type === "tool_use" || b.type === "tool_result") {
+          const label = b.type === "tool_use" ? (b.name || "tool") : "result";
+          let detail = "";
+          if (b.input && typeof b.input === "object") detail = safeJsonStringify(b.input);
+          else if (typeof b.content === "string" && b.content.trim()) detail = normalizeMessageText(b.content);
+          else if (b.content && typeof b.content === "object") detail = safeJsonStringify(b.content);
+          parts.push(`[${label}]${detail ? " " + detail : ""}`);
+        } else if (b.type === "thinking" && typeof b.thinking === "string" && b.thinking.trim()) {
+          parts.push(normalizeMessageText(b.thinking));
+        }
+      }
+    }
+    if (parts.length > 0) sections.push(parts.join("\n"));
+    else if (rawContent.length > 0) sections.push(normalizeMessageText(safeJsonStringify(rawContent)));
   } else if (rawContent !== undefined && rawContent !== null && rawContent !== "") {
     sections.push(normalizeMessageText(safeJsonStringify(rawContent)));
   }
@@ -328,13 +350,10 @@ export function SessionsPage() {
           </div>
         </article>
         <article className="detail-panel sessions-message-pane sessions-message-pane-wide">
-          <h3>Session Messages</h3>
-          <p className="subtle-copy">
-            Detail view shows message payloads only. System role messages are filtered out.
-          </p>
-          {selectedSessionId ? (
-            <p className="subtle-copy">Selected session: {selectedSessionId}</p>
-          ) : null}
+          <div className="sessions-message-head">
+            <h3>Session Messages</h3>
+            {selectedSessionId ? <span className="status-badge sessions-message-badge">{selectedSessionId}</span> : null}
+          </div>
           {!selectedSessionId ? (
             <p className="subtle-copy">Click a session row to inspect messages.</p>
           ) : null}
@@ -345,7 +364,6 @@ export function SessionsPage() {
           ) : null}
           {renderedMessages.length > 0 ? (
             <div className="detail-messages sessions-message-stream">
-              <h4>Recent Messages</h4>
               {renderedMessages.map(({ msg, rendered }, index) => (
                 <div
                   key={`${msg.id || "msg"}-${msg.timestamp || "t"}-${index}`}

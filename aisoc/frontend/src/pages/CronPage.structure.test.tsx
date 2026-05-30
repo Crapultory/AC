@@ -5,7 +5,7 @@ import { MemoryRouter } from "react-router-dom";
 import { CronPage, isCronActivationKey, isLatestCronDetailRequest } from "./CronPage";
 
 describe("CronPage structure", () => {
-  it("renders analyst workbench zones and action markers", () => {
+  it("renders stacked cron layout and modal scaffolding", () => {
     const html = renderToStaticMarkup(
       <MemoryRouter initialEntries={["/cron"]}>
         <CronPage />
@@ -13,12 +13,16 @@ describe("CronPage structure", () => {
     );
 
     expect(html).toContain("cron-workbench-page");
-    expect(html).toContain("cron-workbench");
-    expect(html).toContain("cron-jobs-pane");
-    expect(html).toContain("cron-detail-pane");
-    expect(html).toContain("cron-action-zone");
+    expect(html).toContain("cron-stack-layout");
+    expect(html).toContain("cron-top-pane");
+    expect(html).toContain("cron-history-pane");
+    expect(html).toContain("cron-jobs-grid");
+    expect(html).toContain("New");
+    expect(html).toContain("Create Job");
+    expect(html).not.toContain("Edit JSON payload for");
+    expect(html).not.toContain("Selected Job:");
     expect(html).toContain("Jobs");
-    expect(html).toContain("Cron Job Detail");
+    expect(html).toContain("Run History");
   });
 });
 

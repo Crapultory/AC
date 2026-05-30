@@ -42,8 +42,4 @@ def build_overview_router() -> APIRouter:
     async def cron_token_dist(period: Literal["today", "7d", "30d"] = "today"):
         return overview_service.get_cron_token_distribution(period=period)
 
-    @router.get("/cronjobs")
-    async def cronjobs():
-        return overview_service.get_cronjobs()
-
     return router

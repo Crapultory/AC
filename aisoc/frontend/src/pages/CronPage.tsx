@@ -15,6 +15,46 @@ type CronJob = {
         display?: string;
       };
   paused?: boolean;
+  enabled?: boolean;
+  state?: string;
+  model?: string;
+  deliver?: string;
+  last_run_at?: string | number | null;
+  next_run_at?: string | number | null;
+  repeat?: {
+    times?: number | null;
+    completed?: number;
+  };
+};
+
+type CronJobsPagePayload = {
+  items?: CronJob[];
+  page?: number;
+  page_size?: number;
+  total?: number;
+  total_pages?: number;
+  has_prev?: boolean;
+  has_next?: boolean;
+};
+
+type CronHistoryItem = {
+  session_id: string;
+  started_at?: string | number | null;
+  ended_at?: string | number | null;
+  duration_seconds?: number | null;
+  messages?: number;
+  tokens?: number;
+  status?: string;
+};
+
+type SessionDetailPayload = {
+  session_id: string;
+  messages?: Array<{
+    role?: string;
+    content?: unknown;
+    tool_name?: string;
+    timestamp?: number | string;
+  }>;
 };
 
 const CRON_EDITABLE_KEYS = [
@@ -36,6 +76,28 @@ const CRON_EDITABLE_KEYS = [
   "no_agent",
 ] as const;
 
+const DEFAULT_CRON_CREATE_PAYLOAD = {
+  name: "daily-test-msg",
+  prompt: "向当前对话发送一条测试消息，内容为：这是一条每日测试消息。",
+  schedule: "* 10 * * *",
+  deliver: "slack",
+  skills: [],
+  skill: null,
+  enabled_toolsets: null,
+  model: "deepseek-v4-flash",
+  provider: null,
+  base_url: null,
+  script: null,
+  workdir: null,
+  no_agent: false,
+} as const;
+
+function buildDefaultCreatePayloadEditor(): string {
+  return JSON.stringify(DEFAULT_CRON_CREATE_PAYLOAD, null, 2);
+}
+
+const CRON_PAGE_SIZE = 12;
+
 function renderSchedule(schedule: CronJob["schedule"]): string {
   if (!schedule) return "no schedule";
   if (typeof schedule === "string") return schedule;
@@ -45,12 +107,76 @@ function renderSchedule(schedule: CronJob["schedule"]): string {
   return "no schedule";
 }
 
-export function isLatestCronDetailRequest(requestId: number, latestRequestId: number): boolean {
-  return requestId === latestRequestId;
+function toDateFromUnknown(value: unknown): Date | null {
+  if (value === null || value === undefined || value === "") return null;
+
+  if (typeof value === "number" && Number.isFinite(value)) {
+    const milliseconds = value > 1_000_000_000_000 ? value : value * 1000;
+    const date = new Date(milliseconds);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    if (!trimmed) return null;
+    if (/^\d+(\.\d+)?$/.test(trimmed)) {
+      const numeric = Number(trimmed);
+      if (Number.isFinite(numeric)) {
+        const milliseconds = numeric > 1_000_000_000_000 ? numeric : numeric * 1000;
+        const date = new Date(milliseconds);
+        return Number.isNaN(date.getTime()) ? null : date;
+      }
+    }
+    const date = new Date(trimmed);
+    return Number.isNaN(date.getTime()) ? null : date;
+  }
+
+  return null;
 }
 
-export function isCronActivationKey(key: string): boolean {
-  return key === "Enter" || key === " ";
+function formatDateTime(value: unknown): string {
+  const date = toDateFromUnknown(value);
+  if (!date) return "--";
+  return date.toLocaleString("zh-CN", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+function asNumber(value: unknown, fallback = 0): number {
+  if (typeof value === "number" && Number.isFinite(value)) return value;
+  if (typeof value === "string" && value.trim()) {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+  return fallback;
+}
+
+function formatRepeat(job: CronJob): string {
+  const completed = asNumber(job.repeat?.completed, 0);
+  const rawTimes = job.repeat?.times;
+  const times = rawTimes === null || rawTimes === undefined ? null : asNumber(rawTimes, 0);
+  return `${completed} / ${times === null || times <= 0 ? "∞" : times}`;
+}
+
+function formatSessionMessageContent(content: unknown): string {
+  if (content === null || content === undefined) return "(empty)";
+  if (typeof content === "string") return content.trim() ? content : "(empty)";
+  try {
+    return JSON.stringify(content, null, 2);
+  } catch {
+    return String(content);
+  }
+}
+
+function isJobPaused(job: CronJob): boolean {
+  if (typeof job.paused === "boolean") return job.paused;
+  if (typeof job.enabled === "boolean") return !job.enabled;
+  return String(job.state || "").toLowerCase() === "paused";
 }
 
 function buildEditableCronUpdates(detail: Record<string, unknown> | null): Record<string, unknown> {
@@ -64,11 +190,28 @@ function buildEditableCronUpdates(detail: Record<string, unknown> | null): Recor
   return updates;
 }
 
+export function isLatestCronDetailRequest(requestId: number, latestRequestId: number): boolean {
+  return requestId === latestRequestId;
+}
+
+export function isCronActivationKey(key: string): boolean {
+  return key === "Enter" || key === " ";
+}
+
 export function CronPage() {
   const [jobs, setJobs] = useState<CronJob[]>([]);
+  const [jobsPage, setJobsPage] = useState(1);
+  const [jobsTotalPages, setJobsTotalPages] = useState(1);
+  const [jobsTotal, setJobsTotal] = useState(0);
+  const [createEditor, setCreateEditor] = useState(buildDefaultCreatePayloadEditor);
+  const [createPending, setCreatePending] = useState(false);
+  const [createError, setCreateError] = useState("");
   const [error, setError] = useState("");
   const [loading, setLoading] = useState(true);
   const [selectedJobId, setSelectedJobId] = useState("");
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState("");
+  const [history, setHistory] = useState<CronHistoryItem[]>([]);
   const [detailLoading, setDetailLoading] = useState(false);
   const [detailError, setDetailError] = useState("");
   const [detail, setDetail] = useState<Record<string, unknown> | null>(null);
@@ -78,10 +221,18 @@ export function CronPage() {
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState("");
   const [actionError, setActionError] = useState("");
-  const [pendingAction, setPendingAction] = useState<string>("");
+  const [pendingAction, setPendingAction] = useState("");
+  const [createModalOpen, setCreateModalOpen] = useState(false);
+  const [jobDetailModalOpen, setJobDetailModalOpen] = useState(false);
   const [rawDetailModalOpen, setRawDetailModalOpen] = useState(false);
+  const [sessionModalOpen, setSessionModalOpen] = useState(false);
+  const [sessionLoading, setSessionLoading] = useState(false);
+  const [sessionError, setSessionError] = useState("");
+  const [sessionDetail, setSessionDetail] = useState<SessionDetailPayload | null>(null);
   const detailRequestIdRef = useRef(0);
+  const historyRequestIdRef = useRef(0);
   const selectedJobIdRef = useRef("");
+  const jobsPageRef = useRef(1);
 
   const selectedJob = jobs.find((job) => String(job.id || job.name || "") === selectedJobId);
 
@@ -89,12 +240,41 @@ export function CronPage() {
     selectedJobIdRef.current = selectedJobId;
   }, [selectedJobId]);
 
-  async function loadJobs() {
+  useEffect(() => {
+    jobsPageRef.current = jobsPage;
+  }, [jobsPage]);
+
+  async function loadJobs(page: number = jobsPageRef.current) {
     setLoading(true);
     setError("");
     try {
-      const payload = await fetchJSON<CronJob[]>("/api/cron/jobs");
-      setJobs(payload || []);
+      const safePage = Number.isFinite(page) ? Math.max(1, Math.trunc(page)) : 1;
+      const payload = await fetchJSON<CronJobsPagePayload>(
+        `/api/cron/jobs?page=${safePage}&page_size=${CRON_PAGE_SIZE}`,
+      );
+      const nextJobs = payload.items || [];
+      const currentPage = payload.page || safePage;
+      const totalPages = payload.total_pages || 1;
+      const total = payload.total || 0;
+
+      setJobsPage(currentPage);
+      jobsPageRef.current = currentPage;
+      setJobsTotalPages(Math.max(1, totalPages));
+      setJobsTotal(Math.max(0, total));
+      setJobs(nextJobs);
+
+      const selected = selectedJobIdRef.current;
+      if (!selected) return;
+      const stillExists = nextJobs.some((job) => String(job.id || job.name || "") === selected);
+      if (!stillExists) {
+        selectedJobIdRef.current = "";
+        setSelectedJobId("");
+        setHistory([]);
+        setHistoryError("");
+        setDetail(null);
+        setJobDetailModalOpen(false);
+        setRawDetailModalOpen(false);
+      }
     } catch {
       setError("Failed to load cron jobs.");
     } finally {
@@ -102,27 +282,56 @@ export function CronPage() {
     }
   }
 
-  async function action(jobId: string, verb: "pause" | "resume" | "trigger") {
-    const actionKey = `${jobId}:${verb}`;
-    setActionError("");
-    setPendingAction(actionKey);
+  async function createJob() {
+    setCreatePending(true);
+    setCreateError("");
     try {
-      await fetchJSON(`/api/cron/jobs/${encodeURIComponent(jobId)}/${verb}`, { method: "POST" });
+      const parsed = JSON.parse(createEditor) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        setCreateError("Create payload must be a JSON object.");
+        return;
+      }
+      await fetchJSON("/api/cron/jobs", {
+        method: "POST",
+        body: JSON.stringify(parsed),
+      });
+      setCreateModalOpen(false);
+      setCreateEditor(buildDefaultCreatePayloadEditor());
       await loadJobs();
-      if (selectedJobIdRef.current !== jobId) return;
-      await selectJob(jobId);
-    } catch {
-      setActionError(`Failed to ${verb} cron job.`);
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        setCreateError(`Invalid JSON: ${error.message}`);
+      } else {
+        setCreateError("Failed to create cron job.");
+      }
     } finally {
-      setPendingAction("");
+      setCreatePending(false);
     }
   }
 
-  async function selectJob(rawId: string) {
-    if (!rawId) return;
+  async function loadJobHistory(rawId: string) {
+    const requestId = ++historyRequestIdRef.current;
+    setHistoryLoading(true);
+    setHistoryError("");
+    setHistory([]);
+    try {
+      const payload = await fetchJSON<CronHistoryItem[]>(
+        `/api/cron/jobs/${encodeURIComponent(rawId)}/history`,
+      );
+      if (!isLatestCronDetailRequest(requestId, historyRequestIdRef.current)) return;
+      setHistory(payload || []);
+    } catch {
+      if (!isLatestCronDetailRequest(requestId, historyRequestIdRef.current)) return;
+      setHistory([]);
+      setHistoryError("Failed to load run history.");
+    } finally {
+      if (!isLatestCronDetailRequest(requestId, historyRequestIdRef.current)) return;
+      setHistoryLoading(false);
+    }
+  }
+
+  async function loadJobDetail(rawId: string) {
     const requestId = ++detailRequestIdRef.current;
-    selectedJobIdRef.current = rawId;
-    setSelectedJobId(rawId);
     setDetailLoading(true);
     setDetailError("");
     setDetail(null);
@@ -148,6 +357,74 @@ export function CronPage() {
     }
   }
 
+  async function action(jobId: string, verb: "pause" | "resume" | "trigger") {
+    const actionKey = `${jobId}:${verb}`;
+    setActionError("");
+    setPendingAction(actionKey);
+    try {
+      await fetchJSON(`/api/cron/jobs/${encodeURIComponent(jobId)}/${verb}`, { method: "POST" });
+      await loadJobs();
+      if (selectedJobIdRef.current !== jobId) return;
+      await loadJobHistory(jobId);
+      if (jobDetailModalOpen) {
+        await loadJobDetail(jobId);
+      }
+    } catch {
+      setActionError(`Failed to ${verb} cron job.`);
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function removeJob(jobId: string, jobLabel: string) {
+    const confirmed = window.confirm(`Delete cron job \"${jobLabel}\"?`);
+    if (!confirmed) return;
+
+    const actionKey = `${jobId}:delete`;
+    setActionError("");
+    setPendingAction(actionKey);
+    try {
+      await fetchJSON(`/api/cron/jobs/${encodeURIComponent(jobId)}`, { method: "DELETE" });
+      await loadJobs();
+
+      if (selectedJobIdRef.current === jobId) {
+        selectedJobIdRef.current = "";
+        setSelectedJobId("");
+        setHistory([]);
+        setHistoryError("");
+        setDetail(null);
+        setJobDetailModalOpen(false);
+        setRawDetailModalOpen(false);
+      }
+    } catch {
+      setActionError("Failed to delete cron job.");
+    } finally {
+      setPendingAction("");
+    }
+  }
+
+  async function selectJob(rawId: string) {
+    if (!rawId) return;
+    selectedJobIdRef.current = rawId;
+    setSelectedJobId(rawId);
+    setActionError("");
+    await loadJobHistory(rawId);
+    if (jobDetailModalOpen) {
+      await loadJobDetail(rawId);
+    }
+  }
+
+  async function openDetail(rawId: string) {
+    if (!rawId) return;
+    if (selectedJobIdRef.current !== rawId) {
+      selectedJobIdRef.current = rawId;
+      setSelectedJobId(rawId);
+      void loadJobHistory(rawId);
+    }
+    setJobDetailModalOpen(true);
+    await loadJobDetail(rawId);
+  }
+
   async function saveDetailUpdates() {
     if (!selectedJobId) return;
     setSavePending(true);
@@ -167,7 +444,7 @@ export function CronPage() {
       setSaveSuccess("Cron job updated.");
       await loadJobs();
       if (selectedJobIdRef.current === selectedJobId) {
-        await selectJob(selectedJobId);
+        await Promise.all([loadJobHistory(selectedJobId), loadJobDetail(selectedJobId)]);
       }
     } catch (error) {
       if (error instanceof SyntaxError) {
@@ -180,30 +457,82 @@ export function CronPage() {
     }
   }
 
+  async function openSessionMessages(sessionId: string) {
+    if (!sessionId) return;
+    setSessionModalOpen(true);
+    setSessionLoading(true);
+    setSessionError("");
+    setSessionDetail(null);
+    try {
+      const payload = await fetchJSON<SessionDetailPayload>(
+        `/api/sessions/${encodeURIComponent(sessionId)}/detail`,
+      );
+      setSessionDetail(payload);
+    } catch {
+      setSessionError("Failed to load session messages.");
+    } finally {
+      setSessionLoading(false);
+    }
+  }
+
   useEffect(() => {
-    void loadJobs();
+    void loadJobs(1);
   }, []);
 
   useEffect(() => {
-    if (!rawDetailModalOpen) return;
+    if (
+      !createModalOpen
+      && !jobDetailModalOpen
+      && !rawDetailModalOpen
+      && !sessionModalOpen
+    ) {
+      return;
+    }
     const handleKeydown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") {
+      if (event.key !== "Escape") return;
+      if (createModalOpen) {
+        setCreateModalOpen(false);
+        return;
+      }
+      if (rawDetailModalOpen) {
         setRawDetailModalOpen(false);
+        return;
+      }
+      if (sessionModalOpen) {
+        setSessionModalOpen(false);
+        return;
+      }
+      if (jobDetailModalOpen) {
+        setJobDetailModalOpen(false);
       }
     };
     window.addEventListener("keydown", handleKeydown);
     return () => window.removeEventListener("keydown", handleKeydown);
-  }, [rawDetailModalOpen]);
+  }, [createModalOpen, jobDetailModalOpen, rawDetailModalOpen, sessionModalOpen]);
 
   return (
     <section className="cron-workbench-page">
       {error ? (
         <StateBlock kind="error" title="Cron Load Failed" message={error} />
       ) : null}
-      <div className="cron-workbench">
-        <article className="detail-panel cron-jobs-pane">
-          <h3>Jobs</h3>
-          <p className="subtle-copy">Select a job to inspect detail and dispatch trigger/pause/resume actions.</p>
+      <div className="cron-stack-layout">
+        <article className="detail-panel cron-top-pane">
+          <div className="cron-pane-head">
+            <h3>Jobs</h3>
+            <div className="cron-pane-actions">
+              <span className="status-badge">{jobsTotal} total</span>
+              <button
+                type="button"
+                className="ghost-button cron-new-button"
+                onClick={() => {
+                  setCreateModalOpen(true);
+                  setCreateError("");
+                }}
+              >
+                New
+              </button>
+            </div>
+          </div>
           {loading ? (
             <StateBlock kind="loading" title="Loading Cron Jobs" message="Fetching scheduler inventory from /api/cron/jobs." />
           ) : null}
@@ -211,146 +540,333 @@ export function CronPage() {
             <StateBlock kind="empty" title="No Cron Jobs Found" message="No jobs are currently registered for this profile." />
           ) : null}
           <div className="cron-jobs-scroll">
-            <ul className="list-grid cron-jobs-list">
-              {jobs.map((job) => (
-                <li
-                  key={job.id || job.name}
-                  className={
-                    selectedJobId === String(job.id || job.name || "")
-                      ? "clickable-card active"
-                      : "clickable-card"
-                  }
-                  role="button"
-                  tabIndex={0}
-                  onClick={() => selectJob(String(job.id || job.name || ""))}
-                  onKeyDown={(event) => {
-                    if (!isCronActivationKey(event.key)) return;
-                    event.preventDefault();
-                    void selectJob(String(job.id || job.name || ""));
-                  }}
-                >
-                  <div className="cron-job-head">
-                    <strong>{job.name || job.id}</strong>
-                    <span className="status-badge">{job.paused ? "Paused" : "Running"}</span>
-                  </div>
-                  <div className="cron-job-meta">
-                    <p>Schedule: {renderSchedule(job.schedule)}</p>
-                    <p>Profile: {job.profile || "default"}</p>
-                  </div>
-                  {job.id ? (
-                    <div className="button-row cron-action-zone">
+            <ul className="list-grid cron-jobs-grid">
+              {jobs.map((job) => {
+                const jobId = String(job.id || job.name || "");
+                const paused = isJobPaused(job);
+                const pauseVerb = paused ? "resume" : "pause";
+                const pauseActionLabel = paused ? "Resume job" : "Pause job";
+                return (
+                  <li
+                    key={jobId}
+                    className={selectedJobId === jobId ? "clickable-card cron-job-card active" : "clickable-card cron-job-card"}
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => void selectJob(jobId)}
+                    onKeyDown={(event) => {
+                      if (!isCronActivationKey(event.key)) return;
+                      event.preventDefault();
+                      void selectJob(jobId);
+                    }}
+                  >
+                    <div className="cron-job-card-head">
+                      <strong>{job.name || job.id}</strong>
+                      <span className={paused ? "status-badge cron-status paused" : "status-badge cron-status running"}>
+                        {paused ? "Paused" : "Running"}
+                      </span>
+                    </div>
+                    <div className="cron-job-info-grid">
+                      <p>
+                        <span>Schedule</span>
+                        <strong>{renderSchedule(job.schedule)}</strong>
+                      </p>
+                      <p>
+                        <span>Model</span>
+                        <strong>{job.model || "--"}</strong>
+                      </p>
+                      <p>
+                        <span>Last Run</span>
+                        <strong>{formatDateTime(job.last_run_at)}</strong>
+                      </p>
+                      <p>
+                        <span>Next Run</span>
+                        <strong>{formatDateTime(job.next_run_at)}</strong>
+                      </p>
+                      <p>
+                        <span>Deliver</span>
+                        <strong>{job.deliver || "--"}</strong>
+                      </p>
+                      <p>
+                        <span>Repeat</span>
+                        <strong>{formatRepeat(job)}</strong>
+                      </p>
+                    </div>
+                    <div className="cron-card-actions">
                       <button
                         type="button"
-                        disabled={pendingAction === `${job.id}:trigger`}
+                        className="ghost-button cron-icon-button"
+                        aria-label="Run now"
+                        disabled={pendingAction === `${jobId}:trigger`}
                         onClick={(event) => {
                           event.stopPropagation();
-                          void action(job.id as string, "trigger");
+                          void action(jobId, "trigger");
                         }}
                       >
-                        {pendingAction === `${job.id}:trigger` ? "Triggering..." : "Trigger"}
+                        {pendingAction === `${jobId}:trigger` ? "…" : "▶"}
                       </button>
                       <button
                         type="button"
-                        disabled={pendingAction === `${job.id}:pause`}
+                        className="ghost-button cron-icon-button"
+                        aria-label={pauseActionLabel}
+                        disabled={pendingAction === `${jobId}:${pauseVerb}`}
                         onClick={(event) => {
                           event.stopPropagation();
-                          void action(job.id as string, "pause");
+                          void action(jobId, pauseVerb);
                         }}
                       >
-                        {pendingAction === `${job.id}:pause` ? "Pausing..." : "Pause"}
+                        {pendingAction === `${jobId}:${pauseVerb}` ? "…" : paused ? "⏵" : "⏸"}
                       </button>
                       <button
                         type="button"
-                        disabled={pendingAction === `${job.id}:resume`}
+                        className="ghost-button cron-icon-button cron-icon-button-detail"
+                        aria-label="Open detail"
                         onClick={(event) => {
                           event.stopPropagation();
-                          void action(job.id as string, "resume");
+                          void openDetail(jobId);
                         }}
                       >
-                        {pendingAction === `${job.id}:resume` ? "Resuming..." : "Resume"}
+                        Detail
+                      </button>
+                      <button
+                        type="button"
+                        className="ghost-button cron-icon-button"
+                        aria-label="Delete job"
+                        disabled={pendingAction === `${jobId}:delete`}
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          void removeJob(jobId, String(job.name || job.id || jobId));
+                        }}
+                      >
+                        {pendingAction === `${jobId}:delete` ? "…" : "✕"}
                       </button>
                     </div>
-                  ) : null}
-                </li>
-              ))}
+                  </li>
+                );
+              })}
             </ul>
           </div>
-          <div className="cron-action-zone">
-            <p className="subtle-copy">Action zone: trigger/pause/resume controls are available on each job row.</p>
-          </div>
           {actionError ? <p className="error-text">{actionError}</p> : null}
+          <div className="cron-pagination-row">
+            <button
+              type="button"
+              className="ghost-button cron-page-button"
+              disabled={loading || jobsPage <= 1}
+              onClick={() => void loadJobs(jobsPage - 1)}
+            >
+              Prev
+            </button>
+            <span className="status-badge">Page {jobsPage} / {jobsTotalPages}</span>
+            <button
+              type="button"
+              className="ghost-button cron-page-button"
+              disabled={loading || jobsPage >= jobsTotalPages}
+              onClick={() => void loadJobs(jobsPage + 1)}
+            >
+              Next
+            </button>
+          </div>
         </article>
-        <aside className="detail-panel cron-detail-pane">
-          <h3>Cron Job Detail</h3>
-          <p className="subtle-copy">Edit updates JSON and save via PUT /api/cron/jobs/{selectedJobId || "{job_id}"}.</p>
+
+        <article className="detail-panel cron-history-pane">
+          <div className="cron-pane-head">
+            <h3>Run History</h3>
+            <span className="status-badge">{history.length} items</span>
+          </div>
           {!selectedJobId ? (
-            <StateBlock kind="empty" title="No Job Selected" message="Click a cron row to inspect details and context." />
+            <StateBlock kind="empty" title="No Job Selected" message="Select a job card above to inspect run sessions." />
           ) : null}
-          {detailLoading ? <StateBlock kind="loading" title="Loading Detail" message="Fetching selected job payload." /> : null}
-          {detailError ? <StateBlock kind="error" title="Detail Unavailable" message={detailError} /> : null}
-          {detail ? (
-            <div className="cron-detail-scroll">
-              <label className="memory-editor-label" htmlFor="cron-detail-editor">
-                Editable Updates JSON
+          {selectedJobId && historyLoading ? (
+            <StateBlock kind="loading" title="Loading Run History" message="Fetching /api/cron/jobs/{job_id}/history." />
+          ) : null}
+          {selectedJobId && historyError ? (
+            <StateBlock kind="error" title="History Unavailable" message={historyError} />
+          ) : null}
+          {selectedJobId && !historyLoading && !historyError && history.length === 0 ? (
+            <StateBlock kind="empty" title="No History Yet" message="This job has no recorded sessions." />
+          ) : null}
+          {!historyLoading && !historyError && history.length > 0 ? (
+            <div className="cron-history-scroll">
+              <ul className="list-grid cron-history-list">
+                {history.map((item) => (
+                  <li key={`${item.session_id}-${String(item.started_at || "none")}`}>
+                    <button
+                      type="button"
+                      className="cron-history-row"
+                      onClick={() => void openSessionMessages(item.session_id)}
+                    >
+                      <span className="cron-history-arrow">›</span>
+                      <span className="cron-history-main">
+                        <span className="cron-history-title">
+                          {selectedJob?.name || selectedJobId} — {formatDateTime(item.started_at)}
+                        </span>
+                        <span className="cron-history-session">{item.session_id}</span>
+                      </span>
+                      <span className="cron-history-meta">
+                        <span>{item.messages ?? 0} msg</span>
+                        <span>{item.tokens ?? 0} tok</span>
+                        <span>{item.status || "completed"}</span>
+                      </span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ) : null}
+        </article>
+      </div>
+
+      <div
+        className={createModalOpen ? "cron-create-modal-overlay active" : "cron-create-modal-overlay"}
+        onClick={() => setCreateModalOpen(false)}
+        aria-hidden={!createModalOpen}
+      >
+        <div
+          className="cron-detail-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Create cron job"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="cron-detail-modal-header">
+            <h4>Create Job</h4>
+            <button
+              type="button"
+              className="ghost-button cron-raw-modal-close"
+              onClick={() => setCreateModalOpen(false)}
+              aria-label="Close create job modal"
+            >
+              ×
+            </button>
+          </div>
+          <div className="cron-detail-modal-body">
+            <div className="cron-detail-editor-wrap">
+              <label className="memory-editor-label" htmlFor="cron-create-editor">
+                Job Create JSON
               </label>
               <textarea
-                id="cron-detail-editor"
-                className="cron-detail-editor"
-                value={detailEditor}
+                id="cron-create-editor"
+                className="cron-create-editor"
+                value={createEditor}
                 onChange={(event) => {
-                  setDetailEditor(event.target.value);
-                  setDetailDirty(true);
-                  setSaveError("");
-                  setSaveSuccess("");
+                  setCreateEditor(event.target.value);
+                  setCreateError("");
                 }}
-                rows={18}
+                rows={12}
               />
               <div className="button-row cron-action-zone">
-                <button type="button" onClick={() => void saveDetailUpdates()} disabled={savePending || !detailDirty}>
-                  {savePending ? "Saving..." : "Save Updates"}
+                <button
+                  type="button"
+                  onClick={() => void createJob()}
+                  disabled={createPending}
+                >
+                  {createPending ? "Creating..." : "Create Job"}
                 </button>
                 <button
                   type="button"
                   className="ghost-button"
-                  disabled={savePending}
+                  disabled={createPending}
                   onClick={() => {
-                    const editable = buildEditableCronUpdates(detail);
-                    setDetailEditor(JSON.stringify(editable, null, 2));
-                    setDetailDirty(false);
+                    setCreateEditor(buildDefaultCreatePayloadEditor());
+                    setCreateError("");
+                  }}
+                >
+                  Reset Template
+                </button>
+              </div>
+              {createError ? <p className="error-text">{createError}</p> : null}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div
+        className={jobDetailModalOpen ? "cron-detail-modal-overlay active" : "cron-detail-modal-overlay"}
+        onClick={() => setJobDetailModalOpen(false)}
+        aria-hidden={!jobDetailModalOpen}
+      >
+        <div
+          className="cron-detail-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Cron job detail"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="cron-detail-modal-header">
+            <h4>Cron Job Detail</h4>
+            <button
+              type="button"
+              className="ghost-button cron-raw-modal-close"
+              onClick={() => setJobDetailModalOpen(false)}
+              aria-label="Close cron detail modal"
+            >
+              ×
+            </button>
+          </div>
+          <div className="cron-detail-modal-body">
+            {!selectedJobId ? (
+              <StateBlock kind="empty" title="No Job Selected" message="Select a job card first." />
+            ) : null}
+            {detailLoading ? (
+              <StateBlock kind="loading" title="Loading Detail" message="Fetching selected job payload." />
+            ) : null}
+            {detailError ? (
+              <StateBlock kind="error" title="Detail Unavailable" message={detailError} />
+            ) : null}
+            {detail ? (
+              <div className="cron-detail-editor-wrap">
+                <label className="memory-editor-label" htmlFor="cron-detail-editor">
+                  Editable Updates JSON
+                </label>
+                <textarea
+                  id="cron-detail-editor"
+                  className="cron-detail-editor"
+                  value={detailEditor}
+                  onChange={(event) => {
+                    setDetailEditor(event.target.value);
+                    setDetailDirty(true);
                     setSaveError("");
                     setSaveSuccess("");
                   }}
-                >
-                  Reset
-                </button>
+                  rows={18}
+                />
+                <div className="button-row cron-action-zone">
+                  <button
+                    type="button"
+                    onClick={() => void saveDetailUpdates()}
+                    disabled={savePending || !detailDirty}
+                  >
+                    {savePending ? "Saving..." : "Update"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    disabled={savePending}
+                    onClick={() => {
+                      const editable = buildEditableCronUpdates(detail);
+                      setDetailEditor(JSON.stringify(editable, null, 2));
+                      setDetailDirty(false);
+                      setSaveError("");
+                      setSaveSuccess("");
+                    }}
+                  >
+                    Reset
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    onClick={() => setRawDetailModalOpen(true)}
+                  >
+                    Raw JSON
+                  </button>
+                </div>
+                {saveError ? <p className="error-text">{saveError}</p> : null}
+                {saveSuccess ? <p>{saveSuccess}</p> : null}
               </div>
-              {saveError ? <p className="error-text">{saveError}</p> : null}
-              {saveSuccess ? <p>{saveSuccess}</p> : null}
-              <div className="cron-context-inline">
-                <p className="cron-context-item">
-                  <strong>Selected Job</strong>
-                  <span>{selectedJobId || "none"}</span>
-                </p>
-                <p className="cron-context-item">
-                  <strong>Profile</strong>
-                  <span>{selectedJob?.profile || "default"}</span>
-                </p>
-                <p className="cron-context-item">
-                  <strong>State</strong>
-                  <span>{selectedJob ? (selectedJob.paused ? "paused" : "running") : "unknown"}</span>
-                </p>
-                <button
-                  type="button"
-                  className="ghost-button cron-raw-open-button"
-                  onClick={() => setRawDetailModalOpen(true)}
-                >
-                  Raw Detail JSON
-                </button>
-              </div>
-            </div>
-          ) : null}
-        </aside>
+            ) : null}
+          </div>
+        </div>
       </div>
+
       {detail ? (
         <div
           className={rawDetailModalOpen ? "cron-raw-modal-overlay active" : "cron-raw-modal-overlay"}
@@ -381,6 +897,61 @@ export function CronPage() {
           </div>
         </div>
       ) : null}
+
+      <div
+        className={sessionModalOpen ? "cron-session-modal-overlay active" : "cron-session-modal-overlay"}
+        onClick={() => setSessionModalOpen(false)}
+        aria-hidden={!sessionModalOpen}
+      >
+        <div
+          className="cron-session-modal"
+          role="dialog"
+          aria-modal="true"
+          aria-label="Session messages"
+          onClick={(event) => event.stopPropagation()}
+        >
+          <div className="cron-detail-modal-header">
+            <h4>Session Messages</h4>
+            <button
+              type="button"
+              className="ghost-button cron-raw-modal-close"
+              onClick={() => setSessionModalOpen(false)}
+              aria-label="Close session modal"
+            >
+              ×
+            </button>
+          </div>
+          <div className="cron-session-modal-body">
+            {sessionLoading ? (
+              <StateBlock kind="loading" title="Loading Session Messages" message="Fetching /api/sessions/{session_id}/detail." />
+            ) : null}
+            {sessionError ? (
+              <StateBlock kind="error" title="Session Detail Unavailable" message={sessionError} />
+            ) : null}
+            {!sessionLoading && !sessionError && sessionDetail && (sessionDetail.messages || []).length === 0 ? (
+              <StateBlock kind="empty" title="No Messages" message="No messages were returned for this session." />
+            ) : null}
+            {!sessionLoading && !sessionError && sessionDetail && (sessionDetail.messages || []).length > 0 ? (
+              <div className="detail-messages cron-session-messages">
+                {(sessionDetail.messages || []).map((message, index) => (
+                  <div
+                    key={`${message.role || "msg"}-${String(message.timestamp || index)}-${index}`}
+                    className="detail-message"
+                  >
+                    <p>
+                      <strong>
+                        {message.role || "unknown"}
+                        {message.tool_name ? ` (${message.tool_name})` : ""}
+                      </strong>
+                    </p>
+                    <pre>{formatSessionMessageContent(message.content)}</pre>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </div>
+      </div>
     </section>
   );
 }

@@ -1,16 +1,38 @@
 // aisoc/frontend/src/lib/useAgentChat.ts
-import { useCallback, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentRpc } from "./agent-rpc";
 import { getStoredToken } from "./auth";
 
 export const WIDGET_SESSION_KEY = "aisoc.widget.sessionId";
+const WIDGET_DB_SESSION_KEY = "aisoc.widget.dbSessionId";
+const WIDGET_MESSAGES_KEY = "aisoc.widget.messages";
 const SCROLLBACK_LIMIT = 200;
+
+function loadCachedMessages(): ChatMessage[] {
+  try {
+    if (typeof localStorage === "undefined") return [];
+    const raw = localStorage.getItem(WIDGET_MESSAGES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function cacheMessages(msgs: ChatMessage[]): void {
+  try {
+    if (typeof localStorage === "undefined") return;
+    localStorage.setItem(WIDGET_MESSAGES_KEY, JSON.stringify(msgs));
+  } catch {
+    // localStorage full or unavailable — silently skip
+  }
+}
 
 export type ChatMessage =
   | { role: "user"; id: string; text: string }
   | { role: "agent"; id: string; text: string; done: boolean }
-  | { role: "tool"; id: string; name: string; status: "running" | "done"; duration_s?: number; summary?: string }
-  | { role: "thinking"; id: string; text: string };
+  | { role: "tool"; id: string; name: string; status: "running" | "done"; context?: string; duration_s?: number; summary?: string };
 
 export type ApprovalRequest = {
   request_id: string;
@@ -66,6 +88,12 @@ function getIdleTimeoutMs(): number {
   return mins * 60_000;
 }
 
+type AgentMessage = Extract<ChatMessage, { role: "agent" }>;
+
+function isAgentMsg(m: ChatMessage): m is AgentMessage {
+  return m.role === "agent";
+}
+
 function trimMessages(msgs: ChatMessage[]): ChatMessage[] {
   if (msgs.length <= SCROLLBACK_LIMIT) return msgs;
   return msgs.slice(msgs.length - SCROLLBACK_LIMIT);
@@ -91,14 +119,20 @@ export function useAgentChat(): {
   disconnect: () => void;
   interrupt: () => void;
 } {
+  const savedSid = typeof localStorage !== "undefined" ? localStorage.getItem(WIDGET_SESSION_KEY) : null;
   const [state, setState] = useState<ChatState>({
-    phase: "disconnected",
-    sessionId: null,
-    messages: [],
+    phase: savedSid ? "connecting" : "disconnected",
+    sessionId: savedSid,
+    messages: loadCachedMessages(),
     activeApproval: null,
     activeClarify: null,
     error: null,
   });
+
+  // Persist messages to localStorage on every change
+  useEffect(() => {
+    cacheMessages(state.messages);
+  }, [state.messages]);
 
   const rpcRef = useRef<AgentRpc | null>(null);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -107,6 +141,7 @@ export function useAgentChat(): {
   const sessionIdRef = useRef<string | null>(null);
   const activeApprovalRef = useRef<ApprovalRequest | null>(null);
   const activeClarifyRef = useRef<ClarifyRequest | null>(null);
+  const skipResumeRef = useRef(false);
 
   // Keep refs in sync with state
   sessionIdRef.current = state.sessionId;
@@ -158,14 +193,14 @@ export function useAgentChat(): {
       if (!delta) return;
       setState((s) => {
         const msgs = [...s.messages];
-        // Find the last incomplete agent message — thinking messages may be
-        // interleaved after it, so scanning from the end is required.
         let idx = -1;
         for (let i = msgs.length - 1; i >= 0; i--) {
-          if (msgs[i].role === "agent" && !msgs[i].done) { idx = i; break; }
+          const m = msgs[i];
+          if (isAgentMsg(m) && !m.done) { idx = i; break; }
         }
         if (idx >= 0) {
-          msgs[idx] = { ...msgs[idx], text: msgs[idx].text + delta };
+          const prev = msgs[idx] as AgentMessage;
+          msgs[idx] = { ...prev, text: prev.text + delta };
         }
         return { ...s, messages: msgs };
       });
@@ -173,53 +208,24 @@ export function useAgentChat(): {
 
     unsub("message.complete", (params) => {
       resetIdleTimer();
-      // message.complete carries the full text — replace accumulated deltas
-      // to avoid incremental accumulation errors.
       const fullText: string | undefined = params.payload?.text;
       setState((s) => {
         const msgs = [...s.messages];
         let idx = -1;
         for (let i = msgs.length - 1; i >= 0; i--) {
-          if (msgs[i].role === "agent" && !msgs[i].done) { idx = i; break; }
+          const m = msgs[i];
+          if (isAgentMsg(m) && !m.done) { idx = i; break; }
         }
         if (idx >= 0) {
-          msgs[idx] = {
-            ...msgs[idx],
-            text: fullText != null ? fullText : msgs[idx].text,
-            done: true,
-          };
+          const prev = msgs[idx] as AgentMessage;
+          msgs[idx] = { ...prev, text: fullText != null ? fullText : prev.text, done: true };
         }
         return { ...s, phase: "idle", messages: msgs };
       });
     });
 
-    unsub("thinking.delta", (params) => {
-      resetIdleTimer();
-      setState((s) => {
-        const msgs = [...s.messages];
-        const last = msgs.length - 1;
-        if (last >= 0 && msgs[last].role === "thinking") {
-          msgs[last] = { ...msgs[last], text: msgs[last].text + (params.payload?.text || "") };
-        } else {
-          msgs.push({ role: "thinking", id: nextMsgId(), text: params.payload?.text || "" });
-        }
-        return { ...s, messages: trimMessages(msgs) };
-      });
-    });
-
-    unsub("reasoning.delta", (params) => {
-      resetIdleTimer();
-      setState((s) => {
-        const msgs = [...s.messages];
-        const last = msgs.length - 1;
-        if (last >= 0 && msgs[last].role === "thinking") {
-          msgs[last] = { ...msgs[last], text: msgs[last].text + (params.payload?.text || "") };
-        } else {
-          msgs.push({ role: "thinking", id: nextMsgId(), text: params.payload?.text || "" });
-        }
-        return { ...s, messages: trimMessages(msgs) };
-      });
-    });
+    unsub("thinking.delta", () => { resetIdleTimer(); });
+    unsub("reasoning.delta", () => { resetIdleTimer(); });
 
     unsub("tool.start", (params) => {
       resetIdleTimer();
@@ -228,6 +234,7 @@ export function useAgentChat(): {
         id: params.payload?.tool_id || nextMsgId(),
         name: params.payload?.name || "tool",
         status: "running",
+        context: params.payload?.context || "",
       };
       setState((s) => ({ ...s, messages: trimMessages([...s.messages, msg]) }));
     });
@@ -267,42 +274,68 @@ export function useAgentChat(): {
     });
   }, [resetIdleTimer]);
 
+  /** After creating or resuming a session, fetch the database session ID via
+   *  session.title (returns session_key = DB ID). Cache it for precise resume. */
+  const persistDbId = async (rpc: AgentRpc, tuiSid: string) => {
+    try {
+      const info = await rpc.call("session.title", { session_id: tuiSid });
+      if (info?.session_key) {
+        localStorage.setItem(WIDGET_DB_SESSION_KEY, info.session_key);
+      }
+    } catch {
+      // Non-critical — resume will fall back gracefully
+    }
+  };
+
   const connect = useCallback(() => {
     setState((s) => ({ ...s, phase: "connecting", error: null }));
     const rpc = new AgentRpc();
     rpcRef.current = rpc;
     const url = buildWsUrl();
+    const wantNew = skipResumeRef.current;
+    skipResumeRef.current = false;
 
     const attemptConnect = (retriesLeft: number) => {
       rpc.connect(url).then(async () => {
         subscribe(rpc);
 
-        const savedId = localStorage.getItem(WIDGET_SESSION_KEY);
-        if (savedId) {
-          try {
-            const res = await rpc.call("session.resume", { session_id: savedId, cols: 80 });
-            const resumedId = res.resumed || savedId;
-            localStorage.setItem(WIDGET_SESSION_KEY, resumedId);
-            sessionIdRef.current = resumedId;
-            const msgs: ChatMessage[] = (res.messages || []).map((m: any) => ({
-              role: m.role === "assistant" ? "agent" : m.role,
-              id: nextMsgId(),
-              text: m.text || "",
-              done: true,
-            }));
-            setState({ phase: "idle", sessionId: resumedId, messages: trimMessages(msgs), activeApproval: null, activeClarify: null, error: null });
-            resetIdleTimer();
-            return;
-          } catch {
-            // Session gone — fall through to create
+        // Try to resume the widget's own previous session
+        if (!wantNew) {
+          const cachedDbId = typeof localStorage !== "undefined"
+            ? localStorage.getItem(WIDGET_DB_SESSION_KEY) : null;
+          if (cachedDbId) {
+            try {
+              const res = await rpc.call("session.resume", { session_id: cachedDbId, cols: 80 });
+              const tuiSid = res.session_id;
+              sessionIdRef.current = tuiSid;
+              localStorage.setItem(WIDGET_SESSION_KEY, tuiSid);
+              // Update cached DB ID in case compression rotated it
+              if (res.resumed) localStorage.setItem(WIDGET_DB_SESSION_KEY, res.resumed);
+              const msgs: ChatMessage[] = (res.messages || []).map((m: any) => ({
+                role: m.role === "assistant" ? "agent" : m.role,
+                id: nextMsgId(),
+                text: m.text || "",
+                done: true,
+              }));
+              setState({ phase: "idle", sessionId: tuiSid, messages: trimMessages(msgs), activeApproval: null, activeClarify: null, error: null });
+              resetIdleTimer();
+              return;
+            } catch {
+              // Cached DB ID stale — clear and fall through to create
+              localStorage.removeItem(WIDGET_DB_SESSION_KEY);
+            }
           }
         }
 
         const res = await rpc.call("session.create", { cols: 80 });
-        localStorage.setItem(WIDGET_SESSION_KEY, res.session_id);
-        sessionIdRef.current = res.session_id;
-        setState({ phase: "idle", sessionId: res.session_id, messages: [], activeApproval: null, activeClarify: null, error: null });
+        const tuiSid = res.session_id;
+        sessionIdRef.current = tuiSid;
+        localStorage.setItem(WIDGET_SESSION_KEY, tuiSid);
+        localStorage.removeItem(WIDGET_DB_SESSION_KEY);
+        setState({ phase: "idle", sessionId: tuiSid, messages: [], activeApproval: null, activeClarify: null, error: null });
         resetIdleTimer();
+        // Fetch the real DB session ID asynchronously — available immediately
+        persistDbId(rpc, tuiSid);
       }).catch((err) => {
         if (retriesLeft > 0) {
           setTimeout(() => attemptConnect(retriesLeft - 1), 2000);
@@ -336,9 +369,11 @@ export function useAgentChat(): {
   const respondApproval = useCallback((accept: boolean) => {
     const approval = activeApprovalRef.current;
     if (!approval) return;
+    const sid = sessionIdRef.current;
     rpcRef.current?.call("approval.respond", {
+      session_id: sid,
       request_id: approval.request_id,
-      response: accept ? "allow" : "deny",
+      choice: accept ? "allow" : "deny",
     });
     setState((s) => ({ ...s, activeApproval: null }));
   }, []);
@@ -348,7 +383,7 @@ export function useAgentChat(): {
     if (!clarify) return;
     rpcRef.current?.call("clarify.respond", {
       request_id: clarify.request_id,
-      response: choice,
+      answer: choice,
     });
     setState((s) => ({ ...s, activeClarify: null }));
   }, []);
@@ -362,7 +397,10 @@ export function useAgentChat(): {
   const startNewSession = useCallback(() => {
     disconnectRef.current();
     localStorage.removeItem(WIDGET_SESSION_KEY);
+    localStorage.removeItem(WIDGET_DB_SESSION_KEY);
+    localStorage.removeItem(WIDGET_MESSAGES_KEY);
     sessionIdRef.current = null;
+    skipResumeRef.current = true;
     setState({ phase: "disconnected", sessionId: null, messages: [], activeApproval: null, activeClarify: null, error: null });
     setTimeout(() => connect(), 100);
   }, [connect]);

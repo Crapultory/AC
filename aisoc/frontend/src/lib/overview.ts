@@ -97,9 +97,32 @@ export type Cronjob = {
   id: string;
   name: string;
   enabled: boolean;
-  schedule: string;
+  schedule:
+    | string
+    | {
+        kind?: string;
+        expr?: string;
+        display?: string;
+      };
   last_run: CronjobLastRun | null;
+  last_run_at: string | null;
+  next_run_at: string | null;
   run_count: number;
+  repeat?: {
+    times: number | null;
+    completed: number;
+  };
+  state?: string;
+};
+
+export type PaginatedCronjobs = {
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
+  has_prev: boolean;
+  has_next: boolean;
+  items: Cronjob[];
 };
 
 export type CronjobHistoryItem = {
@@ -195,8 +218,10 @@ export function getCronTokenDistribution(
   return fetchJSON<CronTokenDistribution>(`/api/overview/cron-token-dist?period=${period}`);
 }
 
-export function getCronjobs(): Promise<Cronjob[]> {
-  return fetchJSON<Cronjob[]>("/api/overview/cronjobs");
+export function getCronjobs(page: number = 1, pageSize: number = 8): Promise<PaginatedCronjobs> {
+  const safePage = Number.isFinite(page) ? Math.max(1, Math.trunc(page)) : 1;
+  const safePageSize = Number.isFinite(pageSize) ? Math.min(25, Math.max(1, Math.trunc(pageSize))) : 8;
+  return fetchJSON<PaginatedCronjobs>(`/api/cron/jobs?page=${safePage}&page_size=${safePageSize}`);
 }
 
 export function getCronjobHistory(jobId: string): Promise<CronjobHistoryItem[]> {

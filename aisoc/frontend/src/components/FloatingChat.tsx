@@ -2,6 +2,44 @@
 import ReactMarkdown from "react-markdown";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useAgentChat, formatToolDuration, type ChatMessage } from "../lib/useAgentChat";
+
+type ToolMsg = Extract<ChatMessage, { role: "tool" }>;
+
+/** Group consecutive tool messages into runs, keeping non-tool messages as-is.
+ *  Swaps [agent, tool-group] → [tool-group, agent] so tools appear above the response. */
+function groupMessages(messages: ChatMessage[]): (ChatMessage | ToolMsg[])[] {
+  const raw: (ChatMessage | ToolMsg[])[] = [];
+  let toolBuf: ToolMsg[] = [];
+  for (const m of messages) {
+    if (m.role === "tool") {
+      toolBuf.push(m);
+    } else {
+      if (toolBuf.length) { raw.push(toolBuf); toolBuf = []; }
+      raw.push(m);
+    }
+  }
+  if (toolBuf.length) raw.push(toolBuf);
+
+  // Swap: when agent message is immediately followed by a tool group, reorder
+  // so tools render above the agent response text. Applies regardless of done
+  // state so the order stays consistent after message.complete.
+  const result: (ChatMessage | ToolMsg[])[] = [];
+  for (let i = 0; i < raw.length; i++) {
+    const cur = raw[i];
+    const next = raw[i + 1];
+    if (
+      !Array.isArray(cur) && cur.role === "agent"
+      && Array.isArray(next)
+    ) {
+      result.push(next);
+      result.push(cur);
+      i++;
+    } else {
+      result.push(cur);
+    }
+  }
+  return result;
+}
 import "./FloatingChat.css";
 
 const LONG_INPUT_THRESHOLD = 10000;
@@ -9,6 +47,7 @@ const LONG_INPUT_THRESHOLD = 10000;
 export function FloatingChat() {
   const chat = useAgentChat();
   const [drawerOpen, setDrawerOpen] = useState(false);
+  const [fullscreen, setFullscreen] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
   const [confirmAction, setConfirmAction] = useState<"close" | "new">("close");
   const [input, setInput] = useState("");
@@ -16,6 +55,13 @@ export function FloatingChat() {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   const isStreaming = chat.state.phase === "streaming";
+
+  // Auto-reconnect on mount if there's a saved session
+  useEffect(() => {
+    if (chat.state.phase === "connecting" && chat.state.sessionId) {
+      chat.connect();
+    }
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // Auto-scroll on new messages
   useEffect(() => {
@@ -96,7 +142,7 @@ export function FloatingChat() {
   return (
     <>
       {/* Drawer */}
-      <div className={`widget-drawer ${drawerOpen ? "widget-drawer-open" : ""}`}>
+      <div className={`widget-drawer ${drawerOpen ? "widget-drawer-open" : ""} ${fullscreen ? "widget-drawer-fullscreen" : ""}`}>
         <div className="widget-drawer-header">
           <span className="widget-drawer-title">
             Agent Chat
@@ -108,6 +154,14 @@ export function FloatingChat() {
           </span>
           <button className="widget-btn-new" onClick={handleNew} type="button">
             New
+          </button>
+          <button
+            className="widget-btn-expand"
+            onClick={() => setFullscreen((f) => !f)}
+            title={fullscreen ? "Exit fullscreen" : "Fullscreen"}
+            type="button"
+          >
+            {fullscreen ? "⤢" : "⤡"}
           </button>
           <button className="widget-btn-close" onClick={handleClose} type="button">
             &times;
@@ -124,9 +178,13 @@ export function FloatingChat() {
         ) : null}
 
         <div className="widget-messages">
-          {chat.state.messages.map((msg) => (
-            <MessageBubble key={msg.id} msg={msg} />
-          ))}
+          {groupMessages(chat.state.messages).map((group, gi) =>
+            Array.isArray(group) ? (
+              <ToolGroupBubble key={`tg-${gi}`} tools={group} />
+            ) : (
+              <MessageBubble key={group.id} msg={group} />
+            ),
+          )}
           {chat.state.activeApproval && (
             <ApprovalCard
               text={chat.state.activeApproval.command || "Approve this action?"}
@@ -181,7 +239,7 @@ export function FloatingChat() {
           <div className="widget-orbit-dot" />
         </div>
         {!drawerOpen && isStreaming ? <div className="widget-active-dot" /> : null}
-        H
+        <AisocLogo className="widget-icon-logo" />
       </div>
 
       {/* Confirm dialog */}
@@ -219,7 +277,7 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
       return (
         <div className="widget-msg">
           <div className="widget-agent-row">
-            <div className="widget-avatar">H</div>
+            <div className="widget-avatar"><AisocLogo className="widget-avatar-logo" /></div>
             <div className="widget-msg widget-msg-agent">
               <div className="widget-msg-text">
                 <ReactMarkdown>{msg.text || (msg.done ? "" : "...")}</ReactMarkdown>
@@ -228,28 +286,69 @@ function MessageBubble({ msg }: { msg: ChatMessage }) {
           </div>
         </div>
       );
-    case "thinking":
-      return (
-        <div className="widget-msg widget-msg-thinking">
-          {"\u{1F4AD}"} {msg.text || "Thinking..."}
-        </div>
-      );
-    case "tool": {
-      const duration = msg.status === "done" && msg.duration_s != null
-        ? ` ${formatToolDuration(msg.duration_s)}` : "";
-      return (
-        <div className="widget-msg widget-msg-tool">
-          <div className="widget-tool-header">
-            <span className="widget-tool-name">{"\u{1F527}"} {msg.name}</span>
-            <span className={`widget-tool-status ${msg.status === "done" ? "widget-tool-status-done" : ""}`}>
-              {msg.status === "running" ? "Running..." : `Done${duration}`}
-            </span>
-          </div>
-          {msg.summary ? <div className="widget-tool-summary">{msg.summary}</div> : null}
-        </div>
-      );
-    }
   }
+}
+
+function ToolGroupBubble({ tools }: { tools: ToolMsg[] }) {
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+
+  const toggle = (id: string) => {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const runningCount = tools.filter((t) => t.status === "running").length;
+
+  return (
+    <div className="widget-msg widget-msg-tool-group">
+      <div className="widget-tool-group-header">
+        <span className="widget-tool-group-icon">{"\u{1F527}"}</span>
+        <span className="widget-tool-group-count">
+          {runningCount > 0 ? `${runningCount}/${tools.length} running` : `${tools.length} tools`}
+        </span>
+      </div>
+      {tools.map((tool) => {
+        const expanded = expandedIds.has(tool.id);
+        const duration = tool.status === "done" && tool.duration_s != null
+          ? ` ${formatToolDuration(tool.duration_s)}` : "";
+        return (
+          <div key={tool.id} className="widget-tool-item">
+            <div
+              className="widget-tool-row widget-tool-clickable"
+              onClick={() => toggle(tool.id)}
+              role="button"
+              tabIndex={0}
+            >
+              <span className="widget-tool-chevron">{expanded ? "▼" : "▶"}</span>
+              <span className="widget-tool-name">{tool.name}</span>
+              <span className={`widget-tool-status ${tool.status === "done" ? "widget-tool-status-done" : ""}`}>
+                {tool.status === "running" ? "Running..." : `Done${duration}`}
+              </span>
+            </div>
+            {expanded && (
+              <div className="widget-tool-detail">
+                {tool.context ? (
+                  <div className="widget-tool-section">
+                    <div className="widget-tool-label">Args</div>
+                    <pre className="widget-tool-pre">{tool.context}</pre>
+                  </div>
+                ) : null}
+                {tool.summary ? (
+                  <div className="widget-tool-section">
+                    <div className="widget-tool-label">Result</div>
+                    <pre className="widget-tool-pre">{tool.summary}</pre>
+                  </div>
+                ) : null}
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 function ApprovalCard({ text, onAccept, onReject }: { text: string; onAccept: () => void; onReject: () => void }) {
@@ -276,5 +375,23 @@ function ClarifyCard({ question, choices, onChoice }: { question: string; choice
         ))}
       </div>
     </div>
+  );
+}
+
+function AisocLogo({ className }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 96 96" aria-label="AISOC">
+      <g stroke="currentColor" strokeWidth="3" strokeLinecap="round" strokeLinejoin="round" fill="none">
+        <rect x="22" y="20" width="52" height="34" rx="11" />
+        <path d="M48 14v6" />
+        <circle cx="38" cy="37" r="3.5" />
+        <circle cx="58" cy="37" r="3.5" />
+        <path d="M41 46h14" />
+        <path d="M48 56l16 6v9c0 11-8.2 16.6-16 20-7.8-3.4-16-9-16-20v-9l16-6Z" />
+        <circle cx="70.5" cy="20.5" r="8.5" />
+        <path d="M70.5 8v4M70.5 29v4M58 20.5h4M79 20.5h4M61.7 11.7l2.8 2.8M76.5 26.5l2.8 2.8M79.3 11.7l-2.8 2.8M64.5 26.5l-2.8 2.8" />
+        <circle cx="70.5" cy="20.5" r="2.4" />
+      </g>
+    </svg>
   );
 }

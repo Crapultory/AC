@@ -70,10 +70,10 @@ describe("overview api helpers", () => {
     expect(mockedFetchJSON).toHaveBeenCalledWith("/api/overview/cron-token-dist?period=7d");
   });
 
-  it("requests cron jobs endpoint", async () => {
+  it("requests paginated cron jobs endpoint", async () => {
     await getCronjobs();
 
-    expect(mockedFetchJSON).toHaveBeenCalledWith("/api/overview/cronjobs");
+    expect(mockedFetchJSON).toHaveBeenCalledWith("/api/cron/jobs?page=1&page_size=8");
   });
 
   it("escapes job id when requesting cron history", async () => {

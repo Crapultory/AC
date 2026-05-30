@@ -1,9 +1,17 @@
+import { useEffect } from "react";
 import { useNavigate } from "react-router-dom";
 
+import { hasStoredToken } from "../lib/auth";
 import { LoginForm } from "../components/LoginForm";
 
 export function LoginPage() {
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (hasStoredToken()) {
+      navigate("/overview", { replace: true });
+    }
+  }, [navigate]);
 
   return (
     <section className="login-page">
