@@ -2,8 +2,9 @@ import { Link, Outlet, useLocation } from "react-router-dom";
 import { useState } from "react";
 
 import { clearStoredToken } from "../lib/auth";
+import { FloatingChat } from "./FloatingChat";
 
-type NavIconName = "overview" | "chat" | "sessions" | "cron" | "skills" | "memory";
+type NavIconName = "overview" | "chat" | "sessions" | "cron" | "skills" | "wiki" | "memory";
 
 const NAV_ITEMS: Array<{ path: string; label: string; icon: NavIconName }> = [
   { path: "/overview", label: "Overview", icon: "overview" },
@@ -11,6 +12,7 @@ const NAV_ITEMS: Array<{ path: string; label: string; icon: NavIconName }> = [
   { path: "/sessions", label: "Sessions", icon: "sessions" },
   { path: "/cron", label: "Cron", icon: "cron" },
   { path: "/skills", label: "Skills", icon: "skills" },
+  { path: "/wiki", label: "LLMWiki", icon: "wiki" },
   { path: "/memory", label: "Memory", icon: "memory" },
 ];
 
@@ -67,6 +69,12 @@ function NavIcon({ name }: { name: NavIconName }) {
           />
         </>
       )}
+      {name === "wiki" && (
+        <>
+          <path {...common} d="M4 19.5v-15A2.5 2.5 0 0 1 6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5Z" />
+          <path {...common} d="M8 7h8M8 11h6M8 15h4" />
+        </>
+      )}
       {name === "memory" && (
         <>
           <path {...common} d="M3.75 7.5c0-1.66 3.7-3 8.25-3s8.25 1.34 8.25 3-3.7 3-8.25 3-8.25-1.34-8.25-3Z" />
@@ -84,6 +92,12 @@ export function AppShell() {
   const activeItem =
     NAV_ITEMS.find((item) => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)) ??
     NAV_ITEMS[0];
+  const showWorkbenchTopbar = activeItem.path !== "/overview";
+
+  function signOut(): void {
+    clearStoredToken();
+    window.location.href = "/login";
+  }
 
   function toggleNav(): void {
     setNavCollapsed((prev) => {
@@ -148,10 +162,7 @@ export function AppShell() {
           <button
             className="ghost-button side-nav-footer-button"
             type="button"
-            onClick={() => {
-              clearStoredToken();
-              window.location.href = "/login";
-            }}
+            onClick={signOut}
             title="Sign Out"
           >
             <span className="nav-link-icon" aria-hidden="true">
@@ -171,14 +182,32 @@ export function AppShell() {
         </footer>
       </aside>
       <main className="main-panel workbench-main">
-        <header className="workbench-topbar">
-          <div className="workbench-topbar-copy">
-            <p className="brand-kicker">AISOC Workbench</p>
-            <h2>{activeItem.label}</h2>
-          </div>
-          <span className="status-badge status-live">Live</span>
-        </header>
+        {showWorkbenchTopbar ? (
+          <header className="workbench-topbar">
+            <div className="workbench-topbar-copy">
+              <div className="workbench-topbar-brandmark" aria-hidden="true">
+                <img src={BRAND_LOGO_SRC} alt="" className="workbench-topbar-logo" />
+              </div>
+              <div className="workbench-topbar-copy-text">
+                <p className="brand-kicker">AISOC Workbench</p>
+                <h2>{activeItem.label}</h2>
+              </div>
+            </div>
+            <div className="workbench-topbar-actions">
+              <span className="status-badge status-live">Live</span>
+              <button
+                className="ghost-button workbench-topbar-signout"
+                type="button"
+                onClick={signOut}
+                title="Sign Out"
+              >
+                Sign Out
+              </button>
+            </div>
+          </header>
+        ) : null}
         <Outlet />
+        <FloatingChat />
       </main>
     </div>
   );
