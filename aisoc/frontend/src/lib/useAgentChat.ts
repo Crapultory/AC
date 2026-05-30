@@ -154,23 +154,40 @@ export function useAgentChat(): {
 
     unsub("message.delta", (params) => {
       resetIdleTimer();
+      const delta = params.payload?.text || "";
+      if (!delta) return;
       setState((s) => {
         const msgs = [...s.messages];
-        const last = msgs.length - 1;
-        if (last >= 0 && msgs[last].role === "agent") {
-          msgs[last] = { ...msgs[last], text: msgs[last].text + (params.payload?.text || "") };
+        // Find the last incomplete agent message — thinking messages may be
+        // interleaved after it, so scanning from the end is required.
+        let idx = -1;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role === "agent" && !msgs[i].done) { idx = i; break; }
+        }
+        if (idx >= 0) {
+          msgs[idx] = { ...msgs[idx], text: msgs[idx].text + delta };
         }
         return { ...s, messages: msgs };
       });
     });
 
-    unsub("message.complete", () => {
+    unsub("message.complete", (params) => {
       resetIdleTimer();
+      // message.complete carries the full text — replace accumulated deltas
+      // to avoid incremental accumulation errors.
+      const fullText: string | undefined = params.payload?.text;
       setState((s) => {
         const msgs = [...s.messages];
-        const last = msgs.length - 1;
-        if (last >= 0 && msgs[last].role === "agent") {
-          msgs[last] = { ...msgs[last], done: true };
+        let idx = -1;
+        for (let i = msgs.length - 1; i >= 0; i--) {
+          if (msgs[i].role === "agent" && !msgs[i].done) { idx = i; break; }
+        }
+        if (idx >= 0) {
+          msgs[idx] = {
+            ...msgs[idx],
+            text: fullText != null ? fullText : msgs[idx].text,
+            done: true,
+          };
         }
         return { ...s, phase: "idle", messages: msgs };
       });
