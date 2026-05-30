@@ -3,36 +3,32 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { AgentRpc } from "./agent-rpc";
 import { getStoredToken } from "./auth";
 
+// Legacy keys (used during migration only)
 export const WIDGET_SESSION_KEY = "aisoc.widget.sessionId";
 const WIDGET_DB_SESSION_KEY = "aisoc.widget.dbSessionId";
 const WIDGET_MESSAGES_KEY = "aisoc.widget.messages";
+
+// Multi-tab keys
+const WIDGET_TABS_KEY = "aisoc.widget.tabs";
+const WIDGET_ACTIVE_TAB_KEY = "aisoc.widget.activeTabDbId";
+
 const SCROLLBACK_LIMIT = 200;
+const MAX_CACHED_TABS = 20;
+const MAX_MESSAGES_PER_TAB = 50;
 
-function loadCachedMessages(): ChatMessage[] {
-  try {
-    if (typeof localStorage === "undefined") return [];
-    const raw = localStorage.getItem(WIDGET_MESSAGES_KEY);
-    if (!raw) return [];
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function cacheMessages(msgs: ChatMessage[]): void {
-  try {
-    if (typeof localStorage === "undefined") return;
-    localStorage.setItem(WIDGET_MESSAGES_KEY, JSON.stringify(msgs));
-  } catch {
-    // localStorage full or unavailable — silently skip
-  }
-}
+// ── Types ──────────────────────────────────────────────────────────
 
 export type ChatMessage =
   | { role: "user"; id: string; text: string }
   | { role: "agent"; id: string; text: string; done: boolean }
   | { role: "tool"; id: string; name: string; status: "running" | "done"; context?: string; duration_s?: number; summary?: string };
+
+export type SessionTab = {
+  dbId: string;
+  tuiId: string | null;
+  title: string;
+  messages: ChatMessage[];
+};
 
 export type ApprovalRequest = {
   request_id: string;
@@ -56,6 +52,112 @@ export type ChatState = {
   activeClarify: ClarifyRequest | null;
   error: string | null;
 };
+
+// ── Helpers ────────────────────────────────────────────────────────
+
+type AgentMessage = Extract<ChatMessage, { role: "agent" }>;
+
+function isAgentMsg(m: ChatMessage): m is AgentMessage {
+  return m.role === "agent";
+}
+
+function trimMessages(msgs: ChatMessage[]): ChatMessage[] {
+  if (msgs.length <= SCROLLBACK_LIMIT) return msgs;
+  return msgs.slice(msgs.length - SCROLLBACK_LIMIT);
+}
+
+function hasLocalStorage(): boolean {
+  return typeof localStorage !== "undefined";
+}
+
+// ── Legacy storage (used by migration) ─────────────────────────────
+
+function loadCachedMessages(): ChatMessage[] {
+  try {
+    if (!hasLocalStorage()) return [];
+    const raw = localStorage.getItem(WIDGET_MESSAGES_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function deriveInitialTitle(messages: ChatMessage[]): string {
+  const first = messages.find(m => m.role === "user");
+  if (!first) return "Chat";
+  return first.text.slice(0, 30) + (first.text.length > 30 ? "..." : "");
+}
+
+// ── Multi-tab storage ──────────────────────────────────────────────
+
+function loadTabsFromStorage(): SessionTab[] {
+  try {
+    if (!hasLocalStorage()) return [];
+    const raw = localStorage.getItem(WIDGET_TABS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    return Array.isArray(parsed) ? parsed : [];
+  } catch {
+    return [];
+  }
+}
+
+function persistTabs(tabs: SessionTab[]): void {
+  try {
+    if (!hasLocalStorage()) return;
+    localStorage.setItem(WIDGET_TABS_KEY, JSON.stringify(tabs));
+  } catch {
+    // localStorage full or unavailable — silently skip
+  }
+}
+
+function loadActiveTabDbId(): string | null {
+  try {
+    if (!hasLocalStorage()) return null;
+    return localStorage.getItem(WIDGET_ACTIVE_TAB_KEY) || null;
+  } catch {
+    return null;
+  }
+}
+
+function persistActiveTabDbId(dbId: string | null): void {
+  try {
+    if (!hasLocalStorage()) return;
+    if (dbId) localStorage.setItem(WIDGET_ACTIVE_TAB_KEY, dbId);
+    else localStorage.removeItem(WIDGET_ACTIVE_TAB_KEY);
+  } catch {
+    // silently skip
+  }
+}
+
+// ── Migration ──────────────────────────────────────────────────────
+
+function migrateLegacyStorage(): void {
+  if (!hasLocalStorage()) return;
+  if (localStorage.getItem(WIDGET_TABS_KEY)) return;
+
+  const legacyDbId = localStorage.getItem(WIDGET_DB_SESSION_KEY);
+  const legacyMessages = loadCachedMessages();
+
+  if (legacyDbId) {
+    const tabs: SessionTab[] = [{
+      dbId: legacyDbId,
+      tuiId: localStorage.getItem(WIDGET_SESSION_KEY),
+      title: deriveInitialTitle(legacyMessages),
+      messages: legacyMessages.slice(-MAX_MESSAGES_PER_TAB),
+    }];
+    localStorage.setItem(WIDGET_TABS_KEY, JSON.stringify(tabs));
+    localStorage.setItem(WIDGET_ACTIVE_TAB_KEY, legacyDbId);
+  }
+
+  localStorage.removeItem(WIDGET_SESSION_KEY);
+  localStorage.removeItem(WIDGET_DB_SESSION_KEY);
+  localStorage.removeItem(WIDGET_MESSAGES_KEY);
+}
+
+// ── Utility ────────────────────────────────────────────────────────
 
 function wsBaseUrl(): string {
   const proto = window.location.protocol === "https:" ? "wss" : "ws";
@@ -88,17 +190,6 @@ function getIdleTimeoutMs(): number {
   return mins * 60_000;
 }
 
-type AgentMessage = Extract<ChatMessage, { role: "agent" }>;
-
-function isAgentMsg(m: ChatMessage): m is AgentMessage {
-  return m.role === "agent";
-}
-
-function trimMessages(msgs: ChatMessage[]): ChatMessage[] {
-  if (msgs.length <= SCROLLBACK_LIMIT) return msgs;
-  return msgs.slice(msgs.length - SCROLLBACK_LIMIT);
-}
-
 /** Helper to format tool duration for display */
 export function formatToolDuration(seconds: number | undefined): string {
   if (seconds == null) return "";
@@ -109,46 +200,77 @@ export function formatToolDuration(seconds: number | undefined): string {
   return secs ? `${mins}m ${secs}s` : `${mins}m`;
 }
 
+// ── Hook ───────────────────────────────────────────────────────────
+
 export function useAgentChat(): {
   state: ChatState;
+  tabs: SessionTab[];
+  activeTabDbId: string | null;
   send: (text: string) => void;
   respondApproval: (accept: boolean) => void;
   respondClarify: (choice: string) => void;
   startNewSession: () => void;
+  switchToTab: (dbId: string) => void;
+  closeTab: (dbId: string) => void;
   connect: () => void;
   disconnect: () => void;
   interrupt: () => void;
 } {
-  const savedSid = typeof localStorage !== "undefined" ? localStorage.getItem(WIDGET_SESSION_KEY) : null;
+  migrateLegacyStorage();
+
+  const [tabs, setTabs] = useState<SessionTab[]>(loadTabsFromStorage());
+  const tabsRef = useRef<SessionTab[]>(tabs);
+  tabsRef.current = tabs;
+  const activeTabDbIdRef = useRef<string | null>(loadActiveTabDbId());
+
+  const initialTab = tabs.find(t => t.dbId === activeTabDbIdRef.current);
   const [state, setState] = useState<ChatState>({
-    phase: savedSid ? "connecting" : "disconnected",
-    sessionId: savedSid,
-    messages: loadCachedMessages(),
+    phase: initialTab ? "connecting" : "disconnected",
+    sessionId: initialTab?.tuiId ?? null,
+    messages: initialTab?.messages ?? [],
     activeApproval: null,
     activeClarify: null,
     error: null,
   });
 
-  // Persist messages to localStorage on every change
+  const stateRef = useRef(state);
+  stateRef.current = state;
+
+  // Snapshot current live state into the matching tab entry
+  const snapshotCurrentTab = useCallback((prevTabs: SessionTab[]): SessionTab[] => {
+    const dbId = activeTabDbIdRef.current;
+    if (!dbId) return prevTabs;
+    const msgs = stateRef.current.messages;
+    return prevTabs.map(t =>
+      t.dbId === dbId
+        ? { ...t, messages: msgs.slice(-MAX_MESSAGES_PER_TAB) }
+        : t
+    );
+  }, []);
+
+  // Persist tab state on message changes
   useEffect(() => {
-    cacheMessages(state.messages);
-  }, [state.messages]);
+    if (!activeTabDbIdRef.current) return;
+    setTabs(prev => {
+      const updated = snapshotCurrentTab(prev);
+      persistTabs(updated);
+      return updated;
+    });
+  }, [state.messages, snapshotCurrentTab]);
 
   const rpcRef = useRef<AgentRpc | null>(null);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unsubsRef = useRef<(() => void)[]>([]);
-  // Refs to avoid stale closures — always read from refs in callbacks
   const sessionIdRef = useRef<string | null>(null);
   const activeApprovalRef = useRef<ApprovalRequest | null>(null);
   const activeClarifyRef = useRef<ClarifyRequest | null>(null);
   const skipResumeRef = useRef(false);
+  const skipResumeMessagesRef = useRef(false);
 
-  // Keep refs in sync with state
   sessionIdRef.current = state.sessionId;
   activeApprovalRef.current = state.activeApproval;
   activeClarifyRef.current = state.activeClarify;
 
-  // disconnectImpl is a stable ref-based function (not a useCallback with deps)
   const disconnectRef = useRef<() => void>(() => {});
   disconnectRef.current = () => {
     for (const u of unsubsRef.current) u();
@@ -163,10 +285,8 @@ export function useAgentChat(): {
   const resetIdleTimer = useCallback(() => {
     if (idleTimerRef.current) clearTimeout(idleTimerRef.current);
     idleTimerRef.current = setTimeout(() => {
-      // Read phase from state via setState updater
       setState((s) => {
         if (s.phase === "idle") {
-          // Schedule disconnect outside updater to avoid side effects in setState
           setTimeout(() => disconnectRef.current(), 0);
         }
         return s;
@@ -222,6 +342,21 @@ export function useAgentChat(): {
         }
         return { ...s, phase: "idle", messages: msgs };
       });
+      // Derive tab title from first user message
+      const activeDbId = activeTabDbIdRef.current;
+      if (activeDbId) {
+        setTabs(prev => {
+          const tab = prev.find(t => t.dbId === activeDbId);
+          if (!tab || tab.title !== "New Chat") return prev;
+          const firstUserMsg = stateRef.current.messages.find(m => m.role === "user");
+          const newTitle = firstUserMsg
+            ? firstUserMsg.text.slice(0, 30) + (firstUserMsg.text.length > 30 ? "..." : "")
+            : "Chat";
+          const updated = prev.map(t => t.dbId === activeDbId ? { ...t, title: newTitle } : t);
+          persistTabs(updated);
+          return updated;
+        });
+      }
     });
 
     unsub("thinking.delta", () => { resetIdleTimer(); });
@@ -274,17 +409,12 @@ export function useAgentChat(): {
     });
   }, [resetIdleTimer]);
 
-  /** After creating or resuming a session, fetch the database session ID via
-   *  session.title (returns session_key = DB ID). Cache it for precise resume. */
-  const persistDbId = async (rpc: AgentRpc, tuiSid: string) => {
+  const persistDbId = async (rpc: AgentRpc, tuiSid: string): Promise<string | null> => {
     try {
       const info = await rpc.call("session.title", { session_id: tuiSid });
-      if (info?.session_key) {
-        localStorage.setItem(WIDGET_DB_SESSION_KEY, info.session_key);
-      }
-    } catch {
-      // Non-critical — resume will fall back gracefully
-    }
+      if (info?.session_key) return info.session_key;
+    } catch {}
+    return null;
   };
 
   const connect = useCallback(() => {
@@ -299,30 +429,47 @@ export function useAgentChat(): {
       rpc.connect(url).then(async () => {
         subscribe(rpc);
 
-        // Try to resume the widget's own previous session
         if (!wantNew) {
-          const cachedDbId = typeof localStorage !== "undefined"
-            ? localStorage.getItem(WIDGET_DB_SESSION_KEY) : null;
+          const cachedDbId = activeTabDbIdRef.current;
           if (cachedDbId) {
             try {
               const res = await rpc.call("session.resume", { session_id: cachedDbId, cols: 80 });
               const tuiSid = res.session_id;
               sessionIdRef.current = tuiSid;
-              localStorage.setItem(WIDGET_SESSION_KEY, tuiSid);
-              // Update cached DB ID in case compression rotated it
-              if (res.resumed) localStorage.setItem(WIDGET_DB_SESSION_KEY, res.resumed);
+              // Update tab with new tuiId
+              const resumedDbId = res.resumed || cachedDbId;
+              setTabs(prev => {
+                const updated = prev.map(t =>
+                  t.dbId === cachedDbId
+                    ? { ...t, tuiId: tuiSid, dbId: resumedDbId }
+                    : t
+                );
+                if (resumedDbId !== cachedDbId) {
+                  activeTabDbIdRef.current = resumedDbId;
+                  persistActiveTabDbId(resumedDbId);
+                }
+                persistTabs(updated);
+                return updated;
+              });
               const msgs: ChatMessage[] = (res.messages || []).map((m: any) => ({
                 role: m.role === "assistant" ? "agent" : m.role,
                 id: nextMsgId(),
                 text: m.text || "",
                 done: true,
               }));
-              setState({ phase: "idle", sessionId: tuiSid, messages: trimMessages(msgs), activeApproval: null, activeClarify: null, error: null });
+              // When switching tabs, messages were already loaded optimistically
+              // from cache — skip the redundant setState to avoid a flash.
+              if (skipResumeMessagesRef.current) {
+                skipResumeMessagesRef.current = false;
+                setState((s) => ({ ...s, phase: "idle", sessionId: tuiSid }));
+              } else {
+                setState({ phase: "idle", sessionId: tuiSid, messages: trimMessages(msgs), activeApproval: null, activeClarify: null, error: null });
+              }
               resetIdleTimer();
               return;
             } catch {
-              // Cached DB ID stale — clear and fall through to create
-              localStorage.removeItem(WIDGET_DB_SESSION_KEY);
+              // Resume failed — don't delete the tab, fall through to create
+              // The tab's cache stays intact for future resume attempts.
             }
           }
         }
@@ -330,12 +477,37 @@ export function useAgentChat(): {
         const res = await rpc.call("session.create", { cols: 80 });
         const tuiSid = res.session_id;
         sessionIdRef.current = tuiSid;
-        localStorage.setItem(WIDGET_SESSION_KEY, tuiSid);
-        localStorage.removeItem(WIDGET_DB_SESSION_KEY);
+
+        // Create new tab entry (dbId will be filled asynchronously)
+        const tempDbId = `pending-${tuiSid}`;
+        activeTabDbIdRef.current = tempDbId;
+        persistActiveTabDbId(tempDbId);
+
+        setTabs(prev => {
+          const newTab: SessionTab = { dbId: tempDbId, tuiId: tuiSid, title: "New Chat", messages: [] };
+          const updated = [...prev, newTab];
+          // Cap at MAX_CACHED_TABS, dropping oldest
+          const capped = updated.length > MAX_CACHED_TABS ? updated.slice(-MAX_CACHED_TABS) : updated;
+          persistTabs(capped);
+          return capped;
+        });
+
         setState({ phase: "idle", sessionId: tuiSid, messages: [], activeApproval: null, activeClarify: null, error: null });
         resetIdleTimer();
-        // Fetch the real DB session ID asynchronously — available immediately
-        persistDbId(rpc, tuiSid);
+
+        // Fetch real DB ID and update the tab
+        const realDbId = await persistDbId(rpc, tuiSid);
+        if (realDbId) {
+          setTabs(prev => {
+            const updated = prev.map(t =>
+              t.dbId === tempDbId ? { ...t, dbId: realDbId } : t
+            );
+            persistTabs(updated);
+            return updated;
+          });
+          activeTabDbIdRef.current = realDbId;
+          persistActiveTabDbId(realDbId);
+        }
       }).catch((err) => {
         if (retriesLeft > 0) {
           setTimeout(() => attemptConnect(retriesLeft - 1), 2000);
@@ -345,7 +517,7 @@ export function useAgentChat(): {
       });
     };
 
-    attemptConnect(1); // 1 retry
+    attemptConnect(1);
   }, [subscribe, resetIdleTimer]);
 
   const disconnect = useCallback(() => disconnectRef.current(), []);
@@ -355,7 +527,6 @@ export function useAgentChat(): {
     const userMsg: ChatMessage = { role: "user", id: nextMsgId(), text };
     setState((s) => ({ ...s, messages: trimMessages([...s.messages, userMsg]), phase: "streaming" }));
     resetIdleTimer();
-    // Use ref to get latest sessionId, avoiding stale closure
     const sid = sessionIdRef.current;
     rpcRef.current?.call("prompt.submit", { session_id: sid, text }).catch((err) => {
       setState((s) => ({
@@ -395,15 +566,102 @@ export function useAgentChat(): {
   }, []);
 
   const startNewSession = useCallback(() => {
+    // Snapshot current tab before leaving
+    setTabs(prev => {
+      const updated = snapshotCurrentTab(prev);
+      persistTabs(updated);
+      return updated;
+    });
     disconnectRef.current();
-    localStorage.removeItem(WIDGET_SESSION_KEY);
-    localStorage.removeItem(WIDGET_DB_SESSION_KEY);
-    localStorage.removeItem(WIDGET_MESSAGES_KEY);
-    sessionIdRef.current = null;
+    activeTabDbIdRef.current = null;
     skipResumeRef.current = true;
     setState({ phase: "disconnected", sessionId: null, messages: [], activeApproval: null, activeClarify: null, error: null });
     setTimeout(() => connect(), 100);
+  }, [connect, snapshotCurrentTab]);
+
+  const switchToTab = useCallback((dbId: string) => {
+    // No-op if clicking the already active tab
+    if (activeTabDbIdRef.current === dbId) return;
+
+    // Snapshot current tab
+    setTabs(prev => {
+      const updated = snapshotCurrentTab(prev);
+      persistTabs(updated);
+      return updated;
+    });
+
+    disconnectRef.current();
+
+    const targetTab = tabsRef.current.find(t => t.dbId === dbId);
+    if (!targetTab) return;
+
+    activeTabDbIdRef.current = dbId;
+    persistActiveTabDbId(dbId);
+
+    // Optimistically load cached messages
+    setState({
+      phase: "connecting",
+      sessionId: targetTab.tuiId,
+      messages: targetTab.messages,
+      activeApproval: null,
+      activeClarify: null,
+      error: null,
+    });
+
+    // Tell connect() not to replace messages from server response
+    skipResumeMessagesRef.current = true;
+    skipResumeRef.current = false;
+    setTimeout(() => connect(), 100);
+  }, [connect, snapshotCurrentTab]);
+
+  const closeTab = useCallback((dbId: string) => {
+    setTabs(prev => {
+      const updated = prev.filter(t => t.dbId !== dbId);
+      persistTabs(updated);
+
+      if (activeTabDbIdRef.current === dbId) {
+        if (updated.length > 0) {
+          const newActive = updated[updated.length - 1];
+          activeTabDbIdRef.current = newActive.dbId;
+          persistActiveTabDbId(newActive.dbId);
+          // Schedule switch to new active tab
+          setTimeout(() => {
+            disconnectRef.current();
+            setState({
+              phase: "connecting",
+              sessionId: newActive.tuiId,
+              messages: newActive.messages,
+              activeApproval: null,
+              activeClarify: null,
+              error: null,
+            });
+            skipResumeRef.current = false;
+            connect();
+          }, 100);
+        } else {
+          activeTabDbIdRef.current = null;
+          persistActiveTabDbId(null);
+          disconnectRef.current();
+          setState({ phase: "disconnected", sessionId: null, messages: [], activeApproval: null, activeClarify: null, error: null });
+        }
+      }
+
+      return updated;
+    });
   }, [connect]);
 
-  return { state, send, respondApproval, respondClarify, startNewSession, connect, disconnect, interrupt };
+  return {
+    state,
+    tabs,
+    activeTabDbId: activeTabDbIdRef.current,
+    send,
+    respondApproval,
+    respondClarify,
+    startNewSession,
+    switchToTab,
+    closeTab,
+    connect,
+    disconnect,
+    interrupt,
+  };
 }

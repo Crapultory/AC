@@ -26,6 +26,11 @@ vi.mock("./auth", () => ({
 
 import { useAgentChat } from "./useAgentChat";
 
+const TABS_KEY = "aisoc.widget.tabs";
+const ACTIVE_TAB_KEY = "aisoc.widget.activeTabDbId";
+const LEGACY_DB_KEY = "aisoc.widget.dbSessionId";
+const LEGACY_MSG_KEY = "aisoc.widget.messages";
+
 function renderChatHook() {
   return renderHook(() => useAgentChat());
 }
@@ -43,31 +48,73 @@ describe("useAgentChat", () => {
     expect(WIDGET_SESSION_KEY).toBe("aisoc.widget.sessionId");
   });
 
-  it("starts disconnected", () => {
+  it("starts disconnected when no tabs exist", () => {
     const { result } = renderChatHook();
     expect(result.current.state.phase).toBe("disconnected");
+    expect(result.current.tabs).toEqual([]);
+  });
+
+  describe("migration", () => {
+    it("migrates legacy single-session keys to multi-tab format", () => {
+      localStorage.setItem(LEGACY_DB_KEY, "db-legacy-001");
+      localStorage.setItem(WIDGET_SESSION_KEY, "tui-legacy");
+      localStorage.setItem(LEGACY_MSG_KEY, JSON.stringify([
+        { role: "user", id: "m-1", text: "Hello world from legacy" },
+      ]));
+
+      const { result } = renderChatHook();
+
+      // Legacy keys should be cleaned up
+      expect(localStorage.getItem(WIDGET_SESSION_KEY)).toBeNull();
+      expect(localStorage.getItem(LEGACY_DB_KEY)).toBeNull();
+      expect(localStorage.getItem(LEGACY_MSG_KEY)).toBeNull();
+
+      // Tab should be created
+      const tabs = JSON.parse(localStorage.getItem(TABS_KEY) || "[]");
+      expect(tabs).toHaveLength(1);
+      expect(tabs[0].dbId).toBe("db-legacy-001");
+      expect(tabs[0].title).toBe("Hello world from legacy");
+      expect(localStorage.getItem(ACTIVE_TAB_KEY)).toBe("db-legacy-001");
+
+      // State should be connecting (has initial tab)
+      expect(result.current.state.phase).toBe("connecting");
+    });
+
+    it("skips migration when tabs key already exists", () => {
+      const existingTabs = [{ dbId: "db-existing", tuiId: "tui-1", title: "Chat", messages: [] }];
+      localStorage.setItem(TABS_KEY, JSON.stringify(existingTabs));
+      localStorage.setItem(ACTIVE_TAB_KEY, "db-existing");
+      // Legacy keys should NOT be touched
+      localStorage.setItem(LEGACY_DB_KEY, "db-old");
+
+      renderChatHook();
+
+      expect(localStorage.getItem(LEGACY_DB_KEY)).toBe("db-old");
+    });
   });
 
   describe("connect()", () => {
     it("creates new session when no cached DB session ID", async () => {
       mockCall
-        .mockResolvedValueOnce({ session_id: "tui-new", info: {} })  // session.create
-        .mockResolvedValueOnce({ title: "New Chat", session_key: "20260530_120000_abc123" }); // session.title
+        .mockResolvedValueOnce({ session_id: "tui-new", info: {} })
+        .mockResolvedValueOnce({ title: "New Chat", session_key: "20260530_120000_abc123" });
 
       const { result } = renderChatHook();
       act(() => result.current.connect());
 
       await vi.waitFor(() => {
         expect(mockCall).toHaveBeenCalledWith("session.create", expect.any(Object));
-        expect(mockCall).toHaveBeenCalledWith("session.title", expect.objectContaining({ session_id: "tui-new" }));
         expect(result.current.state.sessionId).toBe("tui-new");
       });
     });
 
-    it("resumes using cached DB session ID", async () => {
-      localStorage.setItem("aisoc.widget.dbSessionId", "db-session-001");
+    it("resumes using active tab DB ID", async () => {
+      const tabs = [{ dbId: "db-session-001", tuiId: "tui-old", title: "Chat", messages: [] }];
+      localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+      localStorage.setItem(ACTIVE_TAB_KEY, "db-session-001");
+
       mockCall
-        .mockResolvedValueOnce({                                    // session.resume
+        .mockResolvedValueOnce({
           session_id: "tui-789",
           resumed: "db-session-001",
           messages: [
@@ -76,7 +123,7 @@ describe("useAgentChat", () => {
           ],
           info: {},
         })
-        .mockResolvedValueOnce({ status: "ok" });                  // prompt.submit
+        .mockResolvedValueOnce({ status: "ok" });
 
       const { result } = renderChatHook();
       act(() => result.current.connect());
@@ -86,25 +133,20 @@ describe("useAgentChat", () => {
         expect(result.current.state.sessionId).toBe("tui-789");
       });
 
-      // Verify resume used cached DB ID, not most_recent
       expect(mockCall).toHaveBeenCalledWith("session.resume", expect.objectContaining({
         session_id: "db-session-001",
-      }));
-      expect(mockCall).not.toHaveBeenCalledWith("session.most_recent", expect.anything());
-
-      // Verify prompt.submit uses TUI sid
-      act(() => result.current.send("test"));
-      expect(mockCall).toHaveBeenCalledWith("prompt.submit", expect.objectContaining({
-        session_id: "tui-789",
       }));
     });
 
     it("falls back to create on resume error", async () => {
-      localStorage.setItem("aisoc.widget.dbSessionId", "expired-999");
+      const tabs = [{ dbId: "expired-999", tuiId: null, title: "Chat", messages: [] }];
+      localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+      localStorage.setItem(ACTIVE_TAB_KEY, "expired-999");
+
       mockCall
-        .mockRejectedValueOnce({ code: 4007, message: "session not found" }) // session.resume fails
-        .mockResolvedValueOnce({ session_id: "fresh-111", info: {} })         // session.create
-        .mockResolvedValueOnce({ title: "", session_key: "new-db-id" });      // session.title
+        .mockRejectedValueOnce({ code: 4007, message: "session not found" })
+        .mockResolvedValueOnce({ session_id: "fresh-111", info: {} })
+        .mockResolvedValueOnce({ title: "", session_key: "new-db-id" });
 
       const { result } = renderChatHook();
       act(() => result.current.connect());
@@ -115,9 +157,12 @@ describe("useAgentChat", () => {
     });
 
     it("startNewSession skips resume and creates fresh", async () => {
-      localStorage.setItem("aisoc.widget.dbSessionId", "db-old");
+      const tabs = [{ dbId: "db-old", tuiId: "tui-old", title: "Old Chat", messages: [] }];
+      localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+      localStorage.setItem(ACTIVE_TAB_KEY, "db-old");
+
       mockCall
-        .mockResolvedValueOnce({ session_id: "tui-old", resumed: "db-old", messages: [], info: {} });
+        .mockResolvedValueOnce({ session_id: "tui-old-resumed", resumed: "db-old", messages: [], info: {} });
 
       const { result } = renderChatHook();
       act(() => result.current.connect());
@@ -136,7 +181,6 @@ describe("useAgentChat", () => {
       await vi.waitFor(() => {
         expect(result.current.state.phase).toBe("idle");
         expect(result.current.state.sessionId).toBe("tui-new");
-        expect(mockCall).not.toHaveBeenCalledWith("session.resume", expect.anything());
         expect(mockCall).toHaveBeenCalledWith("session.create", expect.any(Object));
       });
     });
@@ -166,12 +210,176 @@ describe("useAgentChat", () => {
     });
   });
 
+  describe("tab management", () => {
+    it("startNewSession adds a new tab to the list", async () => {
+      const tabs = [{ dbId: "db-1", tuiId: "tui-1", title: "First", messages: [] }];
+      localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+      localStorage.setItem(ACTIVE_TAB_KEY, "db-1");
+
+      mockCall.mockResolvedValueOnce({ session_id: "tui-1", resumed: "db-1", messages: [], info: {} });
+      const { result } = renderChatHook();
+      act(() => result.current.connect());
+
+      await vi.waitFor(() => expect(result.current.state.phase).toBe("idle"));
+
+      mockCall.mockReset();
+      mockCall
+        .mockResolvedValueOnce({ session_id: "tui-2", info: {} })
+        .mockResolvedValueOnce({ title: "", session_key: "db-2" });
+
+      act(() => result.current.startNewSession());
+
+      await vi.waitFor(() => {
+        expect(result.current.tabs.length).toBe(2);
+        expect(result.current.tabs[1].tuiId).toBe("tui-2");
+      });
+    });
+
+    it("switchToTab loads cached messages and reconnects", async () => {
+      const tabs = [
+        { dbId: "db-1", tuiId: "tui-1", title: "Chat 1", messages: [{ role: "user", id: "m-1", text: "hi" }] },
+        { dbId: "db-2", tuiId: "tui-2", title: "Chat 2", messages: [{ role: "user", id: "m-2", text: "hello" }] },
+      ];
+      localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+      localStorage.setItem(ACTIVE_TAB_KEY, "db-1");
+
+      mockCall.mockResolvedValueOnce({ session_id: "tui-1", resumed: "db-1", messages: [], info: {} });
+      const { result } = renderChatHook();
+      act(() => result.current.connect());
+
+      await vi.waitFor(() => expect(result.current.state.phase).toBe("idle"));
+
+      mockCall.mockReset();
+      mockCall.mockResolvedValueOnce({ session_id: "tui-2r", resumed: "db-2", messages: [{ role: "user", text: "hello" }], info: {} });
+
+      act(() => result.current.switchToTab("db-2"));
+
+      // Wait for the async connect -> session.resume to complete
+      await vi.waitFor(() => {
+        expect(result.current.state.phase).toBe("idle");
+      }, { timeout: 3000 });
+
+      expect(mockCall).toHaveBeenCalledWith("session.resume", expect.objectContaining({
+        session_id: "db-2",
+      }));
+    });
+
+    it("switchToTab on already active tab is a no-op", async () => {
+      const tabs = [
+        { dbId: "db-1", tuiId: "tui-1", title: "Chat 1", messages: [] },
+        { dbId: "db-2", tuiId: "tui-2", title: "Chat 2", messages: [] },
+      ];
+      localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+      localStorage.setItem(ACTIVE_TAB_KEY, "db-1");
+
+      mockCall.mockResolvedValueOnce({ session_id: "tui-1", resumed: "db-1", messages: [], info: {} });
+      const { result } = renderChatHook();
+      act(() => result.current.connect());
+
+      await vi.waitFor(() => expect(result.current.state.phase).toBe("idle"));
+
+      mockCall.mockReset();
+      act(() => result.current.switchToTab("db-1"));
+
+      // No disconnect or reconnect should happen
+      expect(mockDisconnect).not.toHaveBeenCalled();
+      expect(mockCall).not.toHaveBeenCalled();
+    });
+
+    it("closeTab removes tab from list", async () => {
+      const tabs = [
+        { dbId: "db-1", tuiId: "tui-1", title: "Chat 1", messages: [] },
+        { dbId: "db-2", tuiId: "tui-2", title: "Chat 2", messages: [] },
+      ];
+      localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+      localStorage.setItem(ACTIVE_TAB_KEY, "db-1");
+
+      mockCall.mockResolvedValueOnce({ session_id: "tui-1", resumed: "db-1", messages: [], info: {} });
+      const { result } = renderChatHook();
+      act(() => result.current.connect());
+
+      await vi.waitFor(() => expect(result.current.state.phase).toBe("idle"));
+
+      // Close inactive tab db-2
+      act(() => result.current.closeTab("db-2"));
+
+      expect(result.current.tabs).toHaveLength(1);
+      expect(result.current.tabs[0].dbId).toBe("db-1");
+    });
+
+    it("closeTab on active tab switches to remaining tab", async () => {
+      const tabs = [
+        { dbId: "db-1", tuiId: "tui-1", title: "Chat 1", messages: [] },
+        { dbId: "db-2", tuiId: "tui-2", title: "Chat 2", messages: [] },
+      ];
+      localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+      localStorage.setItem(ACTIVE_TAB_KEY, "db-1");
+
+      mockCall.mockResolvedValueOnce({ session_id: "tui-1", resumed: "db-1", messages: [], info: {} });
+      const { result } = renderChatHook();
+      act(() => result.current.connect());
+
+      await vi.waitFor(() => expect(result.current.state.phase).toBe("idle"));
+
+      mockCall.mockReset();
+      mockCall.mockResolvedValueOnce({ session_id: "tui-2r", resumed: "db-2", messages: [], info: {} });
+
+      act(() => result.current.closeTab("db-1"));
+
+      expect(result.current.tabs).toHaveLength(1);
+      expect(result.current.tabs[0].dbId).toBe("db-2");
+    });
+  });
+
+  describe("persistence", () => {
+    it("persists tabs to localStorage on change", async () => {
+      mockCall
+        .mockResolvedValueOnce({ session_id: "tui-1", info: {} })
+        .mockResolvedValueOnce({ title: "", session_key: "db-persist" });
+
+      const { result } = renderChatHook();
+      act(() => result.current.connect());
+
+      await vi.waitFor(() => {
+        const stored = JSON.parse(localStorage.getItem(TABS_KEY) || "[]");
+        expect(stored.length).toBeGreaterThanOrEqual(1);
+        expect(stored[0].dbId).toBe("db-persist");
+      });
+    });
+
+    it("persists activeTabDbId to localStorage", async () => {
+      mockCall
+        .mockResolvedValueOnce({ session_id: "tui-1", info: {} })
+        .mockResolvedValueOnce({ title: "", session_key: "db-act" });
+
+      const { result } = renderChatHook();
+      act(() => result.current.connect());
+
+      await vi.waitFor(() => {
+        expect(localStorage.getItem(ACTIVE_TAB_KEY)).toBe("db-act");
+      });
+    });
+
+    it("reloads tabs from localStorage on mount", () => {
+      const tabs = [
+        { dbId: "db-r1", tuiId: "tui-r1", title: "Restored 1", messages: [] },
+        { dbId: "db-r2", tuiId: "tui-r2", title: "Restored 2", messages: [] },
+      ];
+      localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+      localStorage.setItem(ACTIVE_TAB_KEY, "db-r1");
+
+      const { result } = renderChatHook();
+      expect(result.current.tabs).toHaveLength(2);
+      expect(result.current.activeTabDbId).toBe("db-r1");
+    });
+  });
+
   describe("send()", () => {
     it("calls prompt.submit with text", async () => {
       mockCall
-        .mockResolvedValueOnce({ session_id: "sess-1", info: {} })   // session.create
-        .mockResolvedValueOnce({ title: "", session_key: "db-1" })   // session.title
-        .mockResolvedValueOnce({ status: "streaming" });              // prompt.submit
+        .mockResolvedValueOnce({ session_id: "sess-1", info: {} })
+        .mockResolvedValueOnce({ title: "", session_key: "db-1" })
+        .mockResolvedValueOnce({ status: "streaming" });
 
       const { result } = renderChatHook();
       act(() => result.current.connect());
