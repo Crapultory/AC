@@ -43,14 +43,14 @@ function groupMessages(messages: ChatMessage[]): (ChatMessage | ToolMsg[])[] {
 import "./FloatingChat.css";
 
 const LONG_INPUT_THRESHOLD = 10000;
-type ConfirmAction = "close" | "new" | "switch" | "closeTab";
+type ConfirmAction = "new" | "switch" | "closeTab";
 
 export function FloatingChat() {
   const chat = useAgentChat();
   const [drawerOpen, setDrawerOpen] = useState(false);
   const [fullscreen, setFullscreen] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
-  const [confirmAction, setConfirmAction] = useState<ConfirmAction>("close");
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction>("new");
   const [pendingSwitchDbId, setPendingSwitchDbId] = useState<string | null>(null);
   const [pendingCloseDbId, setPendingCloseDbId] = useState<string | null>(null);
   const [input, setInput] = useState("");
@@ -82,18 +82,18 @@ export function FloatingChat() {
 
   const handleIconClick = useCallback(() => {
     if (drawerOpen) {
-      requestConfirmOrAction("close", () => setDrawerOpen(false));
+      setDrawerOpen(false);
       return;
     }
     setDrawerOpen(true);
     if (chat.state.phase === "disconnected") {
       chat.connect();
     }
-  }, [drawerOpen, chat, requestConfirmOrAction]);
+  }, [drawerOpen, chat]);
 
   const handleClose = useCallback(() => {
-    requestConfirmOrAction("close", () => setDrawerOpen(false));
-  }, [requestConfirmOrAction]);
+    setDrawerOpen(false);
+  }, []);
 
   const handleNew = useCallback(() => {
     requestConfirmOrAction("new", () => chat.startNewSession());
@@ -108,9 +108,7 @@ export function FloatingChat() {
     setShowConfirm(false);
     setPendingSwitchDbId(null);
     setPendingCloseDbId(null);
-    if (confirmAction === "new" || confirmAction === "switch" || confirmAction === "closeTab") return;
-    setDrawerOpen(false);
-  }, [confirmAction]);
+  }, []);
 
   const handleInterruptConfirm = useCallback(() => {
     setShowConfirm(false);
@@ -118,17 +116,15 @@ export function FloatingChat() {
       if (isStreaming) { chat.interrupt(); chat.disconnect(); }
       chat.closeTab(pendingCloseDbId);
       setPendingCloseDbId(null);
-    } else {
+    } else if (confirmAction === "new") {
       chat.interrupt();
       chat.disconnect();
-      if (confirmAction === "new") {
-        chat.startNewSession();
-      } else if (confirmAction === "switch" && pendingSwitchDbId) {
-        chat.switchToTab(pendingSwitchDbId);
-        setPendingSwitchDbId(null);
-      } else {
-        setDrawerOpen(false);
-      }
+      chat.startNewSession();
+    } else if (confirmAction === "switch" && pendingSwitchDbId) {
+      chat.interrupt();
+      chat.disconnect();
+      chat.switchToTab(pendingSwitchDbId);
+      setPendingSwitchDbId(null);
     }
   }, [chat, confirmAction, pendingSwitchDbId, pendingCloseDbId, isStreaming]);
 
@@ -233,21 +229,19 @@ export function FloatingChat() {
                 title={tab.title}
               >
                 <span className="widget-tab-title">{tab.title}</span>
-                {chat.tabs.length > 1 && (
-                  <span
-                    className="widget-tab-close"
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      setConfirmAction("closeTab");
-                      setPendingCloseDbId(tab.dbId);
-                      setShowConfirm(true);
-                    }}
-                    role="button"
-                    title="Close tab"
-                  >
-                    &times;
-                  </span>
-                )}
+                <span
+                  className="widget-tab-close"
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setConfirmAction("closeTab");
+                    setPendingCloseDbId(tab.dbId);
+                    setShowConfirm(true);
+                  }}
+                  role="button"
+                  title="Close tab"
+                >
+                  &times;
+                </span>
               </button>
             ))}
           </div>

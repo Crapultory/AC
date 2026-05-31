@@ -235,7 +235,7 @@ describe("useAgentChat", () => {
       });
     });
 
-    it("switchToTab loads cached messages and reconnects", async () => {
+    it("switchToTab loads cached messages lazily (no reconnect)", async () => {
       const tabs = [
         { dbId: "db-1", tuiId: "tui-1", title: "Chat 1", messages: [{ role: "user", id: "m-1", text: "hi" }] },
         { dbId: "db-2", tuiId: "tui-2", title: "Chat 2", messages: [{ role: "user", id: "m-2", text: "hello" }] },
@@ -250,18 +250,52 @@ describe("useAgentChat", () => {
       await vi.waitFor(() => expect(result.current.state.phase).toBe("idle"));
 
       mockCall.mockReset();
-      mockCall.mockResolvedValueOnce({ session_id: "tui-2r", resumed: "db-2", messages: [{ role: "user", text: "hello" }], info: {} });
 
+      // Switch tab — should NOT trigger any RPC call
       act(() => result.current.switchToTab("db-2"));
 
-      // Wait for the async connect -> session.resume to complete
-      await vi.waitFor(() => {
-        expect(result.current.state.phase).toBe("idle");
-      }, { timeout: 3000 });
+      expect(result.current.activeTabDbId).toBe("db-2");
+      // Cached messages loaded immediately, no reconnect
+      expect(result.current.state.messages.some(m => m.role === "user" && m.text === "hello")).toBe(true);
+      expect(result.current.state.phase).toBe("idle");
+      expect(mockCall).not.toHaveBeenCalled();
+    });
 
-      expect(mockCall).toHaveBeenCalledWith("session.resume", expect.objectContaining({
-        session_id: "db-2",
-      }));
+    it("send triggers reconnect after tab switch", async () => {
+      const tabs = [
+        { dbId: "db-1", tuiId: "tui-1", title: "Chat 1", messages: [] },
+        { dbId: "db-2", tuiId: "tui-2", title: "Chat 2", messages: [] },
+      ];
+      localStorage.setItem(TABS_KEY, JSON.stringify(tabs));
+      localStorage.setItem(ACTIVE_TAB_KEY, "db-1");
+
+      mockCall
+        .mockResolvedValueOnce({ session_id: "tui-1", resumed: "db-1", messages: [], info: {} })
+        .mockResolvedValueOnce({ title: "", session_key: "db-1" });
+      const { result } = renderChatHook();
+      act(() => result.current.connect());
+
+      await vi.waitFor(() => expect(result.current.state.phase).toBe("idle"));
+
+      // Clear all mock state from initial connect + persistDbId
+      mockCall.mockReset();
+
+      // Switch tab (lazy — no reconnect)
+      act(() => result.current.switchToTab("db-2"));
+      expect(mockCall).not.toHaveBeenCalled();
+
+      // Now send — should trigger reconnect + prompt.submit
+      mockCall
+        .mockResolvedValueOnce({ session_id: "tui-2r", resumed: "db-2", messages: [], info: {} })
+        .mockResolvedValueOnce({ status: "streaming" });
+
+      act(() => result.current.send("test message"));
+
+      await vi.waitFor(() => {
+        expect(mockCall).toHaveBeenCalledWith("session.resume", expect.objectContaining({
+          session_id: "db-2",
+        }));
+      }, { timeout: 3000 });
     });
 
     it("switchToTab on already active tab is a no-op", async () => {

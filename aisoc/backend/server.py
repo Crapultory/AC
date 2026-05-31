@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 import webbrowser
 
@@ -158,6 +159,19 @@ def start_server(
     embedded_chat: bool = False,
 ) -> None:
     """Start the AISOC backend server."""
+    
+    # use the profile directory as their working directory.
+    
+    try:
+        from hermes_constants import get_hermes_home
+        print(f"Using Hermes home: {get_hermes_home()}")
+        hermes_home = str(get_hermes_home())
+        os.chdir(hermes_home)
+        os.environ["HERMES_HOME"] = hermes_home
+        os.environ["HOME"] = hermes_home+"/home" # Some tools expect a "home" subdir for user-specific data.
+    except Exception as exc:
+        print(f"Warning: Failed to set TERMINAL_CWD from Hermes profile: {exc}")
+        
     if not is_loopback_host(host) and not allow_public:
         raise SystemExit(
             "Refusing non-loopback bind without --insecure. "

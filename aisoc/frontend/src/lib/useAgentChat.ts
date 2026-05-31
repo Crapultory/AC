@@ -258,6 +258,22 @@ export function useAgentChat(): {
     });
   }, [state.messages, snapshotCurrentTab]);
 
+  // Derive tab title from first user message (runs after render, so state is current)
+  useEffect(() => {
+    const dbId = activeTabDbIdRef.current;
+    if (!dbId) return;
+    setTabs(prev => {
+      const tab = prev.find(t => t.dbId === dbId);
+      if (!tab || tab.title !== "New Chat") return prev;
+      const firstUserMsg = state.messages.find(m => m.role === "user");
+      if (!firstUserMsg) return prev;
+      const newTitle = firstUserMsg.text.slice(0, 30) + (firstUserMsg.text.length > 30 ? "..." : "");
+      const updated = prev.map(t => t.dbId === dbId ? { ...t, title: newTitle } : t);
+      persistTabs(updated);
+      return updated;
+    });
+  }, [state.messages]);
+
   const rpcRef = useRef<AgentRpc | null>(null);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const unsubsRef = useRef<(() => void)[]>([]);
@@ -266,6 +282,9 @@ export function useAgentChat(): {
   const activeClarifyRef = useRef<ClarifyRequest | null>(null);
   const skipResumeRef = useRef(false);
   const skipResumeMessagesRef = useRef(false);
+  // When true, send() must reconnect (resume) before submitting the prompt.
+  // Set by switchToTab — cleared after successful resume in connect().
+  const needsReconnectRef = useRef(false);
 
   sessionIdRef.current = state.sessionId;
   activeApprovalRef.current = state.activeApproval;
@@ -342,21 +361,6 @@ export function useAgentChat(): {
         }
         return { ...s, phase: "idle", messages: msgs };
       });
-      // Derive tab title from first user message
-      const activeDbId = activeTabDbIdRef.current;
-      if (activeDbId) {
-        setTabs(prev => {
-          const tab = prev.find(t => t.dbId === activeDbId);
-          if (!tab || tab.title !== "New Chat") return prev;
-          const firstUserMsg = stateRef.current.messages.find(m => m.role === "user");
-          const newTitle = firstUserMsg
-            ? firstUserMsg.text.slice(0, 30) + (firstUserMsg.text.length > 30 ? "..." : "")
-            : "Chat";
-          const updated = prev.map(t => t.dbId === activeDbId ? { ...t, title: newTitle } : t);
-          persistTabs(updated);
-          return updated;
-        });
-      }
     });
 
     unsub("thinking.delta", () => { resetIdleTimer(); });
@@ -465,6 +469,7 @@ export function useAgentChat(): {
               } else {
                 setState({ phase: "idle", sessionId: tuiSid, messages: trimMessages(msgs), activeApproval: null, activeClarify: null, error: null });
               }
+              needsReconnectRef.current = false;
               resetIdleTimer();
               return;
             } catch {
@@ -493,6 +498,7 @@ export function useAgentChat(): {
         });
 
         setState({ phase: "idle", sessionId: tuiSid, messages: [], activeApproval: null, activeClarify: null, error: null });
+        needsReconnectRef.current = false;
         resetIdleTimer();
 
         // Fetch real DB ID and update the tab
@@ -524,18 +530,88 @@ export function useAgentChat(): {
 
   const send = useCallback((text: string) => {
     if (!text.trim()) return;
+
+    const doSubmit = () => {
+      const sid = sessionIdRef.current;
+      rpcRef.current?.call("prompt.submit", { session_id: sid, text }).catch((err) => {
+        setState((s) => ({
+          ...s,
+          phase: "idle",
+          messages: trimMessages([...s.messages, { role: "agent", id: nextMsgId(), text: `Error: ${err.message || "send failed"}`, done: true }]),
+        }));
+      });
+    };
+
+    if (needsReconnectRef.current) {
+      needsReconnectRef.current = false;
+      const userMsg: ChatMessage = { role: "user", id: nextMsgId(), text };
+      setState((s) => ({ ...s, messages: trimMessages([...s.messages, userMsg]), phase: "streaming" }));
+      resetIdleTimer();
+      // Disconnect old, reconnect and resume target session, then submit
+      disconnectRef.current();
+      skipResumeMessagesRef.current = true;
+      skipResumeRef.current = false;
+      setState((s) => ({ ...s, phase: "connecting", error: null }));
+      const rpc = new AgentRpc();
+      rpcRef.current = rpc;
+      const url = buildWsUrl();
+      rpc.connect(url).then(async () => {
+        subscribe(rpc);
+        const cachedDbId = activeTabDbIdRef.current;
+        if (cachedDbId) {
+          try {
+            const res = await rpc.call("session.resume", { session_id: cachedDbId, cols: 80 });
+            const tuiSid = res.session_id;
+            sessionIdRef.current = tuiSid;
+            const resumedDbId = res.resumed || cachedDbId;
+            setTabs(prev => {
+              const updated = prev.map(t =>
+                t.dbId === cachedDbId ? { ...t, tuiId: tuiSid, dbId: resumedDbId } : t
+              );
+              if (resumedDbId !== cachedDbId) {
+                activeTabDbIdRef.current = resumedDbId;
+                persistActiveTabDbId(resumedDbId);
+              }
+              persistTabs(updated);
+              return updated;
+            });
+            setState((s) => ({ ...s, phase: "idle", sessionId: tuiSid }));
+            resetIdleTimer();
+            doSubmit();
+            return;
+          } catch {
+            // Resume failed — fall through to create
+          }
+        }
+        const res = await rpc.call("session.create", { cols: 80 });
+        const tuiSid = res.session_id;
+        sessionIdRef.current = tuiSid;
+        setState({ phase: "idle", sessionId: tuiSid, messages: [], activeApproval: null, activeClarify: null, error: null });
+        resetIdleTimer();
+        const realDbId = await persistDbId(rpc, tuiSid);
+        if (realDbId) {
+          setTabs(prev => {
+            const updated = prev.map(t =>
+              t.dbId === cachedDbId ? { ...t, dbId: realDbId, tuiId: tuiSid } : t
+            );
+            persistTabs(updated);
+            return updated;
+          });
+          activeTabDbIdRef.current = realDbId;
+          persistActiveTabDbId(realDbId);
+        }
+        doSubmit();
+      }).catch((err) => {
+        setState((s) => ({ ...s, phase: "disconnected", error: err.message || "Connection failed" }));
+      });
+      return;
+    }
+
     const userMsg: ChatMessage = { role: "user", id: nextMsgId(), text };
     setState((s) => ({ ...s, messages: trimMessages([...s.messages, userMsg]), phase: "streaming" }));
     resetIdleTimer();
-    const sid = sessionIdRef.current;
-    rpcRef.current?.call("prompt.submit", { session_id: sid, text }).catch((err) => {
-      setState((s) => ({
-        ...s,
-        phase: "idle",
-        messages: trimMessages([...s.messages, { role: "agent", id: nextMsgId(), text: `Error: ${err.message || "send failed"}`, done: true }]),
-      }));
-    });
-  }, [resetIdleTimer]);
+    doSubmit();
+  }, [resetIdleTimer, subscribe]);
 
   const respondApproval = useCallback((accept: boolean) => {
     const approval = activeApprovalRef.current;
@@ -575,22 +651,20 @@ export function useAgentChat(): {
     disconnectRef.current();
     activeTabDbIdRef.current = null;
     skipResumeRef.current = true;
+    needsReconnectRef.current = false;
     setState({ phase: "disconnected", sessionId: null, messages: [], activeApproval: null, activeClarify: null, error: null });
     setTimeout(() => connect(), 100);
   }, [connect, snapshotCurrentTab]);
 
   const switchToTab = useCallback((dbId: string) => {
-    // No-op if clicking the already active tab
     if (activeTabDbIdRef.current === dbId) return;
 
-    // Snapshot current tab
+    // Snapshot current tab before leaving
     setTabs(prev => {
       const updated = snapshotCurrentTab(prev);
       persistTabs(updated);
       return updated;
     });
-
-    disconnectRef.current();
 
     const targetTab = tabsRef.current.find(t => t.dbId === dbId);
     if (!targetTab) return;
@@ -598,21 +672,17 @@ export function useAgentChat(): {
     activeTabDbIdRef.current = dbId;
     persistActiveTabDbId(dbId);
 
-    // Optimistically load cached messages
+    // Load cached messages immediately, mark as needing reconnect on next send
     setState({
-      phase: "connecting",
+      phase: "idle",
       sessionId: targetTab.tuiId,
       messages: targetTab.messages,
       activeApproval: null,
       activeClarify: null,
       error: null,
     });
-
-    // Tell connect() not to replace messages from server response
-    skipResumeMessagesRef.current = true;
-    skipResumeRef.current = false;
-    setTimeout(() => connect(), 100);
-  }, [connect, snapshotCurrentTab]);
+    needsReconnectRef.current = true;
+  }, [snapshotCurrentTab]);
 
   const closeTab = useCallback((dbId: string) => {
     setTabs(prev => {
@@ -621,24 +691,21 @@ export function useAgentChat(): {
 
       if (activeTabDbIdRef.current === dbId) {
         if (updated.length > 0) {
+          // Lazy switch to most recent remaining tab — no reconnect yet
           const newActive = updated[updated.length - 1];
           activeTabDbIdRef.current = newActive.dbId;
           persistActiveTabDbId(newActive.dbId);
-          // Schedule switch to new active tab
-          setTimeout(() => {
-            disconnectRef.current();
-            setState({
-              phase: "connecting",
-              sessionId: newActive.tuiId,
-              messages: newActive.messages,
-              activeApproval: null,
-              activeClarify: null,
-              error: null,
-            });
-            skipResumeRef.current = false;
-            connect();
-          }, 100);
+          setState({
+            phase: "idle",
+            sessionId: newActive.tuiId,
+            messages: newActive.messages,
+            activeApproval: null,
+            activeClarify: null,
+            error: null,
+          });
+          needsReconnectRef.current = true;
         } else {
+          // Last tab removed — disconnect and clear
           activeTabDbIdRef.current = null;
           persistActiveTabDbId(null);
           disconnectRef.current();
@@ -648,7 +715,7 @@ export function useAgentChat(): {
 
       return updated;
     });
-  }, [connect]);
+  }, []);
 
   return {
     state,

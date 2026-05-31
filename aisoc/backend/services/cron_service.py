@@ -58,6 +58,7 @@ def get_runtime_profile_name() -> str:
 
     try:
         raw = str(profiles_mod.get_active_profile_name() or "default").strip() or "default"
+        # print(f"current active profile: '{raw}'")
     except Exception:
         return "default"
 
