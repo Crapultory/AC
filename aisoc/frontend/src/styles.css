@@ -1100,6 +1100,7 @@ select:focus {
   min-height: 0;
   max-height: 100%;
   overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 4px;
 }
 
@@ -1127,6 +1128,8 @@ select:focus {
 }
 
 .sessions-history-item-top strong {
+  flex: 1;
+  min-width: 0;
   font-size: 14px;
   line-height: 1.2;
   overflow: hidden;
@@ -1157,6 +1160,7 @@ select:focus {
 }
 
 .sessions-history-actions {
+  flex-shrink: 0;
   display: flex;
   align-items: center;
   gap: 6px;
@@ -1178,6 +1182,7 @@ select:focus {
 
 .sessions-history-list .clickable-card {
   padding: 10px 10px;
+  overflow: hidden;
 }
 
 .session-delete-button {
@@ -1344,7 +1349,8 @@ select:focus {
   margin-top: 6px;
   flex: 1;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overflow-x: hidden;
   padding-right: 4px;
 }
 
@@ -1366,9 +1372,13 @@ select:focus {
   align-items: center;
   justify-content: space-between;
   gap: calc(8px * var(--density-scale));
+  min-width: 0;
+  overflow: hidden;
 }
 
 .cron-job-card-head strong {
+  flex: 1;
+  min-width: 0;
   font-size: calc(16px * var(--density-scale));
   line-height: 1.2;
   overflow: hidden;
@@ -1377,12 +1387,14 @@ select:focus {
 }
 
 .cron-status.running {
+  flex-shrink: 0;
   color: #7dffcb;
   border-color: rgba(16, 252, 160, 0.5);
   background: rgba(13, 56, 40, 0.52);
 }
 
 .cron-status.paused {
+  flex-shrink: 0;
   color: #ffd7e1;
   border-color: rgba(255, 101, 136, 0.42);
   background: rgba(58, 22, 33, 0.5);

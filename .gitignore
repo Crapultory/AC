@@ -93,7 +93,6 @@ hermes_cli/scripts/
 
 server.pid
 server-stoped
-web_dist/
 docs/superpowers/*
 # Working directory for the Hermes Agent's session state (~/.hermes/ at runtime;
 # also created in-repo when an agent operates in this checkout). Plans, audit
