@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import { StateBlock } from "../components/StateBlock";
 import { fetchJSON } from "../lib/api";
+import { type SessionMessage, type SessionMessagesResponse, formatMessagePayload } from "../lib/messages";
 
 type CronJob = {
   id?: string;
@@ -45,16 +46,6 @@ type CronHistoryItem = {
   messages?: number;
   tokens?: number;
   status?: string;
-};
-
-type SessionDetailPayload = {
-  session_id: string;
-  messages?: Array<{
-    role?: string;
-    content?: unknown;
-    tool_name?: string;
-    timestamp?: number | string;
-  }>;
 };
 
 const CRON_EDITABLE_KEYS = [
@@ -163,16 +154,6 @@ function formatRepeat(job: CronJob): string {
   return `${completed} / ${times === null || times <= 0 ? "∞" : times}`;
 }
 
-function formatSessionMessageContent(content: unknown): string {
-  if (content === null || content === undefined) return "(empty)";
-  if (typeof content === "string") return content.trim() ? content : "(empty)";
-  try {
-    return JSON.stringify(content, null, 2);
-  } catch {
-    return String(content);
-  }
-}
-
 function isJobPaused(job: CronJob): boolean {
   if (typeof job.paused === "boolean") return job.paused;
   if (typeof job.enabled === "boolean") return !job.enabled;
@@ -228,7 +209,8 @@ export function CronPage() {
   const [sessionModalOpen, setSessionModalOpen] = useState(false);
   const [sessionLoading, setSessionLoading] = useState(false);
   const [sessionError, setSessionError] = useState("");
-  const [sessionDetail, setSessionDetail] = useState<SessionDetailPayload | null>(null);
+  const [sessionMessages, setSessionMessages] = useState<SessionMessage[]>([]);
+  const [expandedMessages, setExpandedMessages] = useState<Record<string, boolean>>({});
   const detailRequestIdRef = useRef(0);
   const historyRequestIdRef = useRef(0);
   const selectedJobIdRef = useRef("");
@@ -462,12 +444,13 @@ export function CronPage() {
     setSessionModalOpen(true);
     setSessionLoading(true);
     setSessionError("");
-    setSessionDetail(null);
+    setSessionMessages([]);
+    setExpandedMessages({});
     try {
-      const payload = await fetchJSON<SessionDetailPayload>(
-        `/api/sessions/${encodeURIComponent(sessionId)}/detail`,
+      const payload = await fetchJSON<SessionMessagesResponse>(
+        `/api/sessions/${encodeURIComponent(sessionId)}/messages`,
       );
-      setSessionDetail(payload);
+      setSessionMessages(payload.messages || []);
     } catch {
       setSessionError("Failed to load session messages.");
     } finally {
@@ -923,32 +906,60 @@ export function CronPage() {
           </div>
           <div className="cron-session-modal-body">
             {sessionLoading ? (
-              <StateBlock kind="loading" title="Loading Session Messages" message="Fetching /api/sessions/{session_id}/detail." />
+              <StateBlock kind="loading" title="Loading Session Messages" message="Fetching session messages..." />
             ) : null}
             {sessionError ? (
               <StateBlock kind="error" title="Session Detail Unavailable" message={sessionError} />
             ) : null}
-            {!sessionLoading && !sessionError && sessionDetail && (sessionDetail.messages || []).length === 0 ? (
-              <StateBlock kind="empty" title="No Messages" message="No messages were returned for this session." />
-            ) : null}
-            {!sessionLoading && !sessionError && sessionDetail && (sessionDetail.messages || []).length > 0 ? (
-              <div className="detail-messages cron-session-messages">
-                {(sessionDetail.messages || []).map((message, index) => (
-                  <div
-                    key={`${message.role || "msg"}-${String(message.timestamp || index)}-${index}`}
-                    className="detail-message"
-                  >
-                    <p>
-                      <strong>
-                        {message.role || "unknown"}
-                        {message.tool_name ? ` (${message.tool_name})` : ""}
-                      </strong>
-                    </p>
-                    <pre>{formatSessionMessageContent(message.content)}</pre>
-                  </div>
-                ))}
-              </div>
-            ) : null}
+            {!sessionLoading && !sessionError && (() => {
+              const visible = sessionMessages.filter((msg) => (msg.role || "").toLowerCase() !== "system");
+              if (visible.length === 0) {
+                return <StateBlock kind="empty" title="No Messages" message="No messages were returned for this session." />;
+              }
+              const rendered = visible.map((msg) => ({ msg, rendered: formatMessagePayload(msg) }));
+              return (
+                <div className="detail-messages sessions-message-stream">
+                  {rendered.map(({ msg, rendered }, index) => (
+                    <div
+                      key={`${msg.id || "msg"}-${msg.timestamp || "t"}-${index}`}
+                      className="detail-message"
+                    >
+                      <p>
+                        <strong>{msg.role || "unknown"}</strong>
+                      </p>
+                      {(() => {
+                        const role = String(msg.role || "").toLowerCase();
+                        const messageKey = `session:${msg.id || index}:${msg.timestamp || ""}`;
+                        const collapseLimit = role === "tool" ? 120 : role === "user" ? 500 : 0;
+                        const shouldCollapse = collapseLimit > 0 && rendered.length > collapseLimit;
+                        const isExpanded = Boolean(expandedMessages[messageKey]);
+                        const preview = `${rendered.slice(0, collapseLimit)}...`;
+                        return (
+                          <>
+                            <pre>{shouldCollapse && !isExpanded ? preview : rendered}</pre>
+                            {shouldCollapse ? (
+                              <button
+                                type="button"
+                                className="ghost-button tool-message-toggle"
+                                onClick={() =>
+                                  setExpandedMessages((current) => ({
+                                    ...current,
+                                    [messageKey]: !current[messageKey],
+                                  }))
+                                }
+                                aria-label={isExpanded ? "Collapse message" : "Expand message"}
+                              >
+                                {isExpanded ? "Collapse" : "Expand"}
+                              </button>
+                            ) : null}
+                          </>
+                        );
+                      })()}
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
           </div>
         </div>
       </div>

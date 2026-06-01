@@ -304,7 +304,7 @@ describe("CronPage behavior", () => {
       if (url === "/api/cron/jobs/b/history") {
         return bDeferred.promise as Promise<unknown>;
       }
-      if (url === "/api/sessions/cron_b_session/detail") {
+      if (url === "/api/sessions/cron_b_session/messages") {
         return Promise.resolve({
           session_id: "cron_b_session",
           messages: [{ role: "assistant", content: "hello from cron_b" }],
