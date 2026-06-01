@@ -78,8 +78,8 @@ const CRON_EDITABLE_KEYS = [
 
 const DEFAULT_CRON_CREATE_PAYLOAD = {
   name: "daily-test-msg",
-  prompt: "向当前对话发送一条测试消息，内容为：这是一条每日测试消息。",
-  schedule: "* 10 * * *",
+  prompt: "向当前对话发送一条测试消息，内容为：这是一条每日测试消息。（这是一个示例定时任务，创建后请根据需要修改名称、提示词、调度等信息，默认每天10:11）",
+  schedule: "11 10 * * *",
   deliver: "slack",
   skills: [],
   skill: null,

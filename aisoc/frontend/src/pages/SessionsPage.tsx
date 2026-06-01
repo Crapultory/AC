@@ -374,9 +374,10 @@ export function SessionsPage() {
                     const role = String(msg.role || "").toLowerCase();
                     const messageKey = `${selectedSessionId}:${msg.id || index}:${msg.timestamp || ""}`;
                     const isToolMessage = role === "tool";
-                    const shouldCollapse = isToolMessage && rendered.length > 120;
+                    const collapseLimit = isToolMessage ? 120 : role === "user" ? 600 : 0;
+                    const shouldCollapse = collapseLimit > 0 && rendered.length > collapseLimit;
                     const isExpanded = Boolean(expandedToolMessages[messageKey]);
-                    const preview = `${rendered.slice(0, 120)}...`;
+                    const preview = `${rendered.slice(0, collapseLimit)}...`;
                     return (
                       <>
                         <pre>{shouldCollapse && !isExpanded ? preview : rendered}</pre>
