@@ -171,9 +171,7 @@ export function SessionsPage() {
   const detailRequestIdRef = useRef(0);
   const visibleMessages = messages.filter((msg) => (msg.role || "").toLowerCase() !== "system");
   const renderedMessages = visibleMessages
-    .slice(-20)
-    .map((msg) => ({ msg, rendered: formatMessagePayload(msg) }))
-    .filter((entry) => entry.rendered !== "(no textual content)");
+    .map((msg) => ({ msg, rendered: formatMessagePayload(msg) }));
 
   async function loadPage(nextOffset: number, firstLoad = false) {
     if (firstLoad) setLoading(true);

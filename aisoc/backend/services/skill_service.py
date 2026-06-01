@@ -7,6 +7,8 @@ from typing import Any
 
 from hermes_cli.config import load_config
 
+_MAX_APPENDIX_SIZE = 2 * 1024 * 1024  # 2 MB read limit for appendix files
+
 
 class SkillNotFoundError(Exception):
     """Raised when a skill cannot be resolved by name."""
@@ -147,6 +149,10 @@ def get_skill_appendix_content(skill_name: str, appendix_path: str) -> dict[str,
         raise FileNotFoundError(f"Appendix file '{appendix_path}' not found.")
     if target_path.name == "SKILL.md":
         raise ValueError("SKILL.md is not an appendix file.")
+    if target_path.stat().st_size > _MAX_APPENDIX_SIZE:
+        raise ValueError(
+            f"Appendix file too large ({target_path.stat().st_size} bytes, max {_MAX_APPENDIX_SIZE})."
+        )
     try:
         content = target_path.read_text(encoding="utf-8")
     except UnicodeDecodeError as exc:

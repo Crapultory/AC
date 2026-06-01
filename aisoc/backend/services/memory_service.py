@@ -89,9 +89,15 @@ def _resolve_memory_file(name: str) -> Path:
         raise HTTPException(status_code=400, detail="Memory file name is required")
     if "/" in candidate or "\\" in candidate:
         raise HTTPException(status_code=400, detail="Path segments are not allowed")
+    if ".." in candidate.split("/") or ".." in candidate.split("\\"):
+        raise HTTPException(status_code=400, detail="Path traversal is not allowed")
     if not candidate.endswith(".md"):
         raise HTTPException(status_code=400, detail="Only .md memory files are supported")
-    return _memories_dir() / candidate
+    resolved = (_memories_dir() / candidate).resolve()
+    allowed_root = _memories_dir().resolve()
+    if not str(resolved).startswith(str(allowed_root)):
+        raise HTTPException(status_code=400, detail="Access denied: path escapes memory directory")
+    return resolved
 
 
 def read_memory_file(name: str) -> dict[str, Any]:
