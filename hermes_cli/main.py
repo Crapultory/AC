@@ -11237,6 +11237,42 @@ def cmd_aisoc(args):
         _kill_stale_aisoc_processes()
         sys.exit(0 if not _find_stale_aisoc_pids() else 1)
 
+    module = getattr(args, "module", "server") or "server"
+    if module == "a2a":
+        invalid_server_flags = []
+        if getattr(args, "tui", False):
+            invalid_server_flags.append("--tui")
+        if getattr(args, "skip_build", False):
+            invalid_server_flags.append("--skip-build")
+        if getattr(args, "no_open", False):
+            invalid_server_flags.append("--no-open")
+        if invalid_server_flags:
+            print(
+                "A2A module does not support: " + ", ".join(invalid_server_flags),
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+    else:
+        invalid_a2a_flags = []
+        if getattr(args, "name", None):
+            invalid_a2a_flags.append("--name")
+        if getattr(args, "description", None):
+            invalid_a2a_flags.append("--description")
+        if getattr(args, "card", None):
+            invalid_a2a_flags.append("--card")
+        if getattr(args, "db", None):
+            invalid_a2a_flags.append("--db")
+        if getattr(args, "streaming", False):
+            invalid_a2a_flags.append("--streaming")
+        if getattr(args, "workers", 4) != 4:
+            invalid_a2a_flags.append("--workers")
+        if invalid_a2a_flags:
+            print(
+                "Server module does not support: " + ", ".join(invalid_a2a_flags),
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
+
     try:
         import fastapi  # noqa: F401
         import uvicorn  # noqa: F401
@@ -11250,6 +11286,22 @@ def cmd_aisoc(args):
         )
         print(f"Import error: {e}")
         sys.exit(1)
+
+    if module == "a2a":
+        from aisoc.backend.a2a_server import start_a2a_server
+
+        start_a2a_server(
+            host=args.host,
+            port=args.port,
+            allow_public=getattr(args, "insecure", False),
+            name=getattr(args, "name", None),
+            description=getattr(args, "description", None),
+            card_path=getattr(args, "card", None),
+            db_path=getattr(args, "db", None),
+            streaming=getattr(args, "streaming", False),
+            workers=getattr(args, "workers", 4),
+        )
+        return
 
     aisoc_web_dir = PROJECT_ROOT / "aisoc" / "frontend"
     if "AISOC_WEB_DIST" not in os.environ and not getattr(args, "skip_build", False):
@@ -14559,6 +14611,14 @@ Examples:
         description="Launch the AISOC console for chat operations and runtime controls",
     )
     aisoc_parser.add_argument(
+        "--module",
+        "--model",
+        dest="module",
+        choices=("server", "a2a"),
+        default="server",
+        help="AISOC service module to start (default: server)",
+    )
+    aisoc_parser.add_argument(
         "--port", type=int, default=9120, help="Port (default 9120)"
     )
     aisoc_parser.add_argument(
@@ -14597,6 +14657,33 @@ Examples:
         "--status",
         action="store_true",
         help="List running hermes aisoc processes and exit",
+    )
+    aisoc_parser.add_argument(
+        "--name",
+        help="A2A module: override AgentCard name",
+    )
+    aisoc_parser.add_argument(
+        "--description",
+        help="A2A module: override AgentCard description",
+    )
+    aisoc_parser.add_argument(
+        "--card",
+        help="A2A module: load AgentCard JSON from a file",
+    )
+    aisoc_parser.add_argument(
+        "--db",
+        help="A2A module: persistent task database path",
+    )
+    aisoc_parser.add_argument(
+        "--streaming",
+        action="store_true",
+        help="A2A module: reserve streaming capability flag",
+    )
+    aisoc_parser.add_argument(
+        "--workers",
+        type=int,
+        default=4,
+        help="A2A module: maximum worker count (default 4)",
     )
     aisoc_parser.set_defaults(func=cmd_aisoc)
 

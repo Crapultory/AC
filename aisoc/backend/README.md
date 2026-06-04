@@ -1,13 +1,17 @@
 # AISOC Backend (FastAPI)
 
 ## 1. 模块定位
-AISOC Backend 是 `hermes aisoc` 的 API 服务层，负责：
+AISOC Backend 是 `hermes aisoc` 的服务层。当前以 `server` 模块为主，后续扩展 `a2a` 模块后，同一入口将根据 `--module` 参数启动不同服务：
+- `server`：当前 Web Console / FastAPI API / Chat TUI PTY-WebSocket 网关
+- `a2a`：规划中的 A2A (Agent-to-Agent) 协议服务
+
+`server` 模块当前负责：
 - 统一认证（Bearer Token）
 - 会话、Cron、Skill、Memory、Logs、Overview 数据读取/写入
 - Chat TUI 的 PTY/WebSocket 网关
 - 托管前端静态资源（`web_dist`）
 
-核心入口：`aisoc/backend/server.py`
+当前核心入口：`aisoc/backend/server.py`
 
 ---
 
@@ -17,16 +21,25 @@ AISOC Backend 是 `hermes aisoc` 的 API 服务层，负责：
 在仓库根目录执行：
 
 ```bash
-hermes aisoc --port 9120 --tui
+hermes aisoc --module server --port 9120 --tui
 ```
 
 常用参数：
+- `--module server|a2a`：选择启动模块，默认 `server`
 - `--port 9120`：服务端口（默认 9120）
 - `--host 127.0.0.1`：监听地址（默认 loopback）
-- `--no-open`：不自动打开浏览器
+- `--no-open`：不自动打开浏览器，仅 `server` 模块使用
 - `--insecure`：允许非 loopback 绑定（有安全风险）
-- `--tui`：启用嵌入式 chat PTY/WS 能力
-- `--skip-build`：跳过前端构建（需已有 `backend/web_dist`）
+- `--tui`：启用嵌入式 chat PTY/WS 能力，仅 `server` 模块使用
+- `--skip-build`：跳过前端构建（需已有 `backend/web_dist`），仅 `server` 模块使用
+
+未来 A2A 模块启动形态：
+
+```bash
+hermes aisoc --module a2a --host 127.0.0.1 --port 9086
+```
+
+A2A 模块默认允许直接连接，不再要求 `Authorization` 头或 `token` 查询参数。
 
 ### 2.2 直接以 Python 启动（调试后端）
 
