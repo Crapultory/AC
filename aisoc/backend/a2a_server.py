@@ -22,6 +22,10 @@ import uvicorn
 from aisoc.backend.a2a import HermesA2AExecutor
 from aisoc.backend.config import AisocSettings, is_loopback_host, load_aisoc_settings
 
+A2A_RPC_PATH = os.getenv("A2A_BASE_PATH", "/a2a")
+A2A_AGENT_CARD_PATH = f"{A2A_RPC_PATH}/.well-known/agent-card.json"
+print(f"A2A RPC path: {A2A_RPC_PATH}")
+
 
 def build_agent_card(
     settings: AisocSettings,
@@ -36,7 +40,7 @@ def build_agent_card(
         data = json.loads(Path(card_path).read_text(encoding="utf-8"))
         return AgentCard(**data)
 
-    rpc_url = f"http://{settings.host}:{settings.port}"
+    rpc_url = f"http://{settings.host}:{settings.port}{A2A_RPC_PATH}"
     return AgentCard(
         name=name or "Hermes Agent",
         description=description or "Hermes AISOC A2A module.",
@@ -100,8 +104,11 @@ def create_a2a_app(
     )
     add_a2a_routes_to_fastapi(
         app,
-        agent_card_routes=create_agent_card_routes(agent_card),
-        jsonrpc_routes=create_jsonrpc_routes(request_handler, rpc_url="/"),
+        agent_card_routes=[
+            # *create_agent_card_routes(agent_card),
+            *create_agent_card_routes(agent_card, card_url=A2A_AGENT_CARD_PATH),
+        ],
+        jsonrpc_routes=create_jsonrpc_routes(request_handler, rpc_url=A2A_RPC_PATH),
     )
     return app
 

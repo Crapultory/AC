@@ -244,7 +244,7 @@ async def test_a2a_message_send_task_lifecycle() -> None:
     try:
         card = await bundle.http_client.get("http://testserver/.well-known/agent-card.json")
         assert card.status_code == 200
-        assert card.json()["supportedInterfaces"][0]["url"] == "http://127.0.0.1:9086"
+        assert card.json()["supportedInterfaces"][0]["url"] == "http://127.0.0.1:9086/test"
 
         task = await _send_text(bundle.client, "hello world")
         assert task.status.state == TaskState.TASK_STATE_SUBMITTED
@@ -405,6 +405,21 @@ async def test_a2a_agent_card_advertises_streaming_when_enabled() -> None:
         card = await bundle.http_client.get("http://testserver/.well-known/agent-card.json")
         assert card.status_code == 200
         assert card.json()["capabilities"]["streaming"] is True
+    finally:
+        await bundle.close()
+
+
+@pytest.mark.asyncio
+async def test_a2a_agent_card_is_available_under_rpc_prefix() -> None:
+    bundle = await _task_bundle(lambda session_id: _StreamingAgent(), streaming=True)
+    try:
+        card = await bundle.http_client.get(
+            "http://testserver/test/.well-known/agent-card.json"
+        )
+        assert card.status_code == 200
+        payload = card.json()
+        assert payload["capabilities"]["streaming"] is True
+        assert payload["supportedInterfaces"][0]["url"].endswith("/test")
     finally:
         await bundle.close()
 

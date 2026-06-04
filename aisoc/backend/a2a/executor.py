@@ -127,6 +127,7 @@ def _profile_agent_kwargs(session_id: str) -> dict[str, object]:
         agent_kwargs["fallback_model"] = runtime["fallback_model"]
 
     agent_kwargs["_a2a_runtime_source"] = runtime.get("source", "config")
+    agent_kwargs["enabled_toolsets"] = ["hermes-cli"]
     return agent_kwargs
 
 
