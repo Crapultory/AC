@@ -21,34 +21,41 @@ DEFAULT_EXTCLI_OUTPUT_PATH = Path("/tmp/extcli_output")
 _FAST_TURN_JOIN_TIMEOUT_SECONDS = 0.01
 
 
-class _ExtCliOutputAdapter:
+class ExtCliOutputAdapter:
     def __init__(self, output: TextIO):
         self._output = output
         self._lock = threading.Lock()
 
     def write(self, text: str) -> None:
         with self._lock:
-            self._output.write(text)
-            flush = getattr(self._output, "flush", None)
-            if callable(flush):
-                flush()
+            try:
+                self._output.write(text)
+                flush = getattr(self._output, "flush", None)
+                if callable(flush):
+                    flush()
+            except OSError:
+                return
 
     def write_line(self, text: str = "") -> None:
         with self._lock:
-            self._output.write(text + "\n")
-            flush = getattr(self._output, "flush", None)
-            if callable(flush):
-                flush()
+            try:
+                self._output.write(text + "\n")
+                flush = getattr(self._output, "flush", None)
+                if callable(flush):
+                    flush()
+            except OSError:
+                return
 
-    def emit(self, target: str, event_type: str, message: str, *, session_id: str | None = None) -> None:
+    def emit(
+        self,
+        source: str,
+        event_type: str,
+        content: str,
+        *,
+        session_id: str | None = None,
+    ) -> None:
         del session_id
-        if event_type == "error":
-            self.write_line(f"error: {message}")
-            return
-        if event_type == "busy":
-            self.write_line(f"{target} busy: {message}")
-            return
-        self.write_line(message)
+        self.write_line(f"{source}.{event_type}: {content}")
 
 
 class ExtCliSessionRouter:
@@ -98,32 +105,32 @@ def _run_agent_turn(
     agent: object,
     user_message: str,
     history: list[dict[str, str]],
-    output_adapter: _ExtCliOutputAdapter,
+    output_adapter: ExtCliOutputAdapter,
 ) -> str:
     streamed_chunks: list[str] = []
-    ai_prefix_written = False
-    ai_line_open = False
 
     def _stream_callback(delta: str | None) -> None:
-        nonlocal ai_prefix_written, ai_line_open
         if delta is None:
-            if ai_line_open:
-                output_adapter.write_line()
-                ai_line_open = False
             return
-        if not ai_prefix_written:
-            output_adapter.write("ai: ")
-            ai_prefix_written = True
-        ai_line_open = True
-        output_adapter.write(delta)
         streamed_chunks.append(delta)
+        output_adapter.emit(
+            "main",
+            "ai",
+            delta,
+            session_id=getattr(agent, "session_id", None),
+        )
 
     def _tool_start_callback(tool_call_id: str, function_name: str, function_args: dict | None) -> None:
         del tool_call_id
         payload = ""
         if function_args:
             payload = " " + json.dumps(function_args, ensure_ascii=True, separators=(",", ":"))
-        output_adapter.write_line(f"tool call: {function_name}{payload}")
+        output_adapter.emit(
+            "main",
+            "tool_call",
+            f"{function_name}{payload}",
+            session_id=getattr(agent, "session_id", None),
+        )
 
     def _tool_complete_callback(
         tool_call_id: str,
@@ -132,7 +139,12 @@ def _run_agent_turn(
         function_result: object,
     ) -> None:
         del tool_call_id, function_name, function_args
-        output_adapter.write_line(f"tool result: {_truncate_result(function_result)}")
+        output_adapter.emit(
+            "main",
+            "tool_result",
+            _truncate_result(function_result),
+            session_id=getattr(agent, "session_id", None),
+        )
 
     old_tool_start = getattr(agent, "tool_start_callback", _CALLBACK_MISSING)
     old_tool_complete = getattr(agent, "tool_complete_callback", _CALLBACK_MISSING)
@@ -161,12 +173,14 @@ def _run_agent_turn(
                 pass
         else:
             setattr(agent, "tool_complete_callback", old_tool_complete)
-        if ai_line_open:
-            output_adapter.write_line()
-
     final_response = str(result.get("final_response") or "")
-    if not streamed_chunks and final_response:
-        output_adapter.write_line(f"ai: {final_response}")
+    if final_response and final_response != "".join(streamed_chunks):
+        output_adapter.emit(
+            "main",
+            "ai",
+            final_response,
+            session_id=getattr(agent, "session_id", None),
+        )
     elif streamed_chunks and not final_response:
         final_response = "".join(streamed_chunks)
     return final_response
@@ -176,7 +190,7 @@ def _run_agent_turn_worker(
     agent: object,
     session_id: str,
     user_message: str,
-    output_adapter: _ExtCliOutputAdapter,
+    output_adapter: ExtCliOutputAdapter,
     router: ExtCliSessionRouter,
 ) -> None:
     try:
@@ -192,7 +206,7 @@ def _start_main_turn(
     agent: object,
     session_id: str,
     user_message: str,
-    output_adapter: _ExtCliOutputAdapter,
+    output_adapter: ExtCliOutputAdapter,
     router: ExtCliSessionRouter,
 ) -> threading.Thread:
     worker = threading.Thread(
@@ -222,7 +236,7 @@ def run_extcli_loop(
         )
         active_output = _open_output_file(resolved_output_path, append=append_output)
         should_close_output = True
-    output_adapter = _ExtCliOutputAdapter(active_output)
+    output_adapter = ExtCliOutputAdapter(active_output)
     factory = agent_factory or (lambda session_id: default_agent_factory(session_id, platform="aisoc-extcli"))
     router = ExtCliSessionRouter()
     active_workers: list[threading.Thread] = []

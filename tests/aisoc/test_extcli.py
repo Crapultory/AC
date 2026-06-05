@@ -6,7 +6,7 @@ import threading
 
 import pytest
 
-from aisoc.backend.extcli import run_extcli_loop
+from aisoc.backend.extcli import ExtCliOutputAdapter, run_extcli_loop
 
 
 class _FakeSessionDB:
@@ -183,8 +183,8 @@ def test_run_extcli_loop_supports_new_exit_and_truncated_tool_results() -> None:
 
     transcript = output.getvalue()
     assert "agent1:hello" in transcript
-    assert "tool call: web_search" in transcript
-    assert "tool result: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx..." in transcript
+    assert "main.tool_call: web_search" in transcript
+    assert "main.tool_result: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx..." in transcript
     assert "Started a new session." in transcript
     assert "Bye." in transcript
 
@@ -354,7 +354,41 @@ def test_run_extcli_loop_ends_partial_stream_before_error_line() -> None:
     )
 
     transcript = output.getvalue()
-    assert "ai: partial\nerror: boom\n" in transcript
+    assert "main.ai: partial\nmain.error: boom\n" in transcript
+
+
+def test_output_uses_main_prefixes(tmp_path):
+    session_db = _FakeSessionDB()
+    output_path = tmp_path / "extcli_output"
+    inputs = iter(["follow", "/exit"])
+
+    run_extcli_loop(
+        agent_factory=lambda session_id: _FakeAgent("agent", session_id, session_db),
+        input_fn=lambda prompt: next(inputs),
+        output_path=output_path,
+    )
+
+    text = output_path.read_text(encoding="utf-8")
+    assert "main.ai:" in text
+    assert "main.tool_call:" in text
+    assert "main.tool_result:" in text
+    assert "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx..." in text
+
+
+def test_output_adapter_failure_does_not_deadlock(tmp_path):
+    del tmp_path
+
+    class _BrokenSink:
+        def write(self, text):
+            del text
+            raise OSError("disk full")
+
+        def flush(self):
+            pass
+
+    adapter = ExtCliOutputAdapter(_BrokenSink())
+    adapter.emit("main", "status", "hello", session_id="s1")
+    assert True
 
 
 def test_main_session_rejects_input_while_busy(tmp_path):
