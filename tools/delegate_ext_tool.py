@@ -58,13 +58,80 @@ def _fetch_agent_card(base_url: str) -> tuple[dict[str, Any] | None, str | None]
     return payload, None
 
 
+def _normalize_string_list(value: Any) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, str) and item]
+
+
 def _extract_a2a_capabilities(card_json: dict[str, Any] | None) -> list[str]:
     if not isinstance(card_json, dict):
         return []
     capabilities = card_json.get("capabilities")
-    if not isinstance(capabilities, dict):
-        return []
-    return [str(name) for name in capabilities.keys()]
+    extracted: list[str] = []
+    if isinstance(capabilities, dict):
+        extracted.extend(
+            str(name) for name, enabled in capabilities.items() if isinstance(name, str) and enabled
+        )
+
+    for skill in card_json.get("skills", []):
+        if isinstance(skill, dict):
+            skill_name = skill.get("name") or skill.get("id")
+            if isinstance(skill_name, str) and skill_name:
+                extracted.append(f"skill:{skill_name}")
+
+    # Preserve order while removing duplicates from overlapping fields.
+    return list(dict.fromkeys(extracted))
+
+
+def _summarize_agent_card(card_json: dict[str, Any] | None) -> dict[str, Any] | None:
+    if not isinstance(card_json, dict):
+        return None
+
+    capabilities = card_json.get("capabilities")
+    skill_names: list[str] = []
+    for skill in card_json.get("skills", []):
+        if isinstance(skill, dict):
+            skill_name = skill.get("name") or skill.get("id")
+            if isinstance(skill_name, str) and skill_name:
+                skill_names.append(skill_name)
+
+    interface_summaries: list[dict[str, str]] = []
+    for interface in card_json.get("supported_interfaces", []):
+        if not isinstance(interface, dict):
+            continue
+        item: dict[str, str] = {}
+        url = interface.get("url")
+        if isinstance(url, str) and url:
+            item["url"] = url
+        binding = interface.get("protocol_binding")
+        if isinstance(binding, str) and binding:
+            item["protocol_binding"] = binding
+        version = interface.get("protocol_version")
+        if isinstance(version, str) and version:
+            item["protocol_version"] = version
+        if item:
+            interface_summaries.append(item)
+
+    summary: dict[str, Any] = {
+        "name": card_json.get("name") if isinstance(card_json.get("name"), str) else None,
+        "description": (
+            card_json.get("description") if isinstance(card_json.get("description"), str) else None
+        ),
+        "version": card_json.get("version") if isinstance(card_json.get("version"), str) else None,
+        "default_input_modes": _normalize_string_list(card_json.get("default_input_modes")),
+        "default_output_modes": _normalize_string_list(card_json.get("default_output_modes")),
+        "capabilities": {
+            key: value
+            for key, value in capabilities.items()
+            if isinstance(capabilities, dict) and isinstance(key, str) and isinstance(value, bool)
+        }
+        if isinstance(capabilities, dict)
+        else {},
+        "skills": skill_names,
+        "supported_interfaces": interface_summaries,
+    }
+    return summary
 
 
 def _load_a2a_registry(force_refresh: bool = False) -> dict[str, dict[str, Any]]:
@@ -89,6 +156,7 @@ def _load_a2a_registry(force_refresh: bool = False) -> dict[str, dict[str, Any]]
             "url": str(base_url),
             "available": error is None,
             "capabilities": _extract_a2a_capabilities(card_json) if error is None else [],
+            "agent_card": _summarize_agent_card(card_json) if error is None else None,
             "agent_card_name": card_json.get("name") if isinstance(card_json, dict) else None,
             "error": error,
         }

@@ -114,7 +114,22 @@ class TestDelegateExt:
         monkeypatch.setattr(
             "tools.delegate_ext_tool._fetch_agent_card",
             lambda url: (
-                {"name": "Test Agent", "capabilities": {"streaming": True}},
+                {
+                    "name": "Test Agent",
+                    "description": "Test remote worker.",
+                    "version": "1.0.0",
+                    "capabilities": {"streaming": True, "push_notifications": False},
+                    "default_input_modes": ["text/plain"],
+                    "default_output_modes": ["text/plain"],
+                    "supported_interfaces": [
+                        {
+                            "url": "http://127.0.0.1/a2a",
+                            "protocol_binding": "JSONRPC",
+                            "protocol_version": "0.3.0",
+                        }
+                    ],
+                    "skills": [{"name": "research"}],
+                },
                 None,
             ),
         )
@@ -124,6 +139,13 @@ class TestDelegateExt:
         assert result["success"] is True
         assert result["count"] == 1
         assert result["agents"][0]["name"] == "test"
+        assert result["agents"][0]["capabilities"] == ["streaming", "skill:research"]
+        assert result["agents"][0]["agent_card"]["version"] == "1.0.0"
+        assert result["agents"][0]["agent_card"]["capabilities"] == {
+            "streaming": True,
+            "push_notifications": False,
+        }
+        assert result["agents"][0]["agent_card"]["skills"] == ["research"]
         assert result["agents"][0]["agent_card_name"] == "Test Agent"
 
     def test_a2a_list_keeps_broken_agent_entries(self, tmp_path, monkeypatch):
