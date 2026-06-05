@@ -21,7 +21,7 @@ def test_build_profile_agent_kwargs_reads_platform_toolsets_from_loaded_config()
             "provider": "custom:chatai",
         },
         "platform_toolsets": {
-            "aisoc-a2a": ["web", "delegation_ext"],
+            "aisoc-a2a": ["web", "a2a"],
         },
     }
     config_module = SimpleNamespace(
@@ -43,10 +43,10 @@ def test_build_profile_agent_kwargs_reads_platform_toolsets_from_loaded_config()
         runtime_provider_module=runtime_provider_module,
     )
 
-    assert agent_kwargs["enabled_toolsets"] == ["web", "delegation_ext"]
+    assert agent_kwargs["enabled_toolsets"] == ["web", "a2a"]
 
 
-def test_build_profile_agent_kwargs_keeps_delegation_ext_when_platform_toolsets_missing() -> None:
+def test_build_profile_agent_kwargs_keeps_a2a_when_platform_toolsets_missing() -> None:
     cfg = {
         "model": {
             "default": "deepseek-v4-flash",
@@ -72,7 +72,7 @@ def test_build_profile_agent_kwargs_keeps_delegation_ext_when_platform_toolsets_
         runtime_provider_module=runtime_provider_module,
     )
 
-    assert agent_kwargs["enabled_toolsets"] == ["delegation_ext"]
+    assert agent_kwargs["enabled_toolsets"] == ["a2a"]
 
 
 def test_build_profile_agent_kwargs_respects_explicit_empty_platform_toolsets() -> None:

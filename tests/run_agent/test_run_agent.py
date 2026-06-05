@@ -157,10 +157,10 @@ def test_dispatch_helper_injects_runtime_adapters():
     agent._delegate_ext_input_factory = lambda: "INPUT"
 
     with patch(
-        "tools.delegate_ext_tool.delegate_ext",
+        "tools.delegate_ext_tool.a2a_delegate",
         return_value='{"ok": true}',
-    ) as mock_delegate_ext:
-        agent._dispatch_delegate_ext(
+    ) as mock_a2a_delegate:
+        agent._dispatch_a2a_delegate(
             {
                 "goal": "ship it",
                 "context": "repo root",
@@ -170,13 +170,14 @@ def test_dispatch_helper_injects_runtime_adapters():
             }
         )
 
-    mock_delegate_ext.assert_called_once_with(
+    mock_a2a_delegate.assert_called_once_with(
         goal="ship it",
         context="repo root",
         agent=None,
         a2a_name="remote-reviewer",
         toolsets=None,
         max_iterations=None,
+        session_id=None,
         is_delegate_output=True,
         output="OUTPUT",
         is_loop=True,
@@ -190,22 +191,24 @@ def test_dispatch_helper_omitted_loop_uses_runtime_input_adapter():
     agent._delegate_ext_input_factory = lambda: "INPUT"
 
     with patch(
-        "tools.delegate_ext_tool.delegate_ext",
+        "tools.delegate_ext_tool.a2a_delegate",
         return_value='{"ok": true}',
-    ) as mock_delegate_ext:
-        agent._dispatch_delegate_ext(
+    ) as mock_a2a_delegate:
+        agent._dispatch_a2a_delegate(
             {
                 "goal": "ship it",
                 "context": "repo root",
             }
         )
 
-    mock_delegate_ext.assert_called_once_with(
+    mock_a2a_delegate.assert_called_once_with(
         goal="ship it",
         context="repo root",
         agent=None,
+        a2a_name=None,
         toolsets=None,
         max_iterations=None,
+        session_id=None,
         is_delegate_output=True,
         output=None,
         is_loop=True,
@@ -220,10 +223,10 @@ def test_dispatch_helper_skips_input_factory_when_loop_disabled():
     agent._delegate_ext_input_factory = factory
 
     with patch(
-        "tools.delegate_ext_tool.delegate_ext",
+        "tools.delegate_ext_tool.a2a_delegate",
         return_value='{"ok": true}',
-    ) as mock_delegate_ext:
-        agent._dispatch_delegate_ext(
+    ) as mock_a2a_delegate:
+        agent._dispatch_a2a_delegate(
             {
                 "goal": "ship it",
                 "is_loop": False,
@@ -231,12 +234,14 @@ def test_dispatch_helper_skips_input_factory_when_loop_disabled():
         )
 
     factory.assert_not_called()
-    mock_delegate_ext.assert_called_once_with(
+    mock_a2a_delegate.assert_called_once_with(
         goal="ship it",
         context=None,
         agent=None,
+        a2a_name=None,
         toolsets=None,
         max_iterations=None,
+        session_id=None,
         is_delegate_output=True,
         output=None,
         is_loop=False,
@@ -2178,23 +2183,23 @@ class TestExecuteToolCalls:
         assert messages[0]["role"] == "tool"
         assert messages[0]["tool_call_id"] == "c1"
 
-    def test_delegate_ext_is_handled_by_agent_loop_dispatch(self, agent):
+    def test_a2a_delegate_is_handled_by_agent_loop_dispatch(self, agent):
         tc = _mock_tool_call(
-            name="delegate_ext",
-            arguments='{"goal":"inspect repo","context":"focus on tests"}',
+            name="a2a_delegate",
+            arguments='{"goal":"inspect repo","context":"focus on tests","session_id":"persisted-child"}',
             call_id="c1",
         )
         mock_msg = _mock_assistant_msg(content="", tool_calls=[tc])
         messages = []
 
         with (
-            patch.object(agent, "_dispatch_delegate_ext", return_value='{"ok": true}') as mock_dispatch,
+            patch.object(agent, "_dispatch_a2a_delegate", return_value='{"ok": true}') as mock_dispatch,
             patch("run_agent.handle_function_call") as mock_hfc,
         ):
             agent._execute_tool_calls(mock_msg, messages, "task-1")
 
         mock_dispatch.assert_called_once_with(
-            {"goal": "inspect repo", "context": "focus on tests"}
+            {"goal": "inspect repo", "context": "focus on tests", "session_id": "persisted-child"}
         )
         mock_hfc.assert_not_called()
         assert len(messages) == 1

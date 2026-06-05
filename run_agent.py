@@ -4415,9 +4415,9 @@ class AIAgent:
             parent_agent=self,
         )
 
-    def _dispatch_delegate_ext(self, function_args: dict) -> str:
-        """Single call site for delegate_ext dispatch."""
-        from tools.delegate_ext_tool import delegate_ext as _delegate_ext
+    def _dispatch_a2a_delegate(self, function_args: dict) -> str:
+        """Single call site for a2a_delegate dispatch."""
+        from tools.delegate_ext_tool import a2a_delegate as _a2a_delegate
 
         runtime_output = getattr(self, "_delegate_ext_output_adapter", None)
         raw_is_loop = function_args.get("is_loop") if "is_loop" in function_args else None
@@ -4439,13 +4439,14 @@ class AIAgent:
                 else:
                     runtime_input = getattr(self, "_delegate_ext_input_adapter", None)
 
-        return _delegate_ext(
+        return _a2a_delegate(
             goal=function_args.get("goal"),
             context=function_args.get("context"),
             agent=function_args.get("agent"),
             a2a_name=function_args.get("a2a_name"),
             toolsets=function_args.get("toolsets"),
             max_iterations=function_args.get("max_iterations"),
+            session_id=function_args.get("session_id"),
             is_delegate_output=function_args.get("is_delegate_output", True),
             output=runtime_output,
             is_loop=effective_is_loop,

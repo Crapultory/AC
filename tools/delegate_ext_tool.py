@@ -15,6 +15,7 @@ from typing import Any, Dict, List, Optional
 import httpx
 from google.protobuf.json_format import MessageToDict
 from aisoc.backend.agent_runtime import load_conversation_history
+from hermes_cli.profiles import get_active_profile_name
 from hermes_constants import get_hermes_home
 from toolsets import validate_toolset
 from tools.delegate_tool import (
@@ -28,7 +29,7 @@ from tools.registry import registry, tool_error
 
 logger = logging.getLogger(__name__)
 
-DEFAULT_AGENT_MODE = "local"
+DEFAULT_AGENT_MODE = "a2a"
 DEFAULT_TOOLSETS = ["hermes-cli"]
 DEFAULT_MAX_ITERATIONS = 90
 A2A_REGISTRY: Dict[str, Dict[str, Any]] = {}
@@ -174,6 +175,23 @@ def _child_session_id(child) -> str | None:
     return str(session_id) if isinstance(session_id, str) and session_id else None
 
 
+def _normalize_delegate_session_id(value: Any) -> str | None:
+    if value is None:
+        return None
+    session_id = str(value).strip()
+    return session_id or None
+
+
+def _default_delegate_session_id(agent_mode: str) -> str:
+    profile_name = str(get_active_profile_name() or "default").strip() or "default"
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    return f"delegate_{profile_name}_{agent_mode}_{timestamp}"
+
+
+def _resolve_delegate_session_id(agent_mode: str, session_id: Any = None) -> str:
+    return _normalize_delegate_session_id(session_id) or _default_delegate_session_id(agent_mode)
+
+
 def _emit_delegate_event(
     output,
     source: str,
@@ -205,13 +223,13 @@ def _read_delegate_input(input_adapter) -> str | None:
 def _strip_recursive_delegate_tool(child) -> None:
     valid_tool_names = getattr(child, "valid_tool_names", None)
     if valid_tool_names:
-        valid_tool_names.discard("delegate_ext")
+        valid_tool_names.discard("a2a_delegate")
     tool_definitions = getattr(child, "tool_definitions", None)
     if tool_definitions:
         child.tool_definitions = [
             tool
             for tool in tool_definitions
-            if tool.get("function", {}).get("name") != "delegate_ext"
+            if tool.get("function", {}).get("name") != "a2a_delegate"
         ]
 
 
@@ -547,12 +565,13 @@ class _A2ADelegateSession:
         output=None,
         timeout: float = 60.0,
         poll_interval: float = 0.05,
+        session_id: str | None = None,
     ) -> None:
         self.base_url = _normalize_a2a_base_url(base_url)
         self.output = output
         self.timeout = timeout
         self.poll_interval = poll_interval
-        self.context_id: str | None = None
+        self.context_id: str | None = _normalize_delegate_session_id(session_id)
         self.task_id: str | None = None
         self._http_client = None
         self._client = None
@@ -641,7 +660,8 @@ class _A2ADelegateSession:
             )
             last_task = _a2a_event_to_task(event) or last_task
             if last_task is not None:
-                self.context_id = getattr(last_task, "context_id", None) or self.context_id
+                if not self.context_id:
+                    self.context_id = getattr(last_task, "context_id", None) or self.context_id
                 self.task_id = getattr(last_task, "id", None) or self.task_id
                 if _a2a_field(getattr(last_task, "status", None), "state", None) in _a2a_final_task_states():
                     return last_task
@@ -716,7 +736,7 @@ class _A2ADelegateSession:
 def _resolve_a2a_entry(a2a_name: Optional[str]) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     name = str(a2a_name or "").strip()
     if not name:
-        return None, "delegate_ext a2a mode requires a non-empty a2a_name."
+        return None, "a2a_delegate a2a mode requires a non-empty a2a_name."
 
     loaded = _load_a2a_registry(force_refresh=False)
     entry = loaded.get(name)
@@ -775,6 +795,7 @@ def _build_local_child_agent(
     context: Optional[str],
     toolsets: List[str],
     max_iterations: int,
+    session_id: str,
     parent_agent,
 ):
     from run_agent import AIAgent
@@ -804,6 +825,7 @@ def _build_local_child_agent(
         ephemeral_system_prompt=child_prompt,
         log_prefix="[delegate-ext]",
         platform=getattr(parent_agent, "platform", None),
+        session_id=session_id,
         skip_context_files=True,
         skip_memory=True,
         clarify_callback=None,
@@ -836,6 +858,7 @@ def _run_local_delegate(
     context: Optional[str],
     toolsets: List[str],
     max_iterations: int,
+    session_id: str,
     is_delegate_output: bool,
     output,
     is_loop: bool,
@@ -847,13 +870,17 @@ def _run_local_delegate(
         context=context,
         toolsets=toolsets,
         max_iterations=max_iterations,
+        session_id=session_id,
         parent_agent=parent_agent,
     )
     _register_active_child(parent_agent, child)
     start = time.monotonic()
 
+    def _effective_child_session_id() -> str:
+        return _child_session_id(child) or session_id
+
     def _run_single_turn(user_message: str) -> dict[str, Any]:
-        history = load_conversation_history(child, _child_session_id(child))
+        history = load_conversation_history(child, _effective_child_session_id())
         task_id = (
             f"delegate-ext-{uuid.uuid4().hex[:8]}"
             if getattr(parent_agent, "_current_task_id", None)
@@ -871,7 +898,7 @@ def _run_local_delegate(
                 "delegate",
                 "ai",
                 final_response,
-                session_id=_child_session_id(child),
+                session_id=_effective_child_session_id(),
             )
         return result
 
@@ -888,7 +915,7 @@ def _run_local_delegate(
             "success": success,
             "agent": "local",
             "goal": goal,
-            "session_id": _child_session_id(child),
+            "session_id": _effective_child_session_id(),
             "toolsets": list(toolsets),
             "max_iterations": max_iterations,
             "completed": bool(last_result.get("completed", success)),
@@ -915,7 +942,7 @@ def _run_local_delegate(
                 last_result={"final_response": "", "completed": False},
                 loop_exit_reason="error",
                 success=False,
-                error_message="delegate_ext could not enter foreground mode.",
+                error_message="a2a_delegate could not enter foreground mode.",
                 api_calls=0,
             )
         _emit_delegate_event(
@@ -923,7 +950,7 @@ def _run_local_delegate(
             "delegate",
             "status",
             "entered foreground loop",
-            session_id=_child_session_id(child),
+            session_id=_effective_child_session_id(),
         )
         last_result = _run_single_turn(goal)
         total_api_calls = int(last_result.get("api_calls", 0) or 0)
@@ -943,7 +970,7 @@ def _run_local_delegate(
                     "delegate",
                     "status",
                     "return to main",
-                    session_id=_child_session_id(child),
+                    session_id=_effective_child_session_id(),
                 )
                 return _finish_loop(
                     last_result=last_result,
@@ -955,7 +982,7 @@ def _run_local_delegate(
                 "delegate",
                 "user",
                 stripped,
-                session_id=_child_session_id(child),
+                session_id=_effective_child_session_id(),
             )
             last_result = _run_single_turn(stripped)
             total_api_calls += int(last_result.get("api_calls", 0) or 0)
@@ -966,7 +993,7 @@ def _run_local_delegate(
                 "delegate",
                 "error",
                 str(exc),
-                session_id=_child_session_id(child),
+                session_id=_effective_child_session_id(),
             )
         return _finish_loop(
             last_result={"final_response": "", "completed": False},
@@ -1024,6 +1051,7 @@ def _run_a2a_delegate(
     *,
     goal: str,
     a2a_name: str,
+    session_id: str,
     is_delegate_output: bool,
     output,
     is_loop: bool,
@@ -1041,6 +1069,7 @@ def _run_a2a_delegate(
     session = _A2ADelegateSession(
         _resolve_a2a_remote_url(entry),
         output=output,
+        session_id=session_id,
     )
 
     async def _run_loop() -> str:
@@ -1060,7 +1089,7 @@ def _run_a2a_delegate(
                         duration_seconds=time.monotonic() - start,
                         final_response="",
                         completed=False,
-                        error_message="delegate_ext could not enter foreground mode.",
+                        error_message="a2a_delegate could not enter foreground mode.",
                     )
                 _emit_delegate_event(
                     output,
@@ -1165,13 +1194,14 @@ def _run_a2a_delegate(
     return _run_coro_sync(_run_loop())
 
 
-def delegate_ext(
+def a2a_delegate(
     goal: Optional[str] = None,
     context: Optional[str] = None,
     agent: str = DEFAULT_AGENT_MODE,
     a2a_name: Optional[str] = None,
     toolsets: Optional[List[str]] = None,
     max_iterations: Optional[int] = None,
+    session_id: Optional[str] = None,
     is_delegate_output: bool = True,
     output=None,
     is_loop: Optional[bool] = None,
@@ -1180,21 +1210,24 @@ def delegate_ext(
 ) -> str:
     """Delegate a single task to another agent."""
     if parent_agent is None:
-        return tool_error("delegate_ext requires a parent agent context.")
+        return tool_error("a2a_delegate requires a parent agent context.")
     if not isinstance(goal, str) or not goal.strip():
-        return tool_error("delegate_ext requires a non-empty goal.")
+        return tool_error("a2a_delegate requires a non-empty goal.")
     effective_is_loop = is_loop if is_loop is not None else (input is not None)
     if effective_is_loop and input is None:
-        return tool_error("delegate_ext loop mode requires an input adapter.")
+        return tool_error("a2a_delegate loop mode requires an input adapter.")
 
     mode = str(agent or DEFAULT_AGENT_MODE).strip().lower() or DEFAULT_AGENT_MODE
     if mode not in {"local", "a2a"}:
         return tool_error("agent must be one of: local, a2a.")
 
+    resolved_session_id = _resolve_delegate_session_id(mode, session_id)
+
     if mode == "a2a":
         return _run_a2a_delegate(
             goal=goal.strip(),
             a2a_name=str(a2a_name or "").strip(),
+            session_id=resolved_session_id,
             is_delegate_output=is_delegate_output,
             output=output,
             is_loop=effective_is_loop,
@@ -1216,6 +1249,7 @@ def delegate_ext(
         context=context,
         toolsets=normalized_toolsets or list(DEFAULT_TOOLSETS),
         max_iterations=normalized_max_iterations,
+        session_id=resolved_session_id,
         is_delegate_output=is_delegate_output,
         output=output,
         is_loop=effective_is_loop,
@@ -1224,12 +1258,12 @@ def delegate_ext(
     )
 
 
-DELEGATE_EXT_SCHEMA = {
-    "name": "delegate_ext",
+A2A_DELEGATE_SCHEMA = {
+    "name": "a2a_delegate",
     "description": (
         "Delegate a single task to another agent. "
-        "Use local mode to spawn a focused Hermes subagent with its own toolset and loop budget. "
         "Use a2a mode to continue a named remote A2A agent session."
+        "Use local mode to spawn a new local agent with optional toolsets and max iteration limits. "
     ),
     "parameters": {
         "type": "object",
@@ -1244,8 +1278,8 @@ DELEGATE_EXT_SCHEMA = {
             },
             "agent": {
                 "type": "string",
-                "enum": ["local", "a2a"],
-                "description": "Delegation target mode. Default: local. Use a2a for configured remote agents.",
+                "enum": ["a2a", "local"],
+                "description": "Delegation target mode. Default: a2a. Use a2a for configured remote agents.",
             },
             "a2a_name": {
                 "type": "string",
@@ -1260,6 +1294,10 @@ DELEGATE_EXT_SCHEMA = {
                 "type": "integer",
                 "minimum": 1,
                 "description": "Maximum agent loop iterations for local delegated execution only. Defaults to the parent agent's limit. Ignored when agent='a2a'.",
+            },
+            "session_id": {
+                "type": "string",
+                "description": "Optional child session identifier. When omitted, defaults to delegate_{profile_name}_{a2a|local}_YYYYMMDD_HHMMSS.",
             },
             "is_delegate_output": {
                 "type": "boolean",
@@ -1287,16 +1325,17 @@ registry.register(
 
 
 registry.register(
-    name="delegate_ext",
+    name="a2a_delegate",
     toolset="a2a",
-    schema=DELEGATE_EXT_SCHEMA,
-    handler=lambda args, **kw: delegate_ext(
+    schema=A2A_DELEGATE_SCHEMA,
+    handler=lambda args, **kw: a2a_delegate(
         goal=args.get("goal"),
         context=args.get("context"),
         agent=args.get("agent", DEFAULT_AGENT_MODE),
         a2a_name=args.get("a2a_name"),
         toolsets=args.get("toolsets"),
         max_iterations=args.get("max_iterations"),
+        session_id=args.get("session_id"),
         is_delegate_output=args.get("is_delegate_output", True),
         is_loop=args.get("is_loop"),
         parent_agent=kw.get("parent_agent"),

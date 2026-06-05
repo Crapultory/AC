@@ -789,7 +789,7 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                     spinner.stop(cute_msg)
                 elif agent._should_emit_quiet_tool_messages():
                     agent._vprint(f"  {cute_msg}")
-        elif function_name == "delegate_ext":
+        elif function_name == "a2a_delegate":
             goal_preview = (function_args.get("goal") or "")[:30]
             spinner_label = (
                 f"🛰️ {goal_preview} · (/agents to monitor)"
@@ -804,12 +804,12 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
             agent._delegate_spinner = spinner
             _delegate_result = None
             try:
-                function_result = agent._dispatch_delegate_ext(function_args)
+                function_result = agent._dispatch_a2a_delegate(function_args)
                 _delegate_result = function_result
             finally:
                 agent._delegate_spinner = None
                 tool_duration = time.time() - tool_start_time
-                cute_msg = _get_cute_tool_message_impl('delegate_ext', function_args, tool_duration, result=_delegate_result)
+                cute_msg = _get_cute_tool_message_impl('a2a_delegate', function_args, tool_duration, result=_delegate_result)
                 if spinner:
                     spinner.stop(cute_msg)
                 elif agent._should_emit_quiet_tool_messages():

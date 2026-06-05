@@ -551,7 +551,7 @@ TOOLSETS = {
 
     "a2a": {
         "description": "a2a toolset - tools for agent-to-agent communication and delegation ",
-        "tools": ["delegate_ext", "a2a_list"],
+        "tools": ["a2a_delegate", "a2a_list"],
         "includes": []
     }
 }

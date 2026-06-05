@@ -7,15 +7,15 @@ from uuid import uuid4
 import pytest
 from a2a.types import Role, TaskState
 from run_agent import AIAgent
-from toolsets import TOOLSETS, _HERMES_CORE_TOOLS
+from toolsets import TOOLSETS
 from tools.registry import registry
 from tools.delegate_ext_tool import (
     A2A_REGISTRY,
-    DELEGATE_EXT_SCHEMA,
+    A2A_DELEGATE_SCHEMA,
     _A2ADelegateSession,
     _strip_recursive_delegate_tool,
     a2a_list,
-    delegate_ext,
+    a2a_delegate,
 )
 
 
@@ -146,23 +146,30 @@ class TestDelegateExtSchema:
         assert schema is not None
         assert schema["name"] == "a2a_list"
 
+    def test_a2a_delegate_schema_is_registered(self):
+        schema = registry.get_schema("a2a_delegate")
+        assert schema is not None
+        assert schema["name"] == "a2a_delegate"
+        assert registry.get_schema("delegate_ext") is None
+
     def test_schema_fields_present(self):
-        assert DELEGATE_EXT_SCHEMA["name"] == "delegate_ext"
-        props = DELEGATE_EXT_SCHEMA["parameters"]["properties"]
+        assert A2A_DELEGATE_SCHEMA["name"] == "a2a_delegate"
+        props = A2A_DELEGATE_SCHEMA["parameters"]["properties"]
         assert "goal" in props
         assert "context" in props
         assert "agent" in props
         assert "toolsets" in props
         assert "max_iterations" in props
+        assert "session_id" in props
         assert props["agent"]["enum"] == ["local", "a2a"]
 
     def test_schema_fields_include_loop_and_io(self):
-        props = DELEGATE_EXT_SCHEMA["parameters"]["properties"]
+        props = A2A_DELEGATE_SCHEMA["parameters"]["properties"]
         assert "is_delegate_output" in props
         assert "is_loop" in props
 
     def test_schema_includes_a2a_name(self):
-        props = DELEGATE_EXT_SCHEMA["parameters"]["properties"]
+        props = A2A_DELEGATE_SCHEMA["parameters"]["properties"]
         assert "a2a_name" in props
 
 
@@ -171,20 +178,20 @@ class TestDelegateExt:
         A2A_REGISTRY.clear()
 
     def test_requires_parent_agent(self):
-        result = json.loads(delegate_ext(goal="test"))
+        result = json.loads(a2a_delegate(goal="test"))
         assert "error" in result
         assert "parent agent" in result["error"].lower()
 
     def test_requires_goal(self):
         parent = _make_mock_parent()
-        result = json.loads(delegate_ext(goal="  ", parent_agent=parent))
+        result = json.loads(a2a_delegate(goal="  ", parent_agent=parent))
         assert "error" in result
         assert "goal" in result["error"].lower()
 
     def test_a2a_mode_requires_a2a_name(self):
         parent = _make_mock_parent()
         result = json.loads(
-            delegate_ext(goal="test remote", agent="a2a", parent_agent=parent)
+            a2a_delegate(goal="test remote", agent="a2a", parent_agent=parent)
         )
         assert result["error"]
         assert result["agent"] == "a2a"
@@ -284,11 +291,20 @@ class TestDelegateExt:
         captured = {}
 
         class _FakeSession:
-            def __init__(self, base_url, *, output=None, timeout=60.0, poll_interval=0.05):
+            def __init__(
+                self,
+                base_url,
+                *,
+                output=None,
+                timeout=60.0,
+                poll_interval=0.05,
+                session_id=None,
+            ):
                 del timeout, poll_interval
                 captured["base_url"] = base_url
                 captured["output"] = output
-                self.context_id = None
+                captured["session_id"] = session_id
+                self.context_id = session_id
 
             async def send_turn(self, text: str, *, is_delegate_output: bool = True):
                 captured.setdefault("turns", []).append((text, is_delegate_output))
@@ -305,7 +321,7 @@ class TestDelegateExt:
         monkeypatch.setattr("tools.delegate_ext_tool._A2ADelegateSession", _FakeSession)
 
         result = json.loads(
-            delegate_ext(
+            a2a_delegate(
                 goal="test remote",
                 agent="a2a",
                 a2a_name="remote",
@@ -327,6 +343,59 @@ class TestDelegateExt:
         assert result["remote_url"] == "http://agent.local/a2a"
         assert result["agent_card_name"] == "Remote Agent"
         assert result["final_response"] == "remote:first"
+
+    def test_a2a_mode_honors_explicit_session_id(self, monkeypatch):
+        parent = _make_mock_parent()
+        A2A_REGISTRY["remote"] = {
+            "name": "remote",
+            "url": "http://agent.local",
+            "available": True,
+            "capabilities": ["streaming"],
+            "agent_card": {"supported_interfaces": [{"url": "http://agent.local/a2a"}]},
+            "agent_card_name": "Remote Agent",
+            "error": None,
+        }
+        captured = {}
+
+        class _FakeSession:
+            def __init__(
+                self,
+                base_url,
+                *,
+                output=None,
+                timeout=60.0,
+                poll_interval=0.05,
+                session_id=None,
+            ):
+                del base_url, output, timeout, poll_interval
+                captured["session_id"] = session_id
+                self.context_id = session_id
+
+            async def send_turn(self, text: str, *, is_delegate_output: bool = True):
+                del text, is_delegate_output
+                return {
+                    "final_response": "remote:first",
+                    "state": TaskState.TASK_STATE_COMPLETED,
+                    "state_name": "completed",
+                }
+
+            async def close(self):
+                return None
+
+        monkeypatch.setattr("tools.delegate_ext_tool._A2ADelegateSession", _FakeSession)
+
+        result = json.loads(
+            a2a_delegate(
+                goal="test remote",
+                agent="a2a",
+                a2a_name="remote",
+                session_id="persisted-remote-session",
+                parent_agent=parent,
+            )
+        )
+
+        assert captured["session_id"] == "persisted-remote-session"
+        assert result["session_id"] == "persisted-remote-session"
 
     def test_a2a_loop_mode_reuses_same_session_until_main(self, monkeypatch):
         parent = _make_mock_parent()
@@ -361,10 +430,19 @@ class TestDelegateExt:
                 sink.append((source, event_type, content, session_id))
 
         class _FakeSession:
-            def __init__(self, base_url, *, output=None, timeout=60.0, poll_interval=0.05):
+            def __init__(
+                self,
+                base_url,
+                *,
+                output=None,
+                timeout=60.0,
+                poll_interval=0.05,
+                session_id=None,
+            ):
                 del base_url, timeout, poll_interval
                 self.output = output
-                self.context_id = None
+                captured["session_id"] = session_id
+                self.context_id = session_id
 
             async def send_turn(self, text: str, *, is_delegate_output: bool = True):
                 captured.setdefault("turns", []).append((text, is_delegate_output))
@@ -382,7 +460,7 @@ class TestDelegateExt:
         monkeypatch.setattr("tools.delegate_ext_tool._A2ADelegateSession", _FakeSession)
 
         result = json.loads(
-            delegate_ext(
+            a2a_delegate(
                 goal="start remote",
                 agent="a2a",
                 a2a_name="remote",
@@ -400,7 +478,7 @@ class TestDelegateExt:
         assert result["loop_exit_reason"] == "main_command"
         assert result["final_response"] == "remote:2"
         assert sink == [
-            ("delegate", "status", "entered foreground loop", None),
+            ("delegate", "status", "entered foreground loop", captured["session_id"]),
             ("delegate", "user", "follow up", "ctx-remote"),
             ("delegate", "status", "return to main", "ctx-remote"),
         ]
@@ -417,7 +495,7 @@ class TestDelegateExt:
         }
         mock_agent_cls.return_value = child
 
-        result = json.loads(delegate_ext(goal="finish task", parent_agent=parent))
+        result = json.loads(a2a_delegate(goal="finish task", parent_agent=parent))
 
         assert result["agent"] == "local"
         assert result["toolsets"] == ["hermes-cli"]
@@ -444,7 +522,7 @@ class TestDelegateExt:
         mock_agent_cls.return_value = child
 
         result = json.loads(
-            delegate_ext(
+            a2a_delegate(
                 goal="inspect code",
                 context="focus on tests",
                 toolsets=["terminal", "file"],
@@ -459,10 +537,107 @@ class TestDelegateExt:
         assert kwargs["enabled_toolsets"] == ["terminal", "file"]
         assert kwargs["max_iterations"] == 17
 
+    @patch("run_agent.AIAgent")
+    def test_local_mode_honors_explicit_session_id(self, mock_agent_cls):
+        parent = _make_mock_parent()
+        child = MagicMock()
+        child.session_id = "persisted-local-session"
+        child.run_conversation.return_value = {
+            "final_response": "done",
+            "completed": True,
+            "api_calls": 1,
+        }
+        mock_agent_cls.return_value = child
+
+        result = json.loads(
+            a2a_delegate(
+                goal="inspect code",
+                session_id="persisted-local-session",
+                parent_agent=parent,
+            )
+        )
+
+        _, kwargs = mock_agent_cls.call_args
+        assert kwargs["session_id"] == "persisted-local-session"
+        assert result["session_id"] == "persisted-local-session"
+
+    @patch("run_agent.AIAgent")
+    def test_local_mode_generates_default_session_id_when_missing(self, mock_agent_cls, monkeypatch):
+        parent = _make_mock_parent()
+        child = MagicMock()
+        child.run_conversation.return_value = {
+            "final_response": "done",
+            "completed": True,
+            "api_calls": 1,
+        }
+        mock_agent_cls.return_value = child
+        monkeypatch.setattr("tools.delegate_ext_tool.get_active_profile_name", lambda: "worker_alpha")
+        monkeypatch.setattr("tools.delegate_ext_tool.time.strftime", lambda fmt: "20260605_123456")
+
+        result = json.loads(a2a_delegate(goal="inspect code", parent_agent=parent))
+
+        _, kwargs = mock_agent_cls.call_args
+        assert kwargs["session_id"] == "delegate_worker_alpha_local_20260605_123456"
+        assert result["session_id"] == "delegate_worker_alpha_local_20260605_123456"
+
+    def test_a2a_mode_generates_default_session_id_when_missing(self, monkeypatch):
+        parent = _make_mock_parent()
+        A2A_REGISTRY["remote"] = {
+            "name": "remote",
+            "url": "http://agent.local",
+            "available": True,
+            "capabilities": ["streaming"],
+            "agent_card": {"supported_interfaces": [{"url": "http://agent.local/a2a"}]},
+            "agent_card_name": "Remote Agent",
+            "error": None,
+        }
+        captured = {}
+
+        class _FakeSession:
+            def __init__(
+                self,
+                base_url,
+                *,
+                output=None,
+                timeout=60.0,
+                poll_interval=0.05,
+                session_id=None,
+            ):
+                del base_url, output, timeout, poll_interval
+                captured["session_id"] = session_id
+                self.context_id = session_id
+
+            async def send_turn(self, text: str, *, is_delegate_output: bool = True):
+                del text, is_delegate_output
+                return {
+                    "final_response": "remote:first",
+                    "state": TaskState.TASK_STATE_COMPLETED,
+                    "state_name": "completed",
+                }
+
+            async def close(self):
+                return None
+
+        monkeypatch.setattr("tools.delegate_ext_tool.get_active_profile_name", lambda: "worker_alpha")
+        monkeypatch.setattr("tools.delegate_ext_tool.time.strftime", lambda fmt: "20260605_123456")
+        monkeypatch.setattr("tools.delegate_ext_tool._A2ADelegateSession", _FakeSession)
+
+        result = json.loads(
+            a2a_delegate(
+                goal="test remote",
+                agent="a2a",
+                a2a_name="remote",
+                parent_agent=parent,
+            )
+        )
+
+        assert captured["session_id"] == "delegate_worker_alpha_a2a_20260605_123456"
+        assert result["session_id"] == "delegate_worker_alpha_a2a_20260605_123456"
+
     def test_invalid_toolset_returns_error(self):
         parent = _make_mock_parent()
         result = json.loads(
-            delegate_ext(
+            a2a_delegate(
                 goal="bad tools",
                 toolsets=["nope-toolset"],
                 parent_agent=parent,
@@ -474,13 +649,13 @@ class TestDelegateExt:
     def test_loop_mode_requires_input_adapter(self):
         parent = _make_mock_parent()
         result = json.loads(
-            delegate_ext(goal="inspect", is_loop=True, input=None, parent_agent=parent)
+            a2a_delegate(goal="inspect", is_loop=True, input=None, parent_agent=parent)
         )
         assert "error" in result
         assert "input" in result["error"].lower()
 
     @patch("run_agent.AIAgent")
-    def test_delegate_ext_emits_output_when_enabled(self, mock_agent_cls):
+    def test_a2a_delegate_emits_output_when_enabled(self, mock_agent_cls):
         parent = _make_mock_parent()
         child = MagicMock()
         child.session_id = "child-session"
@@ -497,7 +672,7 @@ class TestDelegateExt:
                 sink.append((source, event_type, content, session_id))
 
         result = json.loads(
-            delegate_ext(
+            a2a_delegate(
                 goal="finish",
                 is_loop=False,
                 is_delegate_output=True,
@@ -510,7 +685,7 @@ class TestDelegateExt:
         assert sink == [("delegate", "ai", "done", "child-session")]
 
     @patch("run_agent.AIAgent")
-    def test_delegate_ext_suppresses_output_when_disabled(self, mock_agent_cls):
+    def test_a2a_delegate_suppresses_output_when_disabled(self, mock_agent_cls):
         parent = _make_mock_parent()
         child = MagicMock()
         child.session_id = "child-session"
@@ -526,7 +701,7 @@ class TestDelegateExt:
             def emit(self, source, event_type, content, session_id=None):
                 sink.append((source, event_type, content, session_id))
 
-        delegate_ext(
+        a2a_delegate(
             goal="finish",
             is_loop=False,
             is_delegate_output=False,
@@ -547,24 +722,24 @@ class TestDelegateExt:
         }
         mock_agent_cls.return_value = child
 
-        result = json.loads(delegate_ext(goal="finish task", parent_agent=parent))
+        result = json.loads(a2a_delegate(goal="finish task", parent_agent=parent))
 
         assert result["final_response"] == "done"
         assert result["loop_exit_reason"] == "completed"
 
-    def test_strip_recursive_delegate_tool_removes_delegate_ext(self):
+    def test_strip_recursive_delegate_tool_removes_a2a_delegate(self):
         child = MagicMock()
-        child.valid_tool_names = {"read_file", "delegate_ext"}
+        child.valid_tool_names = {"read_file", "a2a_delegate"}
         child.tool_definitions = [
-            {"type": "function", "function": {"name": "delegate_ext"}},
+            {"type": "function", "function": {"name": "a2a_delegate"}},
             {"type": "function", "function": {"name": "read_file"}},
         ]
 
         _strip_recursive_delegate_tool(child)
 
-        assert "delegate_ext" not in child.valid_tool_names
+        assert "a2a_delegate" not in child.valid_tool_names
         names = {tool["function"]["name"] for tool in child.tool_definitions}
-        assert "delegate_ext" not in names
+        assert "a2a_delegate" not in names
 
     @patch("run_agent.AIAgent")
     def test_loop_mode_consumes_multiple_turns_until_main(self, mock_agent_cls):
@@ -585,7 +760,7 @@ class TestDelegateExt:
         mock_agent_cls.return_value = child
 
         result = json.loads(
-            delegate_ext(
+            a2a_delegate(
                 goal="start",
                 is_loop=True,
                 input=_Input(["follow up", "/main"]),
@@ -617,7 +792,7 @@ class TestDelegateExt:
         mock_agent_cls.return_value = child
 
         result = json.loads(
-            delegate_ext(
+            a2a_delegate(
                 goal="start",
                 is_loop=True,
                 input=_Input(["/exit"]),
@@ -674,7 +849,7 @@ class TestDelegateExt:
         mock_agent_cls.return_value = child
 
         result = json.loads(
-            delegate_ext(
+            a2a_delegate(
                 goal="start",
                 is_loop=True,
                 input=_Input(["follow up", "/main"]),
@@ -693,23 +868,17 @@ class TestDelegateExt:
 
 
 class TestDelegateExtIntegration:
-    def test_hermes_core_tools_include_a2a_list(self):
-        assert "a2a_list" in _HERMES_CORE_TOOLS
+    def test_a2a_toolset_includes_a2a_list(self):
+        assert "a2a_list" in TOOLSETS["a2a"]["tools"]
 
-    def test_hermes_core_tools_include_delegate_ext(self):
-        assert "delegate_ext" in _HERMES_CORE_TOOLS
+    def test_a2a_toolset_includes_a2a_delegate(self):
+        assert "a2a_delegate" in TOOLSETS["a2a"]["tools"]
 
-    def test_delegation_toolset_includes_a2a_list(self):
-        assert "a2a_list" in TOOLSETS["delegation"]["tools"]
-
-    def test_delegation_toolset_includes_delegate_ext(self):
-        assert "delegate_ext" in TOOLSETS["delegation"]["tools"]
-
-    @patch("tools.delegate_ext_tool.delegate_ext", return_value='{"ok": true}')
-    def test_dispatch_helper_forwards_args(self, mock_delegate_ext):
+    @patch("tools.delegate_ext_tool.a2a_delegate", return_value='{"ok": true}')
+    def test_dispatch_helper_forwards_args(self, mock_a2a_delegate):
         agent = object.__new__(AIAgent)
 
-        result = agent._dispatch_delegate_ext(
+        result = agent._dispatch_a2a_delegate(
             {
                 "goal": "ship it",
                 "context": "repo root",
@@ -721,13 +890,14 @@ class TestDelegateExtIntegration:
         )
 
         assert result == '{"ok": true}'
-        mock_delegate_ext.assert_called_once_with(
+        mock_a2a_delegate.assert_called_once_with(
             goal="ship it",
             context="repo root",
             agent="local",
             a2a_name="remote-reviewer",
             toolsets=["terminal"],
             max_iterations=5,
+            session_id=None,
             is_delegate_output=True,
             output=None,
             is_loop=False,

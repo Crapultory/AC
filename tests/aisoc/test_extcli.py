@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from aisoc.backend.extcli import ExtCliInputAdapter, ExtCliOutputAdapter, run_extcli_loop
-from tools.delegate_ext_tool import delegate_ext
+from tools.delegate_ext_tool import a2a_delegate
 
 
 class _FakeSessionDB:
@@ -744,7 +744,7 @@ def test_delegate_loop_takes_foreground_and_returns_to_main(tmp_path):
                 child.run_conversation.side_effect = lambda *a, **k: next(child_results)
                 mock_agent_cls.return_value = child
                 result = json.loads(
-                    delegate_ext(
+                    a2a_delegate(
                         goal="start child",
                         is_loop=True,
                         input=self._delegate_ext_input_factory(),
@@ -790,7 +790,7 @@ def test_child_loop_failure_returns_control_to_main(tmp_path):
                 child.run_conversation.side_effect = RuntimeError("delegate loop failed")
                 mock_agent_cls.return_value = child
                 result = json.loads(
-                    delegate_ext(
+                    a2a_delegate(
                         goal="start child",
                         is_loop=True,
                         input=self._delegate_ext_input_factory(),
@@ -840,7 +840,7 @@ def test_child_loop_input_closed_unwinds_cleanly(tmp_path):
                 }
                 mock_agent_cls.return_value = child
                 result = json.loads(
-                    delegate_ext(
+                    a2a_delegate(
                         goal="start child",
                         is_loop=True,
                         input=self._delegate_ext_input_factory(),
@@ -890,7 +890,7 @@ def test_new_inside_child_loop_is_treated_as_child_input(tmp_path):
                 child.run_conversation.side_effect = lambda *a, **k: next(child_results)
                 mock_agent_cls.return_value = child
                 result = json.loads(
-                    delegate_ext(
+                    a2a_delegate(
                         goal="start child",
                         is_loop=True,
                         input=self._delegate_ext_input_factory(),
