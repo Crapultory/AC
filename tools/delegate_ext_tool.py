@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from types import SimpleNamespace
 import threading
 import time
 import uuid
@@ -271,6 +273,465 @@ def a2a_list() -> str:
     )
 
 
+def _run_coro_sync(coro):
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+
+    result: dict[str, Any] = {}
+    error: dict[str, BaseException] = {}
+
+    def _runner() -> None:
+        try:
+            result["value"] = asyncio.run(coro)
+        except BaseException as exc:  # pragma: no cover - passthrough guard
+            error["exc"] = exc
+
+    thread = threading.Thread(target=_runner, daemon=True)
+    thread.start()
+    thread.join()
+    if "exc" in error:
+        raise error["exc"]
+    return result.get("value")
+
+
+def _normalize_a2a_base_url(url: str) -> str:
+    value = str(url or "").strip()
+    if not value:
+        raise ValueError("A2A agent URL cannot be empty.")
+    if "://" not in value:
+        value = f"http://{value}"
+    if value.endswith("/.well-known/agent-card.json"):
+        value = value[: -len("/.well-known/agent-card.json")]
+    return value.rstrip("/")
+
+
+def _a2a_field(value, name: str, default=None):
+    if isinstance(value, dict):
+        return value.get(name, default)
+    return getattr(value, name, default)
+
+
+def _a2a_message_text(message) -> str:
+    parts = list(_a2a_field(message, "parts", []) or [])
+    chunks = [part.text for part in parts if getattr(part, "text", "")]
+    if chunks:
+        return "".join(chunks)
+
+    content = _a2a_field(message, "content", None)
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        text_chunks: list[str] = []
+        for item in content:
+            if isinstance(item, str):
+                text_chunks.append(item)
+                continue
+            if isinstance(item, dict) and item.get("type") == "text":
+                text_chunks.append(str(item.get("text", "")))
+        return "".join(text_chunks)
+    if content is None:
+        return ""
+    if isinstance(content, (dict, list)):
+        return json.dumps(content, ensure_ascii=True, separators=(",", ":"))
+    return str(content)
+
+
+def _a2a_message_metadata(message) -> dict[str, Any]:
+    metadata = _a2a_field(message, "metadata", None)
+    return metadata if isinstance(metadata, dict) else {}
+
+
+def _a2a_hermes_metadata(message) -> dict[str, Any]:
+    hermes = _a2a_message_metadata(message).get("hermes")
+    return hermes if isinstance(hermes, dict) else {}
+
+
+def _a2a_is_tool_message(message) -> bool:
+    if message is None:
+        return False
+    hermes = _a2a_hermes_metadata(message)
+    if hermes.get("kind") == "tool_result":
+        return True
+    role = _a2a_field(message, "role", None)
+    return role in ("tool", "ROLE_TOOL")
+
+
+def _a2a_message_tool_calls(message) -> list[dict[str, Any]]:
+    tool_calls = list(_a2a_field(message, "tool_calls", []) or [])
+    if tool_calls:
+        return tool_calls
+    hermes = _a2a_hermes_metadata(message)
+    if hermes.get("kind") != "tool_call":
+        return []
+    return [
+        {
+            "id": hermes.get("tool_call_id", ""),
+            "function": {
+                "name": hermes.get("name", "tool"),
+                "arguments": hermes.get("arguments", {}),
+            },
+        }
+    ]
+
+
+def _compact_json_text(value: Any) -> str:
+    if value is None:
+        return ""
+    if isinstance(value, (dict, list)):
+        return json.dumps(value, ensure_ascii=True, separators=(",", ":"))
+    text = str(value)
+    if not text:
+        return ""
+    try:
+        parsed = json.loads(text)
+    except Exception:
+        return text
+    return json.dumps(parsed, ensure_ascii=True, separators=(",", ":"))
+
+
+def _a2a_tool_call_details(tool_call) -> tuple[str, str, str]:
+    call_id = str(_a2a_field(tool_call, "id", "") or "")
+    function = _a2a_field(tool_call, "function", {}) or {}
+    tool_name = str(_a2a_field(function, "name", "tool") or "tool")
+    arguments = _compact_json_text(_a2a_field(function, "arguments", ""))
+    return call_id, tool_name, arguments
+
+
+def _a2a_tool_result_details(
+    message,
+    tool_names_by_call_id: dict[str, str],
+) -> tuple[str, str]:
+    hermes = _a2a_hermes_metadata(message)
+    if hermes.get("kind") == "tool_result":
+        tool_name = str(hermes.get("name") or "tool")
+        return tool_name, _compact_json_text(hermes.get("result", ""))
+    tool_call_id = str(_a2a_field(message, "tool_call_id", "") or "")
+    tool_name = str(_a2a_field(message, "tool_name", "") or "")
+    if not tool_name and tool_call_id:
+        tool_name = tool_names_by_call_id.get(tool_call_id, "")
+    if not tool_name:
+        tool_name = "tool"
+    return tool_name, _compact_json_text(_a2a_message_text(message))
+
+
+def _a2a_is_agent_message(message) -> bool:
+    if message is None:
+        return False
+    hermes = _a2a_hermes_metadata(message)
+    if hermes.get("kind") in {"tool_call", "tool_result"}:
+        return False
+    role = _a2a_field(message, "role", None)
+    return role in (None, "assistant", "agent", "ROLE_AGENT")
+
+
+def _a2a_assistant_message_text(message) -> str:
+    if not _a2a_is_agent_message(message):
+        return ""
+    return _a2a_message_text(message)
+
+
+def _a2a_task_text(task) -> str:
+    status = getattr(task, "status", None)
+    text = _a2a_assistant_message_text(_a2a_field(status, "message", None))
+    if text:
+        return text
+
+    for message in reversed(list(_a2a_field(task, "history", []) or [])):
+        text = _a2a_assistant_message_text(message)
+        if text:
+            return text
+    return ""
+
+
+def _a2a_task_messages(task) -> list[Any]:
+    messages = list(_a2a_field(task, "history", []) or [])
+    status = _a2a_field(task, "status", None)
+    status_message = _a2a_field(status, "message", None)
+    if status_message is not None:
+        messages.append(status_message)
+    return messages
+
+
+def _a2a_event_messages(event) -> list[Any]:
+    if event.HasField("task"):
+        return _a2a_task_messages(event.task)
+    if event.HasField("message"):
+        return [event.message]
+    if event.HasField("status_update"):
+        status = _a2a_field(event.status_update, "status", None)
+        message = _a2a_field(status, "message", None)
+        return [message] if message is not None else []
+    return []
+
+
+def _a2a_event_to_task(event):
+    if event.HasField("task"):
+        return event.task
+    if event.HasField("message"):
+        return SimpleNamespace(
+            id=event.message.task_id,
+            context_id=event.message.context_id,
+            status=SimpleNamespace(state="completed", message=event.message),
+            history=[event.message],
+        )
+    if event.HasField("status_update"):
+        status = event.status_update.status
+        return SimpleNamespace(
+            id=event.status_update.task_id,
+            context_id=event.status_update.context_id,
+            status=SimpleNamespace(
+                state=getattr(status, "state", None),
+                message=getattr(status, "message", None),
+            ),
+            history=[],
+        )
+    return None
+
+
+def _a2a_final_task_states() -> set[Any]:
+    from a2a.types import TaskState
+
+    return {
+        TaskState.TASK_STATE_COMPLETED,
+        TaskState.TASK_STATE_FAILED,
+        TaskState.TASK_STATE_CANCELED,
+        TaskState.TASK_STATE_INPUT_REQUIRED,
+        TaskState.TASK_STATE_REJECTED,
+        TaskState.TASK_STATE_AUTH_REQUIRED,
+        "completed",
+    }
+
+
+def _a2a_completed_state() -> Any:
+    from a2a.types import TaskState
+
+    return TaskState.TASK_STATE_COMPLETED
+
+
+def _a2a_input_required_state() -> Any:
+    from a2a.types import TaskState
+
+    return TaskState.TASK_STATE_INPUT_REQUIRED
+
+
+def _a2a_state_name(state: Any) -> str:
+    from a2a.types import TaskState
+
+    if isinstance(state, str):
+        return state.lower()
+    try:
+        return TaskState.Name(state).replace("TASK_STATE_", "").lower()
+    except Exception:
+        return str(state)
+
+
+class _A2ADelegateSession:
+    def __init__(
+        self,
+        base_url: str,
+        *,
+        output=None,
+        timeout: float = 60.0,
+        poll_interval: float = 0.05,
+    ) -> None:
+        self.base_url = _normalize_a2a_base_url(base_url)
+        self.output = output
+        self.timeout = timeout
+        self.poll_interval = poll_interval
+        self.context_id: str | None = None
+        self.task_id: str | None = None
+        self._http_client = None
+        self._client = None
+        self._rendered_tool_entries: set[str] = set()
+        self._tool_names_by_call_id: dict[str, str] = {}
+
+    async def open(self) -> None:
+        if self._client is not None:
+            return
+        from a2a.client import ClientConfig, ClientFactory
+
+        self._http_client = httpx.AsyncClient(
+            timeout=httpx.Timeout(
+                connect=10.0,
+                read=None,
+                write=60.0,
+                pool=60.0,
+            )
+        )
+        factory = ClientFactory(
+            ClientConfig(
+                httpx_client=self._http_client,
+                streaming=True,
+                polling=True,
+            )
+        )
+        self._client = await factory.create_from_url(self.base_url)
+
+    async def close(self) -> None:
+        client = self._client
+        http_client = self._http_client
+        self._client = None
+        self._http_client = None
+        if client is not None:
+            await client.close()
+        if http_client is not None:
+            await http_client.aclose()
+
+    async def send_turn(self, text: str, *, is_delegate_output: bool = True) -> dict[str, Any]:
+        await self.open()
+        self._rendered_tool_entries.clear()
+        self._tool_names_by_call_id.clear()
+        task = await self._send_text(text)
+        self.context_id = getattr(task, "context_id", None) or self.context_id
+        self.task_id = getattr(task, "id", None) or self.task_id
+        finished = await self._wait_for_final(task)
+        self.context_id = getattr(finished, "context_id", None) or self.context_id
+        self.task_id = getattr(finished, "id", None) or self.task_id
+        final_response = _a2a_task_text(finished)
+        if is_delegate_output and final_response:
+            _emit_delegate_event(
+                self.output,
+                "delegate",
+                "ai",
+                final_response,
+                session_id=self.context_id,
+            )
+        state = _a2a_field(getattr(finished, "status", None), "state", None)
+        return {
+            "task": finished,
+            "final_response": final_response,
+            "state": state,
+            "state_name": _a2a_state_name(state),
+        }
+
+    async def _send_text(self, text: str):
+        from a2a.types import Message, Part, Role, SendMessageConfiguration, SendMessageRequest
+
+        request = SendMessageRequest(
+            message=Message(
+                message_id=str(uuid.uuid4()),
+                role=Role.ROLE_USER,
+                context_id=self.context_id or "",
+                task_id="",
+                parts=[Part(text=text)],
+            ),
+            configuration=SendMessageConfiguration(return_immediately=True),
+        )
+        last_task = None
+        got_response = False
+        async for event in self._client.send_message(request):
+            got_response = True
+            self._emit_tool_messages(
+                _a2a_event_messages(event),
+                session_id=getattr(last_task, "context_id", None) or self.context_id,
+            )
+            last_task = _a2a_event_to_task(event) or last_task
+            if last_task is not None:
+                self.context_id = getattr(last_task, "context_id", None) or self.context_id
+                self.task_id = getattr(last_task, "id", None) or self.task_id
+                if _a2a_field(getattr(last_task, "status", None), "state", None) in _a2a_final_task_states():
+                    return last_task
+
+        if not got_response:
+            raise RuntimeError("A2A SDK returned no response events.")
+        if last_task is None:
+            raise RuntimeError("Unexpected A2A response without task or message.")
+        return last_task
+
+    async def _wait_for_final(self, task):
+        from a2a.types import GetTaskRequest
+
+        current_task = task
+        deadline = time.monotonic() + self.timeout
+        while True:
+            self._emit_tool_messages(
+                _a2a_task_messages(current_task),
+                session_id=getattr(current_task, "context_id", None) or self.context_id,
+            )
+            state = _a2a_field(getattr(current_task, "status", None), "state", None)
+            if state in _a2a_final_task_states():
+                return current_task
+            if time.monotonic() >= deadline:
+                raise TimeoutError(
+                    f"Timed out waiting for task {getattr(current_task, 'id', None)!r}."
+                )
+            await asyncio.sleep(self.poll_interval)
+            current_task = await self._client.get_task(GetTaskRequest(id=current_task.id))
+
+    def _emit_tool_messages(self, messages: list[Any], *, session_id: str | None) -> None:
+        for message in messages:
+            if message is None:
+                continue
+            for tool_call in _a2a_message_tool_calls(message):
+                call_id, tool_name, arguments = _a2a_tool_call_details(tool_call)
+                if call_id:
+                    self._tool_names_by_call_id[call_id] = tool_name
+                key = f"assistant-tool:{call_id}:{tool_name}:{arguments}"
+                if key in self._rendered_tool_entries:
+                    continue
+                self._rendered_tool_entries.add(key)
+                content = f"{tool_name} {arguments}" if arguments else tool_name
+                _emit_delegate_event(
+                    self.output,
+                    "delegate",
+                    "tool_call",
+                    content,
+                    session_id=session_id,
+                )
+
+            if _a2a_is_tool_message(message):
+                tool_name, result_text = _a2a_tool_result_details(
+                    message,
+                    self._tool_names_by_call_id,
+                )
+                tool_call_id = str(_a2a_field(message, "tool_call_id", "") or "")
+                key = f"tool:{tool_call_id}:{tool_name}:{result_text}"
+                if key in self._rendered_tool_entries:
+                    continue
+                self._rendered_tool_entries.add(key)
+                content = f"{tool_name} -> {result_text}" if result_text else tool_name
+                _emit_delegate_event(
+                    self.output,
+                    "delegate",
+                    "tool_result",
+                    content,
+                    session_id=session_id,
+                )
+
+
+def _resolve_a2a_entry(a2a_name: Optional[str]) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    name = str(a2a_name or "").strip()
+    if not name:
+        return None, "delegate_ext a2a mode requires a non-empty a2a_name."
+
+    loaded = _load_a2a_registry(force_refresh=False)
+    entry = loaded.get(name)
+    if entry is None:
+        loaded = _load_a2a_registry(force_refresh=True)
+        entry = loaded.get(name)
+    if entry is None:
+        available = ", ".join(sorted(loaded)) if loaded else "(none configured)"
+        return None, f"Unknown a2a agent {name!r}. Available names: {available}."
+    if not entry.get("available", False):
+        details = str(entry.get("error") or "remote agent is unavailable.")
+        return None, f"A2A agent {name!r} is unavailable: {details}"
+    return entry, None
+
+
+def _resolve_a2a_remote_url(entry: dict[str, Any]) -> str:
+    agent_card = entry.get("agent_card")
+    if isinstance(agent_card, dict):
+        for interface in agent_card.get("supported_interfaces", []):
+            if not isinstance(interface, dict):
+                continue
+            url = interface.get("url")
+            if isinstance(url, str) and url:
+                return _normalize_a2a_base_url(url)
+    return _normalize_a2a_base_url(str(entry.get("url") or ""))
+
+
 def _register_active_child(parent_agent, child) -> None:
     if not hasattr(parent_agent, "_active_children"):
         return
@@ -513,6 +974,185 @@ def _run_local_delegate(
             logger.debug("Failed to close delegate_ext child agent", exc_info=True)
 
 
+def _build_a2a_payload(
+    *,
+    success: bool,
+    goal: str,
+    a2a_name: str,
+    entry: dict[str, Any],
+    session: _A2ADelegateSession | None,
+    loop_exit_reason: str,
+    duration_seconds: float,
+    final_response: str,
+    completed: bool,
+    error_message: str | None = None,
+) -> str:
+    payload = {
+        "success": success,
+        "agent": "a2a",
+        "a2a_name": a2a_name,
+        "goal": goal,
+        "session_id": getattr(session, "context_id", None),
+        "toolsets": None,
+        "max_iterations": None,
+        "completed": completed,
+        "loop_exit_reason": loop_exit_reason,
+        "api_calls": 0,
+        "duration_seconds": round(duration_seconds, 3),
+        "final_response": final_response,
+        "remote_url": _resolve_a2a_remote_url(entry),
+        "agent_card_name": entry.get("agent_card_name"),
+    }
+    if error_message:
+        payload["error"] = error_message
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _run_a2a_delegate(
+    *,
+    goal: str,
+    a2a_name: str,
+    is_delegate_output: bool,
+    output,
+    is_loop: bool,
+    input,
+) -> str:
+    start = time.monotonic()
+    try:
+        entry, entry_error = _resolve_a2a_entry(a2a_name)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return tool_error(str(exc), success=False, agent="a2a", a2a_name=a2a_name)
+    if entry_error:
+        return tool_error(entry_error, success=False, agent="a2a", a2a_name=a2a_name)
+    assert entry is not None
+
+    session = _A2ADelegateSession(
+        _resolve_a2a_remote_url(entry),
+        output=output,
+    )
+
+    async def _run_loop() -> str:
+        last_result = {"final_response": "", "state": None, "state_name": "idle"}
+        entered_foreground = False
+        try:
+            if is_loop:
+                entered_foreground = _enter_delegate_foreground(input)
+                if not entered_foreground:
+                    return _build_a2a_payload(
+                        success=False,
+                        goal=goal,
+                        a2a_name=a2a_name,
+                        entry=entry,
+                        session=session,
+                        loop_exit_reason="error",
+                        duration_seconds=time.monotonic() - start,
+                        final_response="",
+                        completed=False,
+                        error_message="delegate_ext could not enter foreground mode.",
+                    )
+                _emit_delegate_event(
+                    output,
+                    "delegate",
+                    "status",
+                    "entered foreground loop",
+                    session_id=getattr(session, "context_id", None),
+                )
+
+            last_result = await session.send_turn(goal, is_delegate_output=is_delegate_output)
+            if not is_loop:
+                state = last_result.get("state")
+                completed = state == _a2a_completed_state()
+                success = completed or state == _a2a_input_required_state()
+                error_message = None if success else last_result.get("final_response") or last_result.get("state_name")
+                return _build_a2a_payload(
+                    success=success,
+                    goal=goal,
+                    a2a_name=a2a_name,
+                    entry=entry,
+                    session=session,
+                    loop_exit_reason="completed" if success else "error",
+                    duration_seconds=time.monotonic() - start,
+                    final_response=str(last_result.get("final_response") or ""),
+                    completed=completed,
+                    error_message=error_message,
+                )
+
+            while True:
+                next_message = await asyncio.to_thread(_read_delegate_input, input)
+                if next_message is None:
+                    return _build_a2a_payload(
+                        success=True,
+                        goal=goal,
+                        a2a_name=a2a_name,
+                        entry=entry,
+                        session=session,
+                        loop_exit_reason="input_closed",
+                        duration_seconds=time.monotonic() - start,
+                        final_response=str(last_result.get("final_response") or ""),
+                        completed=last_result.get("state") == _a2a_completed_state(),
+                    )
+
+                stripped = next_message.strip()
+                if stripped in {"/main", "/exit"}:
+                    _emit_delegate_event(
+                        output,
+                        "delegate",
+                        "status",
+                        "return to main",
+                        session_id=getattr(session, "context_id", None),
+                    )
+                    return _build_a2a_payload(
+                        success=True,
+                        goal=goal,
+                        a2a_name=a2a_name,
+                        entry=entry,
+                        session=session,
+                        loop_exit_reason="main_command",
+                        duration_seconds=time.monotonic() - start,
+                        final_response=str(last_result.get("final_response") or ""),
+                        completed=last_result.get("state") == _a2a_completed_state(),
+                    )
+
+                _emit_delegate_event(
+                    output,
+                    "delegate",
+                    "user",
+                    stripped,
+                    session_id=getattr(session, "context_id", None),
+                )
+                last_result = await session.send_turn(
+                    stripped,
+                    is_delegate_output=is_delegate_output,
+                )
+        except Exception as exc:
+            if is_delegate_output:
+                _emit_delegate_event(
+                    output,
+                    "delegate",
+                    "error",
+                    str(exc),
+                    session_id=getattr(session, "context_id", None),
+                )
+            return _build_a2a_payload(
+                success=False,
+                goal=goal,
+                a2a_name=a2a_name,
+                entry=entry,
+                session=session,
+                loop_exit_reason="error",
+                duration_seconds=time.monotonic() - start,
+                final_response=str(last_result.get("final_response") or ""),
+                completed=False,
+                error_message=str(exc),
+            )
+        finally:
+            if entered_foreground:
+                _exit_delegate_foreground(input)
+            await session.close()
+
+    return _run_coro_sync(_run_loop())
+
+
 def delegate_ext(
     goal: Optional[str] = None,
     context: Optional[str] = None,
@@ -540,11 +1180,13 @@ def delegate_ext(
         return tool_error("agent must be one of: local, a2a.")
 
     if mode == "a2a":
-        return tool_error(
-            "delegate_ext a2a mode is not implemented yet.",
-            agent="a2a",
-            a2a_name=a2a_name,
-            success=False,
+        return _run_a2a_delegate(
+            goal=goal.strip(),
+            a2a_name=str(a2a_name or "").strip(),
+            is_delegate_output=is_delegate_output,
+            output=output,
+            is_loop=effective_is_loop,
+            input=input,
         )
 
     normalized_toolsets, toolsets_error = _normalize_toolsets(toolsets)
@@ -575,7 +1217,7 @@ DELEGATE_EXT_SCHEMA = {
     "description": (
         "Delegate a single task to another agent. "
         "Use local mode to spawn a focused Hermes subagent with its own toolset and loop budget. "
-        "A2A mode is reserved for remote agents and is not implemented yet."
+        "Use a2a mode to continue a named remote A2A agent session."
     ),
     "parameters": {
         "type": "object",
@@ -591,7 +1233,7 @@ DELEGATE_EXT_SCHEMA = {
             "agent": {
                 "type": "string",
                 "enum": ["local", "a2a"],
-                "description": "Delegation target mode. Default: local. a2a is reserved for remote agents and currently unimplemented.",
+                "description": "Delegation target mode. Default: local. Use a2a for configured remote agents.",
             },
             "a2a_name": {
                 "type": "string",
@@ -600,12 +1242,12 @@ DELEGATE_EXT_SCHEMA = {
             "toolsets": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Toolsets to enable for local delegated execution. Default: ['hermes-cli'].",
+                "description": "Toolsets to enable for local delegated execution only. Default: ['hermes-cli']. Ignored when agent='a2a'.",
             },
             "max_iterations": {
                 "type": "integer",
                 "minimum": 1,
-                "description": "Maximum agent loop iterations for local delegated execution. Defaults to the parent agent's limit.",
+                "description": "Maximum agent loop iterations for local delegated execution only. Defaults to the parent agent's limit. Ignored when agent='a2a'.",
             },
             "is_delegate_output": {
                 "type": "boolean",

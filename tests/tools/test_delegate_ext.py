@@ -1,13 +1,18 @@
 import json
 import threading
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
+from uuid import uuid4
 
+import pytest
+from a2a.types import TaskState
 from run_agent import AIAgent
 from toolsets import TOOLSETS, _HERMES_CORE_TOOLS
 from tools.registry import registry
 from tools.delegate_ext_tool import (
     A2A_REGISTRY,
     DELEGATE_EXT_SCHEMA,
+    _A2ADelegateSession,
     _strip_recursive_delegate_tool,
     a2a_list,
     delegate_ext,
@@ -53,6 +58,80 @@ def _make_mock_parent():
     return parent
 
 
+def _make_a2a_task(*, task_id: str, context_id: str, state, text: str = "", history=None):
+    parts = [SimpleNamespace(text=text)] if text else []
+    message = SimpleNamespace(parts=parts) if parts else None
+    return SimpleNamespace(
+        id=task_id,
+        context_id=context_id,
+        status=SimpleNamespace(
+            state=state,
+            message=message,
+        ),
+        history=list(history or []),
+    )
+
+
+def _make_a2a_history_message(
+    *,
+    role,
+    text: str = "",
+    context_id: str = "ctx-1",
+    task_id: str = "",
+    tool_calls=None,
+    tool_call_id: str = "",
+    tool_name: str = "",
+    metadata=None,
+):
+    return SimpleNamespace(
+        context_id=context_id,
+        task_id=task_id,
+        role=role,
+        parts=[SimpleNamespace(text=text)] if text else [],
+        tool_calls=tool_calls,
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        metadata=metadata or {},
+    )
+
+
+class _FakeA2AEvent:
+    def __init__(self, task=None, message=None, status_update=None):
+        self.task = task
+        self.message = message
+        self.status_update = status_update
+
+    def HasField(self, name: str) -> bool:
+        return getattr(self, name) is not None
+
+
+class _FakeA2AClient:
+    def __init__(self, turn_plans):
+        self.turn_plans = list(turn_plans)
+        self.sent_requests = []
+        self.turn_index = 0
+
+    async def send_message(self, request):
+        self.sent_requests.append(request)
+        plan = self.turn_plans[self.turn_index]
+        self.turn_index += 1
+        yield _FakeA2AEvent(task=plan["initial_task"])
+
+    async def get_task(self, request):
+        for plan in self.turn_plans:
+            if plan["initial_task"].id == request.id:
+                return plan["polls"].pop(0)
+        raise AssertionError(f"Unknown task id: {request.id}")
+
+    async def close(self):
+        return None
+
+
+class _FakeAsyncHTTPClient:
+    async def aclose(self):
+        return None
+
+
 class TestDelegateExtSchema:
     def test_a2a_list_schema_is_registered(self):
         schema = registry.get_schema("a2a_list")
@@ -94,14 +173,14 @@ class TestDelegateExt:
         assert "error" in result
         assert "goal" in result["error"].lower()
 
-    def test_a2a_mode_placeholder(self):
+    def test_a2a_mode_requires_a2a_name(self):
         parent = _make_mock_parent()
         result = json.loads(
             delegate_ext(goal="test remote", agent="a2a", parent_agent=parent)
         )
         assert result["error"]
         assert result["agent"] == "a2a"
-        assert "not implemented" in result["error"].lower()
+        assert "a2a_name" in result["error"].lower()
 
     def test_a2a_list_reads_profile_local_registry(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / "profile"
@@ -178,6 +257,145 @@ class TestDelegateExt:
 
         assert result["success"] is False
         assert "a2a" in result["error"].lower()
+
+    def test_a2a_mode_runs_single_turn_and_ignores_local_only_params(self, monkeypatch):
+        parent = _make_mock_parent()
+        A2A_REGISTRY["remote"] = {
+            "name": "remote",
+            "url": "http://agent.local",
+            "available": True,
+            "capabilities": ["streaming"],
+            "agent_card": {
+                "supported_interfaces": [
+                    {"url": "http://agent.local/a2a"},
+                ]
+            },
+            "agent_card_name": "Remote Agent",
+            "error": None,
+        }
+        captured = {}
+
+        class _FakeSession:
+            def __init__(self, base_url, *, output=None, timeout=60.0, poll_interval=0.05):
+                del timeout, poll_interval
+                captured["base_url"] = base_url
+                captured["output"] = output
+                self.context_id = None
+
+            async def send_turn(self, text: str, *, is_delegate_output: bool = True):
+                captured.setdefault("turns", []).append((text, is_delegate_output))
+                self.context_id = "ctx-remote"
+                return {
+                    "final_response": "remote:first",
+                    "state": TaskState.TASK_STATE_COMPLETED,
+                    "state_name": "completed",
+                }
+
+            async def close(self):
+                captured["closed"] = True
+
+        monkeypatch.setattr("tools.delegate_ext_tool._A2ADelegateSession", _FakeSession)
+
+        result = json.loads(
+            delegate_ext(
+                goal="test remote",
+                agent="a2a",
+                a2a_name="remote",
+                toolsets=["terminal"],
+                max_iterations=7,
+                parent_agent=parent,
+            )
+        )
+
+        assert captured["base_url"] == "http://agent.local/a2a"
+        assert captured["turns"] == [("test remote", True)]
+        assert captured["closed"] is True
+        assert result["success"] is True
+        assert result["agent"] == "a2a"
+        assert result["a2a_name"] == "remote"
+        assert result["session_id"] == "ctx-remote"
+        assert result["toolsets"] is None
+        assert result["max_iterations"] is None
+        assert result["remote_url"] == "http://agent.local/a2a"
+        assert result["agent_card_name"] == "Remote Agent"
+        assert result["final_response"] == "remote:first"
+
+    def test_a2a_loop_mode_reuses_same_session_until_main(self, monkeypatch):
+        parent = _make_mock_parent()
+        A2A_REGISTRY["remote"] = {
+            "name": "remote",
+            "url": "http://agent.local",
+            "available": True,
+            "capabilities": ["streaming"],
+            "agent_card": {"supported_interfaces": [{"url": "http://agent.local/a2a"}]},
+            "agent_card_name": "Remote Agent",
+            "error": None,
+        }
+        captured = {}
+        sink = []
+
+        class _Input:
+            def __init__(self, values):
+                self._values = iter(values)
+
+            def enter_foreground(self):
+                captured["entered"] = captured.get("entered", 0) + 1
+                return True
+
+            def exit_foreground(self):
+                captured["exited"] = captured.get("exited", 0) + 1
+
+            def read_line(self):
+                return next(self._values)
+
+        class _Output:
+            def emit(self, source, event_type, content, session_id=None):
+                sink.append((source, event_type, content, session_id))
+
+        class _FakeSession:
+            def __init__(self, base_url, *, output=None, timeout=60.0, poll_interval=0.05):
+                del base_url, timeout, poll_interval
+                self.output = output
+                self.context_id = None
+
+            async def send_turn(self, text: str, *, is_delegate_output: bool = True):
+                captured.setdefault("turns", []).append((text, is_delegate_output))
+                self.context_id = "ctx-remote"
+                index = len(captured["turns"])
+                return {
+                    "final_response": f"remote:{index}",
+                    "state": TaskState.TASK_STATE_COMPLETED,
+                    "state_name": "completed",
+                }
+
+            async def close(self):
+                captured["closed"] = True
+
+        monkeypatch.setattr("tools.delegate_ext_tool._A2ADelegateSession", _FakeSession)
+
+        result = json.loads(
+            delegate_ext(
+                goal="start remote",
+                agent="a2a",
+                a2a_name="remote",
+                is_loop=True,
+                input=_Input(["follow up", "/main"]),
+                output=_Output(),
+                parent_agent=parent,
+            )
+        )
+
+        assert captured["turns"] == [("start remote", True), ("follow up", True)]
+        assert captured["entered"] == 1
+        assert captured["exited"] == 1
+        assert captured["closed"] is True
+        assert result["loop_exit_reason"] == "main_command"
+        assert result["final_response"] == "remote:2"
+        assert sink == [
+            ("delegate", "status", "entered foreground loop", None),
+            ("delegate", "user", "follow up", "ctx-remote"),
+            ("delegate", "status", "return to main", "ctx-remote"),
+        ]
 
     @patch("run_agent.AIAgent")
     def test_local_mode_uses_defaults(self, mock_agent_cls):
@@ -508,3 +726,119 @@ class TestDelegateExtIntegration:
             input=None,
             parent_agent=agent,
         )
+
+
+class TestA2ADelegateSession:
+    @pytest.mark.asyncio
+    async def test_send_turn_reuses_context_and_emits_tool_metadata(self):
+        first_task_id = str(uuid4())
+        second_task_id = str(uuid4())
+        tool_call = {
+            "id": "call_1",
+            "function": {
+                "name": "web_search",
+                "arguments": '{"q":"cats"}',
+            },
+        }
+        fake_client = _FakeA2AClient(
+            [
+                {
+                    "initial_task": _make_a2a_task(
+                        task_id=first_task_id,
+                        context_id="ctx-1",
+                        state=TaskState.TASK_STATE_SUBMITTED,
+                    ),
+                    "polls": [
+                        SimpleNamespace(
+                            id=first_task_id,
+                            context_id="ctx-1",
+                            status=SimpleNamespace(state=TaskState.TASK_STATE_WORKING),
+                            history=[
+                                _make_a2a_history_message(
+                                    role="assistant",
+                                    task_id=first_task_id,
+                                    metadata={
+                                        "hermes": {
+                                            "kind": "tool_call",
+                                            "tool_call_id": "call_1",
+                                            "name": "web_search",
+                                            "arguments": {"q": "cats"},
+                                        }
+                                    },
+                                ),
+                                _make_a2a_history_message(
+                                    role="assistant",
+                                    task_id=first_task_id,
+                                    metadata={
+                                        "hermes": {
+                                            "kind": "tool_result",
+                                            "tool_call_id": "call_1",
+                                            "name": "web_search",
+                                            "result": '{"results":["cats"]}',
+                                        }
+                                    },
+                                ),
+                            ],
+                        ),
+                        _make_a2a_task(
+                            task_id=first_task_id,
+                            context_id="ctx-1",
+                            state=TaskState.TASK_STATE_COMPLETED,
+                            text="first reply",
+                        ),
+                    ],
+                },
+                {
+                    "initial_task": SimpleNamespace(
+                        id=second_task_id,
+                        context_id="ctx-1",
+                        status=SimpleNamespace(state=TaskState.TASK_STATE_SUBMITTED),
+                        history=[
+                            _make_a2a_history_message(
+                                role="assistant",
+                                task_id=second_task_id,
+                                tool_calls=[tool_call],
+                            )
+                        ],
+                    ),
+                    "polls": [
+                        _make_a2a_task(
+                            task_id=second_task_id,
+                            context_id="ctx-1",
+                            state=TaskState.TASK_STATE_COMPLETED,
+                            text="second reply",
+                        ),
+                    ],
+                },
+            ]
+        )
+        sink = []
+
+        class _Output:
+            def emit(self, source, event_type, content, session_id=None):
+                sink.append((source, event_type, content, session_id))
+
+        session = _A2ADelegateSession(
+            "http://agent.local",
+            output=_Output(),
+            poll_interval=0,
+            timeout=1,
+        )
+        session._client = fake_client
+        session._http_client = _FakeAsyncHTTPClient()
+
+        first = await session.send_turn("hello")
+        second = await session.send_turn("follow up")
+        await session.close()
+
+        assert first["final_response"] == "first reply"
+        assert second["final_response"] == "second reply"
+        assert fake_client.sent_requests[0].message.context_id == ""
+        assert fake_client.sent_requests[1].message.context_id == "ctx-1"
+        assert sink == [
+            ("delegate", "tool_call", 'web_search {"q":"cats"}', "ctx-1"),
+            ("delegate", "tool_result", 'web_search -> {"results":["cats"]}', "ctx-1"),
+            ("delegate", "ai", "first reply", "ctx-1"),
+            ("delegate", "tool_call", 'web_search {"q":"cats"}', "ctx-1"),
+            ("delegate", "ai", "second reply", "ctx-1"),
+        ]
