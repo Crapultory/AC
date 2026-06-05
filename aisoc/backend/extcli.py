@@ -47,16 +47,19 @@ def _run_agent_turn(
 ) -> str:
     streamed_chunks: list[str] = []
     ai_prefix_written = False
+    ai_line_open = False
 
     def _stream_callback(delta: str | None) -> None:
-        nonlocal ai_prefix_written
+        nonlocal ai_prefix_written, ai_line_open
         if delta is None:
-            if ai_prefix_written:
+            if ai_line_open:
                 _write_line(output)
+                ai_line_open = False
             return
         if not ai_prefix_written:
             output.write("ai: ")
             ai_prefix_written = True
+        ai_line_open = True
         output.write(delta)
         flush = getattr(output, "flush", None)
         if callable(flush):
@@ -106,6 +109,8 @@ def _run_agent_turn(
                 pass
         else:
             setattr(agent, "tool_complete_callback", old_tool_complete)
+        if ai_line_open:
+            _write_line(output)
 
     final_response = str(result.get("final_response") or "")
     if not streamed_chunks and final_response:

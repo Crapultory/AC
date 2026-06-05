@@ -73,6 +73,24 @@ class _FakeAgent:
         return {"final_response": response}
 
 
+class _StreamingFailureAgent:
+    def __init__(self, session_db: _FakeSessionDB):
+        self.session_db = session_db
+
+    def run_conversation(
+        self,
+        user_message: str,
+        system_message: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
+        task_id: str | None = None,
+        stream_callback=None,
+    ) -> dict[str, object]:
+        del user_message, system_message, conversation_history, task_id
+        if stream_callback is not None:
+            stream_callback("partial")
+        raise RuntimeError("boom")
+
+
 def test_run_extcli_loop_supports_new_exit_and_truncated_tool_results() -> None:
     created_agents: list[_FakeAgent] = []
     session_db = _FakeSessionDB()
@@ -264,3 +282,17 @@ def test_run_extcli_loop_closes_output_on_agent_factory_failure(monkeypatch):
         run_extcli_loop(agent_factory=_boom, input_fn=lambda prompt: "/exit")
 
     assert closed == [True]
+
+
+def test_run_extcli_loop_ends_partial_stream_before_error_line() -> None:
+    output = StringIO()
+    inputs = iter(["hello", "/exit"])
+
+    run_extcli_loop(
+        agent_factory=lambda session_id: _StreamingFailureAgent(_FakeSessionDB()),
+        input_fn=lambda prompt: next(inputs),
+        output=output,
+    )
+
+    transcript = output.getvalue()
+    assert "ai: partial\nerror: boom\n" in transcript
