@@ -112,6 +112,25 @@ class _MultiChunkAgent:
         return {"final_response": "hello world"}
 
 
+class _StreamingMismatchAgent:
+    def __init__(self, session_db: _FakeSessionDB):
+        self.session_db = session_db
+
+    def run_conversation(
+        self,
+        user_message: str,
+        system_message: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
+        task_id: str | None = None,
+        stream_callback=None,
+    ) -> dict[str, object]:
+        del user_message, system_message, conversation_history, task_id
+        if stream_callback is not None:
+            stream_callback("hello")
+            stream_callback(None)
+        return {"final_response": "hello\n"}
+
+
 class _PrivateSessionAgent(_FakeAgent):
     def __init__(self, label: str, session_id: str, session_db: _FakeSessionDB):
         super().__init__(label, session_id, session_db)
@@ -389,6 +408,21 @@ def test_run_extcli_loop_aggregates_streamed_ai_output_into_one_line() -> None:
 
     transcript = output.getvalue()
     assert "main.ai: hello world\n" in transcript
+    assert transcript.count("main.ai:") == 1
+
+
+def test_run_extcli_loop_uses_one_ai_line_when_final_response_differs_slightly() -> None:
+    output = StringIO()
+    inputs = iter(["hello", "/exit"])
+
+    run_extcli_loop(
+        agent_factory=lambda session_id: _StreamingMismatchAgent(_FakeSessionDB()),
+        input_fn=lambda prompt: next(inputs),
+        output=output,
+    )
+
+    transcript = output.getvalue()
+    assert "main.ai: hello\n" in transcript
     assert transcript.count("main.ai:") == 1
 
 

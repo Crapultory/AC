@@ -87,14 +87,6 @@ def _truncate_result(value: object, *, limit: int = 50) -> str:
         return text
     return text[:limit] + "..."
 
-
-def _write_line(output: TextIO, text: str = "") -> None:
-    output.write(text + "\n")
-    flush = getattr(output, "flush", None)
-    if callable(flush):
-        flush()
-
-
 def _open_output_file(path: Path, *, append: bool = False) -> TextIO:
     mode = "a" if append else "w"
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -110,21 +102,20 @@ def _run_agent_turn(
     streamed_chunks: list[str] = []
     streamed_output_emitted = False
 
-    def _emit_streamed_output() -> None:
+    def _emit_streamed_output(content: str) -> None:
         nonlocal streamed_output_emitted
-        if streamed_output_emitted or not streamed_chunks:
+        if streamed_output_emitted:
             return
         output_adapter.emit(
             "main",
             "ai",
-            "".join(streamed_chunks),
+            content,
             session_id=getattr(agent, "session_id", None),
         )
         streamed_output_emitted = True
 
     def _stream_callback(delta: str | None) -> None:
         if delta is None:
-            _emit_streamed_output()
             return
         streamed_chunks.append(delta)
 
@@ -167,7 +158,9 @@ def _run_agent_turn(
             stream_callback=_stream_callback,
         )
     except Exception:
-        _emit_streamed_output()
+        streamed_text = "".join(streamed_chunks)
+        if streamed_text:
+            _emit_streamed_output(streamed_text)
         raise
     finally:
         if old_tool_start is _CALLBACK_MISSING:
@@ -187,18 +180,13 @@ def _run_agent_turn(
     final_response = str(result.get("final_response") or "")
     streamed_text = "".join(streamed_chunks)
     if streamed_text:
-        if final_response and final_response != streamed_text:
-            output_adapter.emit(
-                "main",
-                "ai",
-                final_response,
-                session_id=getattr(agent, "session_id", None),
-            )
-        elif not final_response:
-            final_response = streamed_text
-            _emit_streamed_output()
+        display_response = streamed_text
+        if final_response:
+            if final_response.rstrip("\r\n") != streamed_text.rstrip("\r\n"):
+                display_response = final_response
         else:
-            _emit_streamed_output()
+            final_response = streamed_text
+        _emit_streamed_output(display_response.rstrip("\r\n"))
     elif final_response:
         output_adapter.emit(
             "main",
