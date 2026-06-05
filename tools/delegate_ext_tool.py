@@ -26,6 +26,65 @@ DEFAULT_TOOLSETS = ["hermes-cli"]
 DEFAULT_MAX_ITERATIONS = 90
 
 
+def _child_session_id(child) -> str | None:
+    session_id = getattr(child, "session_id", None)
+    return str(session_id) if isinstance(session_id, str) and session_id else None
+
+
+def _emit_delegate_event(
+    output,
+    source: str,
+    event_type: str,
+    content: str,
+    *,
+    session_id: str | None = None,
+) -> None:
+    if output is None:
+        return
+    emit = getattr(output, "emit", None)
+    if not callable(emit):
+        return
+    try:
+        emit(source, event_type, content, session_id=session_id)
+    except TypeError:
+        emit(source, event_type, content)
+
+
+def _read_delegate_input(input_adapter) -> str | None:
+    if input_adapter is None:
+        return None
+    read_line = getattr(input_adapter, "read_line", None)
+    if callable(read_line):
+        return read_line()
+    return None
+
+
+def _strip_recursive_delegate_tool(child) -> None:
+    valid_tool_names = getattr(child, "valid_tool_names", None)
+    if valid_tool_names:
+        valid_tool_names.discard("delegate_ext")
+    tool_definitions = getattr(child, "tool_definitions", None)
+    if tool_definitions:
+        child.tool_definitions = [
+            tool
+            for tool in tool_definitions
+            if tool.get("function", {}).get("name") != "delegate_ext"
+        ]
+
+
+def _enter_delegate_foreground(input_adapter) -> bool:
+    enter = getattr(input_adapter, "enter_foreground", None)
+    if callable(enter):
+        return bool(enter())
+    return True
+
+
+def _exit_delegate_foreground(input_adapter) -> None:
+    exit_foreground = getattr(input_adapter, "exit_foreground", None)
+    if callable(exit_foreground):
+        exit_foreground()
+
+
 def _normalize_toolsets(toolsets: Optional[List[str]]) -> tuple[Optional[List[str]], Optional[str]]:
     if toolsets is None:
         return list(DEFAULT_TOOLSETS), None
@@ -137,6 +196,7 @@ def _build_local_child_agent(
     child._subagent_id = f"delegate-ext-{uuid.uuid4().hex[:8]}"
     child._parent_subagent_id = getattr(parent_agent, "_subagent_id", None)
     child._subagent_goal = goal
+    _strip_recursive_delegate_tool(child)
     return child
 
 
@@ -146,6 +206,10 @@ def _run_local_delegate(
     context: Optional[str],
     toolsets: List[str],
     max_iterations: int,
+    is_delegate_output: bool,
+    output,
+    is_loop: bool,
+    input,
     parent_agent,
 ) -> str:
     child = _build_local_child_agent(
@@ -157,38 +221,131 @@ def _run_local_delegate(
     )
     _register_active_child(parent_agent, child)
     start = time.monotonic()
-    try:
+
+    def _run_single_turn(user_message: str) -> dict[str, Any]:
         task_id = (
             f"delegate-ext-{uuid.uuid4().hex[:8]}"
             if getattr(parent_agent, "_current_task_id", None)
             else None
         )
         result = child.run_conversation(
-            user_message=goal,
+            user_message=user_message,
             task_id=task_id,
         )
+        final_response = str(result.get("final_response") or "")
+        if is_delegate_output and final_response:
+            _emit_delegate_event(
+                output,
+                "delegate",
+                "ai",
+                final_response,
+                session_id=_child_session_id(child),
+            )
+        return result
+
+    def _finish_loop(
+        *,
+        last_result: dict[str, Any],
+        loop_exit_reason: str,
+        success: bool = True,
+        error_message: str | None = None,
+        api_calls: int = 0,
+    ) -> str:
         duration = round(time.monotonic() - start, 3)
-        return json.dumps(
-            {
-                "success": True,
-                "agent": "local",
-                "goal": goal,
-                "session_id": (
-                    str(getattr(child, "session_id", ""))
-                    if isinstance(getattr(child, "session_id", None), str)
-                    else None
-                ),
-                "toolsets": list(toolsets),
-                "max_iterations": max_iterations,
-                "completed": bool(result.get("completed", True)),
-                "loop_exit_reason": "completed",
-                "api_calls": int(result.get("api_calls", 0) or 0),
-                "duration_seconds": duration,
-                "final_response": str(result.get("final_response") or ""),
-            },
-            ensure_ascii=False,
+        payload = {
+            "success": success,
+            "agent": "local",
+            "goal": goal,
+            "session_id": _child_session_id(child),
+            "toolsets": list(toolsets),
+            "max_iterations": max_iterations,
+            "completed": bool(last_result.get("completed", success)),
+            "loop_exit_reason": loop_exit_reason,
+            "api_calls": api_calls,
+            "duration_seconds": duration,
+            "final_response": str(last_result.get("final_response") or ""),
+        }
+        if error_message:
+            payload["error"] = error_message
+        return json.dumps(payload, ensure_ascii=False)
+
+    try:
+        if not is_loop:
+            result = _run_single_turn(goal)
+            return _finish_loop(
+                last_result=result,
+                loop_exit_reason="completed",
+                api_calls=int(result.get("api_calls", 0) or 0),
+            )
+
+        if not _enter_delegate_foreground(input):
+            return _finish_loop(
+                last_result={"final_response": "", "completed": False},
+                loop_exit_reason="error",
+                success=False,
+                error_message="delegate_ext could not enter foreground mode.",
+                api_calls=0,
+            )
+        _emit_delegate_event(
+            output,
+            "delegate",
+            "status",
+            "entered foreground loop",
+            session_id=_child_session_id(child),
+        )
+        last_result = _run_single_turn(goal)
+        total_api_calls = int(last_result.get("api_calls", 0) or 0)
+
+        while True:
+            next_message = _read_delegate_input(input)
+            if next_message is None:
+                return _finish_loop(
+                    last_result=last_result,
+                    loop_exit_reason="input_closed",
+                    api_calls=total_api_calls,
+                )
+            stripped = next_message.strip()
+            if stripped in {"/main", "/exit"}:
+                _emit_delegate_event(
+                    output,
+                    "delegate",
+                    "status",
+                    "return to main",
+                    session_id=_child_session_id(child),
+                )
+                return _finish_loop(
+                    last_result=last_result,
+                    loop_exit_reason="main_command",
+                    api_calls=total_api_calls,
+                )
+            _emit_delegate_event(
+                output,
+                "delegate",
+                "user",
+                stripped,
+                session_id=_child_session_id(child),
+            )
+            last_result = _run_single_turn(stripped)
+            total_api_calls += int(last_result.get("api_calls", 0) or 0)
+    except Exception as exc:
+        if is_delegate_output:
+            _emit_delegate_event(
+                output,
+                "delegate",
+                "error",
+                str(exc),
+                session_id=_child_session_id(child),
+            )
+        return _finish_loop(
+            last_result={"final_response": "", "completed": False},
+            loop_exit_reason="error",
+            success=False,
+            error_message=str(exc),
+            api_calls=0,
         )
     finally:
+        if is_loop:
+            _exit_delegate_foreground(input)
         _unregister_active_child(parent_agent, child)
         try:
             if hasattr(child, "close"):
@@ -244,6 +401,10 @@ def delegate_ext(
         context=context,
         toolsets=normalized_toolsets or list(DEFAULT_TOOLSETS),
         max_iterations=normalized_max_iterations,
+        is_delegate_output=is_delegate_output,
+        output=output,
+        is_loop=effective_is_loop,
+        input=input,
         parent_agent=parent_agent,
     )
 

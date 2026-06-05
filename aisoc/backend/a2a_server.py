@@ -20,6 +20,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
 from aisoc.backend.a2a import HermesA2AExecutor
+from aisoc.backend.agent_runtime import prepare_hermes_home
 from aisoc.backend.config import AisocSettings, is_loopback_host, load_aisoc_settings
 
 A2A_RPC_PATH = os.getenv("A2A_BASE_PATH", "/a2a")
@@ -105,7 +106,7 @@ def create_a2a_app(
     add_a2a_routes_to_fastapi(
         app,
         agent_card_routes=[
-            # *create_agent_card_routes(agent_card),
+            *create_agent_card_routes(agent_card),
             *create_agent_card_routes(agent_card, card_url=A2A_AGENT_CARD_PATH),
         ],
         jsonrpc_routes=create_jsonrpc_routes(request_handler, rpc_url=A2A_RPC_PATH),
@@ -127,16 +128,7 @@ def start_a2a_server(
 ) -> None:
     """Start the AISOC A2A server."""
     del db_path
-    try:
-        from hermes_constants import get_hermes_home
-
-        print(f"Using Hermes home: {get_hermes_home()}")
-        hermes_home = str(get_hermes_home())
-        os.chdir(hermes_home)
-        os.environ["HERMES_HOME"] = hermes_home
-        os.environ["HOME"] = hermes_home + "/home"
-    except Exception as exc:
-        print(f"Warning: Failed to set TERMINAL_CWD from Hermes profile: {exc}")
+    prepare_hermes_home()
 
     if not is_loopback_host(host) and not allow_public:
         raise SystemExit(

@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+from collections import deque
 from collections.abc import Callable
 import json
 from pathlib import Path
 import threading
+import time
 from typing import TextIO
 from uuid import uuid4
 
@@ -18,7 +20,7 @@ from aisoc.backend.agent_runtime import (
 
 _CALLBACK_MISSING = object()
 DEFAULT_EXTCLI_OUTPUT_PATH = Path("/tmp/extcli_output")
-_FAST_TURN_JOIN_TIMEOUT_SECONDS = 0.01
+_FAST_TURN_JOIN_TIMEOUT_SECONDS = 1.0
 
 
 def _format_event_content(content: str) -> str:
@@ -58,8 +60,70 @@ class ExtCliOutputAdapter:
         *,
         session_id: str | None = None,
     ) -> None:
-        del session_id
-        self.write_line(f"{source}.{event_type}: {_format_event_content(content)}")
+        prefix = source
+        if session_id and source != "main":
+            prefix = f"{source}[{session_id}]"
+        self.write_line(f"{prefix}.{event_type}: {_format_event_content(content)}")
+
+
+class ExtCliInputAdapter:
+    def __init__(
+        self,
+        *,
+        on_enter_foreground: Callable[[ExtCliInputAdapter], bool] | None = None,
+        on_exit_foreground: Callable[[ExtCliInputAdapter], None] | None = None,
+    ) -> None:
+        self._condition = threading.Condition()
+        self._lines: deque[str] = deque()
+        self._closed = False
+        self._waiting_for_input = False
+        self._on_enter_foreground = on_enter_foreground
+        self._on_exit_foreground = on_exit_foreground
+
+    def enter_foreground(self) -> bool:
+        if self._on_enter_foreground is None:
+            return True
+        return bool(self._on_enter_foreground(self))
+
+    def exit_foreground(self) -> None:
+        if self._on_exit_foreground is not None:
+            self._on_exit_foreground(self)
+
+    def push_line(self, text: str) -> bool:
+        with self._condition:
+            if self._closed:
+                return False
+            self._waiting_for_input = False
+            self._lines.append(text)
+            self._condition.notify_all()
+            return True
+
+    def read_line(self) -> str | None:
+        with self._condition:
+            while not self._lines and not self._closed:
+                self._waiting_for_input = True
+                self._condition.notify_all()
+                self._condition.wait()
+            self._waiting_for_input = False
+            if self._lines:
+                line = self._lines.popleft()
+                self._condition.notify_all()
+                return line
+            return None
+
+    def close(self) -> None:
+        with self._condition:
+            self._closed = True
+            self._waiting_for_input = False
+            self._condition.notify_all()
+
+    def is_waiting_for_input(self) -> bool:
+        with self._condition:
+            return self._waiting_for_input
+
+    def wait_for_state_change(self, timeout: float | None = None) -> None:
+        with self._condition:
+            self._condition.wait(timeout=timeout)
 
 
 class ExtCliSessionRouter:
@@ -84,6 +148,41 @@ class ExtCliSessionRouter:
         with self._lock:
             return self._foreground
 
+    def activate_delegate_input(self, input_adapter: ExtCliInputAdapter) -> bool:
+        with self._lock:
+            if self._delegate_input not in {None, input_adapter}:
+                return False
+            self._delegate_input = input_adapter
+            self._foreground = "delegate"
+            return True
+
+    def release_delegate_input(self, input_adapter: ExtCliInputAdapter | None = None) -> bool:
+        with self._lock:
+            if input_adapter is not None and self._delegate_input is not input_adapter:
+                return False
+            had_delegate = self._delegate_input is not None
+            self._delegate_input = None
+            self._foreground = "main"
+            return had_delegate
+
+    def push_delegate_input(self, text: str, *, wait_for_ready: bool = False) -> bool:
+        with self._lock:
+            input_adapter = self._delegate_input if self._foreground == "delegate" else None
+        if input_adapter is None:
+            return False
+        if not input_adapter.push_line(text):
+            return False
+        if wait_for_ready:
+            while self.current_target() == "delegate" and not input_adapter.is_waiting_for_input():
+                input_adapter.wait_for_state_change(timeout=0.01)
+        return True
+
+    def close_delegate_input(self) -> None:
+        with self._lock:
+            input_adapter = self._delegate_input
+        if input_adapter is not None:
+            input_adapter.close()
+
 
 def _truncate_result(value: object, *, limit: int = 50) -> str:
     text = str(value)
@@ -91,10 +190,18 @@ def _truncate_result(value: object, *, limit: int = 50) -> str:
         return text
     return text[:limit] + "..."
 
+
 def _open_output_file(path: Path, *, append: bool = False) -> TextIO:
     mode = "a" if append else "w"
     path.parent.mkdir(parents=True, exist_ok=True)
     return path.open(mode, encoding="utf-8")
+
+
+def _make_delegate_input_adapter(router: ExtCliSessionRouter) -> ExtCliInputAdapter:
+    return ExtCliInputAdapter(
+        on_enter_foreground=router.activate_delegate_input,
+        on_exit_foreground=router.release_delegate_input,
+    )
 
 
 def _run_agent_turn(
@@ -102,6 +209,7 @@ def _run_agent_turn(
     user_message: str,
     history: list[dict[str, str]],
     output_adapter: ExtCliOutputAdapter,
+    router: ExtCliSessionRouter,
 ) -> str:
     streamed_chunks: list[str] = []
     streamed_output_emitted = False
@@ -151,9 +259,13 @@ def _run_agent_turn(
 
     old_tool_start = getattr(agent, "tool_start_callback", _CALLBACK_MISSING)
     old_tool_complete = getattr(agent, "tool_complete_callback", _CALLBACK_MISSING)
+    old_delegate_output = getattr(agent, "_delegate_ext_output_adapter", _CALLBACK_MISSING)
+    old_delegate_input_factory = getattr(agent, "_delegate_ext_input_factory", _CALLBACK_MISSING)
     try:
         setattr(agent, "tool_start_callback", _tool_start_callback)
         setattr(agent, "tool_complete_callback", _tool_complete_callback)
+        setattr(agent, "_delegate_ext_output_adapter", output_adapter)
+        setattr(agent, "_delegate_ext_input_factory", lambda: _make_delegate_input_adapter(router))
         result = agent.run_conversation(
             user_message,
             None,
@@ -181,6 +293,20 @@ def _run_agent_turn(
                 pass
         else:
             setattr(agent, "tool_complete_callback", old_tool_complete)
+        if old_delegate_output is _CALLBACK_MISSING:
+            try:
+                delattr(agent, "_delegate_ext_output_adapter")
+            except Exception:
+                pass
+        else:
+            setattr(agent, "_delegate_ext_output_adapter", old_delegate_output)
+        if old_delegate_input_factory is _CALLBACK_MISSING:
+            try:
+                delattr(agent, "_delegate_ext_input_factory")
+            except Exception:
+                pass
+        else:
+            setattr(agent, "_delegate_ext_input_factory", old_delegate_input_factory)
     final_response = str(result.get("final_response") or "")
     streamed_text = "".join(streamed_chunks)
     if streamed_text:
@@ -210,7 +336,7 @@ def _run_agent_turn_worker(
 ) -> None:
     try:
         history = load_conversation_history(agent, session_id)
-        _run_agent_turn(agent, user_message, history, output_adapter)
+        _run_agent_turn(agent, user_message, history, output_adapter, router)
     except Exception as exc:
         output_adapter.emit("main", "error", str(exc), session_id=session_id)
     finally:
@@ -229,8 +355,32 @@ def _start_main_turn(
         args=(agent, session_id, user_message, output_adapter, router),
     )
     worker.start()
-    worker.join(timeout=_FAST_TURN_JOIN_TIMEOUT_SECONDS)
+    deadline = time.monotonic() + _FAST_TURN_JOIN_TIMEOUT_SECONDS
+    while worker.is_alive() and router.current_target() == "main":
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        worker.join(timeout=min(0.005, remaining))
     return worker
+
+
+def _wait_for_foreground_handoff(
+    router: ExtCliSessionRouter,
+    workers: list[threading.Thread],
+) -> list[threading.Thread]:
+    live_workers = [worker for worker in workers if worker.is_alive()]
+    if not live_workers or router.current_target() != "main":
+        return live_workers
+
+    deadline = time.monotonic() + _FAST_TURN_JOIN_TIMEOUT_SECONDS
+    while live_workers and router.current_target() == "main":
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            break
+        for worker in live_workers:
+            worker.join(timeout=min(0.005, remaining))
+        live_workers = [worker for worker in live_workers if worker.is_alive()]
+    return live_workers
 
 
 def run_extcli_loop(
@@ -261,11 +411,24 @@ def run_extcli_loop(
         agent = factory(session_id)
         output_adapter.write_line("AISOC extcli ready. Use /new to reset and /exit to quit.")
         while True:
+            active_workers = _wait_for_foreground_handoff(router, active_workers)
             try:
                 raw = input_fn("extcli> ")
             except EOFError:
+                if router.current_target() == "delegate":
+                    router.close_delegate_input()
                 output_adapter.write_line("Bye.")
                 return
+
+            if router.current_target() == "delegate":
+                if not router.push_delegate_input(raw, wait_for_ready=True):
+                    output_adapter.emit(
+                        "main",
+                        "error",
+                        "delegate input channel is unavailable",
+                        session_id=session_id,
+                    )
+                continue
 
             user_message = raw.strip()
             if not user_message:
@@ -285,8 +448,8 @@ def run_extcli_loop(
 
             try:
                 worker = _start_main_turn(agent, session_id, user_message, output_adapter, router)
+                active_workers = [existing for existing in active_workers if existing.is_alive()]
                 if worker.is_alive():
-                    active_workers = [existing for existing in active_workers if existing.is_alive()]
                     active_workers.append(worker)
             except KeyboardInterrupt:
                 router.end_main_turn()

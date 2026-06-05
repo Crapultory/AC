@@ -73,3 +73,24 @@ def test_cmd_aisoc_rejects_server_only_flags_for_a2a() -> None:
         main_mod.cmd_aisoc(_ns(module="a2a", tui=True))
     assert exc.value.code == 2
 
+
+def test_cmd_aisoc_dispatches_extcli_module(monkeypatch: pytest.MonkeyPatch) -> None:
+    called: dict[str, object] = {}
+
+    def _fake_start_extcli(**kwargs) -> None:
+        called.update(kwargs)
+
+    monkeypatch.setattr(
+        "aisoc.backend.extcli.start_extcli",
+        _fake_start_extcli,
+        raising=False,
+    )
+    main_mod.cmd_aisoc(_ns(module="extcli"))
+
+    assert called == {}
+
+
+def test_cmd_aisoc_rejects_a2a_only_flags_for_extcli() -> None:
+    with pytest.raises(SystemExit) as exc:
+        main_mod.cmd_aisoc(_ns(module="extcli", streaming=True))
+    assert exc.value.code == 2

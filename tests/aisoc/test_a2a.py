@@ -94,8 +94,10 @@ class _InputRequiredAgent:
 
 
 class _ConversationAgent:
-    def __init__(self):
+    def __init__(self, session_id: str, session_db):
         self._interrupt_requested = False
+        self.session_id = session_id
+        self._session_db = session_db
         self.calls: list[dict[str, object]] = []
 
     def run_conversation(
@@ -114,7 +116,44 @@ class _ConversationAgent:
                 "task_id": task_id,
             }
         )
-        return {"final_response": f"history={len(history)}::{user_message}"}
+        messages = list(history)
+        messages.append({"role": "user", "content": user_message})
+        if user_message == "second turn":
+            messages.append(
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {"name": "web_search", "arguments": '{"q":"cats"}'},
+                    ],
+                }
+            )
+            messages.append(
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_1",
+                    "tool_name": "web_search",
+                    "content": '{"results":["cats"]}',
+                }
+            )
+        response = f"history={len(history)}::{user_message}"
+        messages.append({"role": "assistant", "content": response})
+        self._session_db.save_messages(self.session_id, messages)
+        return {"final_response": response}
+
+
+class _InMemoryConversationDB:
+    def __init__(self):
+        self._messages_by_session: dict[str, list[dict[str, object]]] = {}
+
+    def get_messages_as_conversation(
+        self, session_id: str, include_ancestors: bool = False
+    ) -> list[dict[str, object]]:
+        del include_ancestors
+        return list(self._messages_by_session.get(session_id, []))
+
+    def save_messages(self, session_id: str, messages: list[dict[str, object]]) -> None:
+        self._messages_by_session[session_id] = list(messages)
 
 
 class _StreamingAgent:
@@ -375,8 +414,15 @@ async def test_a2a_marks_input_required_task() -> None:
 
 @pytest.mark.asyncio
 async def test_a2a_continues_conversation_with_context_history() -> None:
-    agent = _ConversationAgent()
-    bundle = await _task_bundle(lambda session_id: agent)
+    session_db = _InMemoryConversationDB()
+    created_agents: list[_ConversationAgent] = []
+
+    def _factory(session_id: str) -> _ConversationAgent:
+        agent = _ConversationAgent(session_id, session_db)
+        created_agents.append(agent)
+        return agent
+
+    bundle = await _task_bundle(_factory)
     try:
         first_task = await _send_text(bundle.client, "first turn")
         first_done = await _wait_for_state(bundle.client, first_task.id, {TaskState.TASK_STATE_COMPLETED})
@@ -389,10 +435,38 @@ async def test_a2a_continues_conversation_with_context_history() -> None:
         )
         second_done = await _wait_for_state(bundle.client, second_task.id, {TaskState.TASK_STATE_COMPLETED})
         assert second_done.status.message.parts[0].text == "history=2::second turn"
-        assert len(agent.calls) == 2
+        third_task = await _send_text(
+            bundle.client,
+            "third turn",
+            context_id=first_done.context_id,
+        )
+        third_done = await _wait_for_state(bundle.client, third_task.id, {TaskState.TASK_STATE_COMPLETED})
+        assert third_done.status.message.parts[0].text == "history=6::third turn"
+        assert len(created_agents) == 1
+        agent = created_agents[0]
+        assert len(agent.calls) == 3
         assert agent.calls[1]["history"] == [
             {"role": "user", "content": "first turn"},
             {"role": "assistant", "content": "history=0::first turn"},
+        ]
+        assert agent.calls[2]["history"] == [
+            {"role": "user", "content": "first turn"},
+            {"role": "assistant", "content": "history=0::first turn"},
+            {"role": "user", "content": "second turn"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {"name": "web_search", "arguments": '{"q":"cats"}'},
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_1",
+                "tool_name": "web_search",
+                "content": '{"results":["cats"]}',
+            },
+            {"role": "assistant", "content": "history=2::second turn"},
         ]
     finally:
         await bundle.close()

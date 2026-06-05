@@ -1,12 +1,15 @@
 from __future__ import annotations
 
+import json
 from io import StringIO
 from pathlib import Path
 import threading
+from unittest.mock import MagicMock, patch
 
 import pytest
 
-from aisoc.backend.extcli import ExtCliOutputAdapter, run_extcli_loop
+from aisoc.backend.extcli import ExtCliInputAdapter, ExtCliOutputAdapter, run_extcli_loop
+from tools.delegate_ext_tool import delegate_ext
 
 
 class _FakeSessionDB:
@@ -536,6 +539,33 @@ def test_output_adapter_failure_does_not_deadlock(tmp_path):
     assert writes == ["main.status: hello\n", "main.status: again\n"]
 
 
+def test_output_adapter_uses_delegate_session_prefix() -> None:
+    output = StringIO()
+    adapter = ExtCliOutputAdapter(output)
+
+    adapter.emit("delegate", "status", "entered foreground loop", session_id="child-1")
+
+    assert output.getvalue() == "delegate[child-1].status: entered foreground loop\n"
+
+
+def test_input_adapter_reads_pushed_lines_until_closed() -> None:
+    adapter = ExtCliInputAdapter()
+    observed: list[str | None] = []
+
+    def _reader() -> None:
+        observed.append(adapter.read_line())
+        observed.append(adapter.read_line())
+
+    reader = threading.Thread(target=_reader)
+    reader.start()
+    adapter.push_line("child followup")
+    adapter.close()
+    reader.join(timeout=1)
+
+    assert not reader.is_alive()
+    assert observed == ["child followup", None]
+
+
 def test_sync_failures_use_prefixed_error_output(monkeypatch) -> None:
     output = StringIO()
     inputs = iter(["hello", "/exit"])
@@ -682,3 +712,201 @@ def test_exit_waits_for_busy_main_turn_before_shutdown():
     assert finished.is_set()
     assert loop_done.is_set()
     assert "Bye." in output.getvalue()
+
+
+def test_delegate_loop_takes_foreground_and_returns_to_main(tmp_path):
+    output_path = tmp_path / "extcli_output"
+    session_db = _FakeSessionDB()
+    inputs = iter(["delegate", "child followup", "/exit", "after child", "/exit"])
+
+    def _input(prompt: str) -> str:
+        del prompt
+        try:
+            return next(inputs)
+        except StopIteration:
+            raise EOFError()
+
+    class _DelegateParentAgent(_FakeAgent):
+        def run_conversation(self, user_message, *args, **kwargs):
+            if user_message != "delegate":
+                return super().run_conversation(user_message, *args, **kwargs)
+
+            child_results = iter(
+                [
+                    {"final_response": "child start", "completed": True, "api_calls": 1},
+                    {"final_response": "child followup done", "completed": True, "api_calls": 2},
+                ]
+            )
+
+            with patch("run_agent.AIAgent") as mock_agent_cls:
+                child = MagicMock()
+                child.session_id = "child-session"
+                child.run_conversation.side_effect = lambda *a, **k: next(child_results)
+                mock_agent_cls.return_value = child
+                result = json.loads(
+                    delegate_ext(
+                        goal="start child",
+                        is_loop=True,
+                        input=self._delegate_ext_input_factory(),
+                        output=self._delegate_ext_output_adapter,
+                        parent_agent=self,
+                    )
+                )
+
+            return {"final_response": f'delegated:{result["final_response"]}'}
+
+    run_extcli_loop(
+        agent_factory=lambda session_id: _DelegateParentAgent("agent", session_id, session_db),
+        input_fn=_input,
+        output_path=output_path,
+    )
+
+    text = output_path.read_text(encoding="utf-8")
+    assert "delegate[" in text
+    assert "return to main" in text
+    assert "after child" in text
+
+
+def test_child_loop_failure_returns_control_to_main(tmp_path):
+    output_path = tmp_path / "extcli_output"
+    session_db = _FakeSessionDB()
+    inputs = iter(["delegate", "after failure", "/exit"])
+
+    def _input(prompt: str) -> str:
+        del prompt
+        try:
+            return next(inputs)
+        except StopIteration:
+            raise EOFError()
+
+    class _FailingDelegateParentAgent(_FakeAgent):
+        def run_conversation(self, user_message, *args, **kwargs):
+            if user_message != "delegate":
+                return super().run_conversation(user_message, *args, **kwargs)
+
+            with patch("run_agent.AIAgent") as mock_agent_cls:
+                child = MagicMock()
+                child.session_id = "child-session"
+                child.run_conversation.side_effect = RuntimeError("delegate loop failed")
+                mock_agent_cls.return_value = child
+                result = json.loads(
+                    delegate_ext(
+                        goal="start child",
+                        is_loop=True,
+                        input=self._delegate_ext_input_factory(),
+                        output=self._delegate_ext_output_adapter,
+                        parent_agent=self,
+                    )
+                )
+            assert result["loop_exit_reason"] == "error"
+            return {"final_response": "delegate attempted"}
+
+    run_extcli_loop(
+        agent_factory=lambda session_id: _FailingDelegateParentAgent("agent", session_id, session_db),
+        input_fn=_input,
+        output_path=output_path,
+    )
+
+    text = output_path.read_text(encoding="utf-8")
+    assert "error" in text.lower()
+    assert "after failure" in text
+    assert "loop failed" in text
+
+
+def test_child_loop_input_closed_unwinds_cleanly(tmp_path):
+    output_path = tmp_path / "extcli_output"
+    session_db = _FakeSessionDB()
+    inputs = iter(["delegate"])
+
+    def _input(prompt: str) -> str:
+        del prompt
+        try:
+            return next(inputs)
+        except StopIteration:
+            raise EOFError()
+
+    class _InputClosedDelegateParentAgent(_FakeAgent):
+        def run_conversation(self, user_message, *args, **kwargs):
+            if user_message != "delegate":
+                return super().run_conversation(user_message, *args, **kwargs)
+
+            with patch("run_agent.AIAgent") as mock_agent_cls:
+                child = MagicMock()
+                child.session_id = "child-session"
+                child.run_conversation.return_value = {
+                    "final_response": "child start",
+                    "completed": True,
+                    "api_calls": 1,
+                }
+                mock_agent_cls.return_value = child
+                result = json.loads(
+                    delegate_ext(
+                        goal="start child",
+                        is_loop=True,
+                        input=self._delegate_ext_input_factory(),
+                        output=self._delegate_ext_output_adapter,
+                        parent_agent=self,
+                    )
+                )
+            assert result["loop_exit_reason"] == "input_closed"
+            return {"final_response": "delegate closed"}
+
+    run_extcli_loop(
+        agent_factory=lambda session_id: _InputClosedDelegateParentAgent("agent", session_id, session_db),
+        input_fn=_input,
+        output_path=output_path,
+    )
+
+    assert "delegate closed" in output_path.read_text(encoding="utf-8")
+
+
+def test_new_inside_child_loop_is_treated_as_child_input(tmp_path):
+    output_path = tmp_path / "extcli_output"
+    session_db = _FakeSessionDB()
+    inputs = iter(["delegate", "/new", "/exit", "after child", "/exit"])
+
+    def _input(prompt: str) -> str:
+        del prompt
+        try:
+            return next(inputs)
+        except StopIteration:
+            raise EOFError()
+
+    class _SlashDelegateParentAgent(_FakeAgent):
+        def run_conversation(self, user_message, *args, **kwargs):
+            if user_message != "delegate":
+                return super().run_conversation(user_message, *args, **kwargs)
+
+            child_results = iter(
+                [
+                    {"final_response": "child start", "completed": True, "api_calls": 1},
+                    {"final_response": "child slash seen", "completed": True, "api_calls": 2},
+                ]
+            )
+
+            with patch("run_agent.AIAgent") as mock_agent_cls:
+                child = MagicMock()
+                child.session_id = "child-session"
+                child.run_conversation.side_effect = lambda *a, **k: next(child_results)
+                mock_agent_cls.return_value = child
+                result = json.loads(
+                    delegate_ext(
+                        goal="start child",
+                        is_loop=True,
+                        input=self._delegate_ext_input_factory(),
+                        output=self._delegate_ext_output_adapter,
+                        parent_agent=self,
+                    )
+                )
+
+            return {"final_response": f'delegated:{result["final_response"]}'}
+
+    run_extcli_loop(
+        agent_factory=lambda session_id: _SlashDelegateParentAgent("agent", session_id, session_db),
+        input_fn=_input,
+        output_path=output_path,
+    )
+
+    text = output_path.read_text(encoding="utf-8")
+    assert "child slash seen" in text
+    assert "Started a new session." not in text

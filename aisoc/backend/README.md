@@ -3,7 +3,8 @@
 ## 1. 模块定位
 AISOC Backend 是 `hermes aisoc` 的服务层。当前以 `server` 模块为主，后续扩展 `a2a` 模块后，同一入口将根据 `--module` 参数启动不同服务：
 - `server`：当前 Web Console / FastAPI API / Chat TUI PTY-WebSocket 网关
-- `a2a`：规划中的 A2A (Agent-to-Agent) 协议服务
+- `a2a`：A2A (Agent-to-Agent) 协议服务
+- `extcli`：本地增强交互命令行，直接在终端里与 `AIAgent` 对话
 
 `server` 模块当前负责：
 - 统一认证（Bearer Token）
@@ -25,7 +26,7 @@ hermes aisoc --module server --port 9120 --tui
 ```
 
 常用参数：
-- `--module server|a2a`：选择启动模块，默认 `server`
+- `--module server|a2a|extcli`：选择启动模块，默认 `server`
 - `--port 9120`：服务端口（默认 9120）
 - `--host 127.0.0.1`：监听地址（默认 loopback）
 - `--no-open`：不自动打开浏览器，仅 `server` 模块使用
@@ -40,6 +41,22 @@ hermes aisoc --module a2a --host 127.0.0.1 --port 9086
 ```
 
 A2A 模块默认允许直接连接，不再要求 `Authorization` 头或 `token` 查询参数。
+
+`extcli` 模块启动形态：
+
+```bash
+hermes aisoc --module extcli
+```
+
+`extcli` 特性：
+- 直接复用 `AIAgent` 对话循环，并通过 SessionDB 恢复上下文，不再手动维护 history
+- 输出默认写入 `/tmp/extcli_output`，输入继续通过当前终端读取，实现输入/输出通道分离
+- 支持用户输入、AI 流式输出、tool call 展示、tool result 摘要展示
+- tool result 最多显示前 50 个字符，超出部分以 `...` 省略
+- `main` 会话忙碌时拒绝新的主会话输入，不缓存待回放消息
+- 支持 `delegate_ext(is_loop=true)` 前台子会话；子会话激活时，终端输入会临时路由给子 agent
+- 子会话内 `/main` 与 `/exit` 等价，都会结束子会话并返回主会话；只有主会话前台时 `/exit` 才会退出整个 `extcli`
+- 支持 `/new` 重置当前主会话；当子会话前台时，`/new` 会作为普通输入传给子 agent
 
 ### 2.2 直接以 Python 启动（调试后端）
 

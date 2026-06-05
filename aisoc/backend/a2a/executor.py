@@ -7,8 +7,6 @@ from collections.abc import Callable
 import inspect
 import json
 import logging
-import os
-import time
 
 from a2a.helpers.proto_helpers import new_task_from_user_message
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -17,11 +15,16 @@ from a2a.server.tasks import TaskUpdater
 from a2a.types import TaskState
 
 from hermes_state import SessionDB
-from hermes_constants import get_config_path
 from hermes_cli import config as hermes_config
 from hermes_cli import runtime_provider
 
-from .converter import a2a_to_text, history_to_a2a, role_to_history_role, text_to_message
+from aisoc.backend.agent_runtime import (
+    build_profile_agent_kwargs,
+    default_agent_factory,
+    load_conversation_history,
+)
+
+from .converter import a2a_to_text, history_to_a2a, text_to_message
 
 
 AgentFactory = Callable[[str], object]
@@ -30,105 +33,25 @@ AgentFactory = Callable[[str], object]
 logger = logging.getLogger(__name__)
 
 
-class _EchoAgent:
-    """Deterministic agent for smoke and e2e tests."""
-
-    def __init__(self):
-        self._interrupt_requested = False
-
-    def run_conversation(
-        self,
-        user_message: str,
-        system_message: str | None = None,
-        conversation_history: list[dict[str, str]] | None = None,
-        task_id: str | None = None,
-        stream_callback=None,
-    ) -> dict[str, object]:
-        del system_message, task_id
-        if self._interrupt_requested:
-            raise RuntimeError("Canceled by user.")
-        history = list(conversation_history or [])
-        response = f"echo(turn={(len(history) // 2) + 1}): {user_message}"
-        if stream_callback is not None:
-            midpoint = max(1, len(response) // 2)
-            stream_callback(response[:midpoint])
-            time.sleep(0.01)
-            stream_callback(response[midpoint:])
-            stream_callback(None)
-        return {
-            "final_response": response,
-            "messages": history,
-        }
-
-
 def _default_agent_factory(session_id: str):
-    if os.environ.get("AISOC_A2A_TEST_MODE") == "echo":
-        return _EchoAgent()
-    from run_agent import AIAgent
-
-    agent_kwargs = _profile_agent_kwargs(session_id)
-    logger.info(
-        "A2A profile injection from %s: %s",
-        get_config_path(),
-        {
-            "provider": agent_kwargs.get("provider"),
-            "model": agent_kwargs.get("model"),
-            "base_url": agent_kwargs.get("base_url"),
-            "api_mode": agent_kwargs.get("api_mode"),
-            "source": agent_kwargs.get("_a2a_runtime_source")
-        },
+    return default_agent_factory(
+        session_id,
+        platform="aisoc-a2a",
+        config_module=hermes_config,
+        runtime_provider_module=runtime_provider,
+        session_db_cls=SessionDB,
+        log=logger,
     )
-    agent_kwargs.pop("_a2a_runtime_source", None)
-    try:
-        agent_kwargs["session_db"] = SessionDB()
-    except Exception as exc:
-        logger.warning("A2A SessionDB unavailable; continuing without session persistence: %s", exc)
-    return AIAgent(**agent_kwargs)
 
 
 def _profile_agent_kwargs(session_id: str) -> dict[str, object]:
     """Resolve the current profile into explicit AIAgent kwargs."""
-    cfg = hermes_config.load_config_readonly()
-    model_cfg = hermes_config.cfg_get(cfg, "model", default={})
-    if not isinstance(model_cfg, dict):
-        model_cfg = {}
-
-    requested_provider = str(model_cfg.get("provider") or "").strip() or None
-    requested_model = str(model_cfg.get("default") or model_cfg.get("model") or "").strip() or None
-
-    runtime = runtime_provider.resolve_runtime_provider(
-        requested=requested_provider,
-        target_model=requested_model,
+    return build_profile_agent_kwargs(
+        session_id,
+        platform="aisoc-a2a",
+        config_module=hermes_config,
+        runtime_provider_module=runtime_provider,
     )
-
-    resolved_provider = str(runtime.get("provider") or requested_provider or "auto").strip()
-    resolved_model = str(runtime.get("model") or requested_model or "").strip()
-    resolved_base_url = str(runtime.get("base_url") or "").strip()
-    resolved_api_key = str(runtime.get("api_key") or "").strip()
-    resolved_api_mode = str(runtime.get("api_mode") or "").strip()
-
-    agent_kwargs: dict[str, object] = {
-        "quiet_mode": True,
-        "platform": "aisoc-a2a",
-        "session_id": session_id,
-        "provider": resolved_provider,
-    }
-    if resolved_model:
-        agent_kwargs["model"] = resolved_model
-    if resolved_base_url:
-        agent_kwargs["base_url"] = resolved_base_url
-    if resolved_api_key:
-        agent_kwargs["api_key"] = resolved_api_key
-    if resolved_api_mode:
-        agent_kwargs["api_mode"] = resolved_api_mode
-    if runtime.get("request_overrides"):
-        agent_kwargs["request_overrides"] = dict(runtime["request_overrides"])
-    if runtime.get("fallback_model"):
-        agent_kwargs["fallback_model"] = runtime["fallback_model"]
-
-    agent_kwargs["_a2a_runtime_source"] = runtime.get("source", "config")
-    agent_kwargs["enabled_toolsets"] = ["hermes-cli"]
-    return agent_kwargs
 
 
 class HermesA2AExecutor(AgentExecutor):
@@ -146,7 +69,6 @@ class HermesA2AExecutor(AgentExecutor):
         self._agent_factory = agent_factory or _default_agent_factory
         self._enable_streaming = enable_streaming
         self._agents: dict[str, object] = {}
-        self._history_by_context: dict[str, list[dict[str, str]]] = {}
         self._cancel_events: dict[str, asyncio.Event] = {}
         self._lock = asyncio.Lock()
 
@@ -191,8 +113,11 @@ class HermesA2AExecutor(AgentExecutor):
                 )
             return
 
-        history = list(self._history_by_context.get(task.context_id, []))
         agent = await self._get_agent(task.context_id)
+        history = load_conversation_history(
+            agent,
+            getattr(agent, "session_id", None) or task.context_id,
+        )
         delta_queue: asyncio.Queue[object] | None = None
         stream_task: asyncio.Task[str] | None = None
         stream_callback = None
@@ -236,10 +161,6 @@ class HermesA2AExecutor(AgentExecutor):
         response_message = updater.new_agent_message(
             [text_to_message(response_text, context_id=task.context_id, task_id=task.id).parts[0]]
         )
-        self._history_by_context[task.context_id] = history + [
-            {"role": role_to_history_role(context.message.role), "content": user_input},
-            {"role": "assistant", "content": response_text},
-        ]
         if bool(result.get("input_required")):
             await updater.requires_input(response_message)
         else:
@@ -264,7 +185,9 @@ class HermesA2AExecutor(AgentExecutor):
         self, context_id: str, task_id: str
     ) -> list:
         """Expose stored history in A2A message format for tests and diagnostics."""
-        history = self._history_by_context.get(context_id, [])
+        agent = self._agents.get(context_id)
+        session_id = getattr(agent, "session_id", None) if agent is not None else context_id
+        history = load_conversation_history(agent, session_id) if agent is not None else []
         return history_to_a2a(history, context_id=context_id, task_id=task_id)
 
     async def _get_agent(self, context_id: str):

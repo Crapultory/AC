@@ -11252,6 +11252,32 @@ def cmd_aisoc(args):
                 file=sys.stderr,
             )
             raise SystemExit(2)
+    elif module == "extcli":
+        invalid_flags = []
+        if getattr(args, "tui", False):
+            invalid_flags.append("--tui")
+        if getattr(args, "skip_build", False):
+            invalid_flags.append("--skip-build")
+        if getattr(args, "no_open", False):
+            invalid_flags.append("--no-open")
+        if getattr(args, "name", None):
+            invalid_flags.append("--name")
+        if getattr(args, "description", None):
+            invalid_flags.append("--description")
+        if getattr(args, "card", None):
+            invalid_flags.append("--card")
+        if getattr(args, "db", None):
+            invalid_flags.append("--db")
+        if getattr(args, "streaming", False):
+            invalid_flags.append("--streaming")
+        if getattr(args, "workers", 4) != 4:
+            invalid_flags.append("--workers")
+        if invalid_flags:
+            print(
+                "extcli module does not support: " + ", ".join(invalid_flags),
+                file=sys.stderr,
+            )
+            raise SystemExit(2)
     else:
         invalid_a2a_flags = []
         if getattr(args, "name", None):
@@ -11301,6 +11327,12 @@ def cmd_aisoc(args):
             streaming=getattr(args, "streaming", False),
             workers=getattr(args, "workers", 4),
         )
+        return
+
+    if module == "extcli":
+        from aisoc.backend.extcli import start_extcli
+
+        start_extcli()
         return
 
     aisoc_web_dir = PROJECT_ROOT / "aisoc" / "frontend"
@@ -14614,7 +14646,7 @@ Examples:
         "--module",
         "--model",
         dest="module",
-        choices=("server", "a2a"),
+        choices=("server", "a2a", "extcli"),
         default="server",
         help="AISOC service module to start (default: server)",
     )
