@@ -1277,7 +1277,7 @@ DELEGATE_EXT_SCHEMA = {
 
 registry.register(
     name="a2a_list",
-    toolset="delegation_ext",
+    toolset="a2a",
     schema=A2A_LIST_SCHEMA,
     handler=lambda args, **kw: a2a_list(),
     check_fn=check_delegate_requirements,
@@ -1288,7 +1288,7 @@ registry.register(
 
 registry.register(
     name="delegate_ext",
-    toolset="delegation_ext",
+    toolset="a2a",
     schema=DELEGATE_EXT_SCHEMA,
     handler=lambda args, **kw: delegate_ext(
         goal=args.get("goal"),

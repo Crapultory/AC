@@ -60,6 +60,30 @@ def prepare_hermes_home() -> None:
         print(f"Warning: Failed to set TERMINAL_CWD from Hermes profile: {exc}")
 
 
+def _resolve_profile_enabled_toolsets(
+    cfg: dict[str, object],
+    *,
+    platform: str,
+    config_module=hermes_config,
+) -> list[str]:
+    """Read per-platform toolsets from the already-loaded profile config."""
+    configured_toolsets = config_module.cfg_get(cfg, "platform_toolsets", platform, default=None)
+    if configured_toolsets is None:
+        return ["hermes-cli"]
+    if not isinstance(configured_toolsets, list):
+        return ["hermes-cli"]
+
+    normalized_toolsets: list[str] = []
+    seen_toolsets: set[str] = set()
+    for raw_toolset in configured_toolsets:
+        toolset_name = str(raw_toolset).strip()
+        if not toolset_name or toolset_name in seen_toolsets:
+            continue
+        normalized_toolsets.append(toolset_name)
+        seen_toolsets.add(toolset_name)
+    return normalized_toolsets
+
+
 def build_profile_agent_kwargs(
     session_id: str,
     *,
@@ -92,7 +116,11 @@ def build_profile_agent_kwargs(
         "platform": platform,
         "session_id": session_id,
         "provider": resolved_provider,
-        "enabled_toolsets": ["delegation_ext"],
+        "enabled_toolsets": _resolve_profile_enabled_toolsets(
+            cfg,
+            platform=platform,
+            config_module=config_module,
+        ),
     }
     if resolved_model:
         agent_kwargs["model"] = resolved_model
