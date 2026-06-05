@@ -21,6 +21,10 @@ DEFAULT_EXTCLI_OUTPUT_PATH = Path("/tmp/extcli_output")
 _FAST_TURN_JOIN_TIMEOUT_SECONDS = 0.01
 
 
+def _format_event_content(content: str) -> str:
+    return content.replace("\\", "\\\\").replace("\r\n", "\\n").replace("\r", "\\n").replace("\n", "\\n")
+
+
 class ExtCliOutputAdapter:
     def __init__(self, output: TextIO):
         self._output = output
@@ -55,7 +59,7 @@ class ExtCliOutputAdapter:
         session_id: str | None = None,
     ) -> None:
         del session_id
-        self.write_line(f"{source}.{event_type}: {content}")
+        self.write_line(f"{source}.{event_type}: {_format_event_content(content)}")
 
 
 class ExtCliSessionRouter:

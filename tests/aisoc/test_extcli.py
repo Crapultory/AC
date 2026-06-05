@@ -131,6 +131,49 @@ class _StreamingMismatchAgent:
         return {"final_response": "hello\n"}
 
 
+class _MultilineStreamingAgent:
+    def __init__(self, session_db: _FakeSessionDB):
+        self.session_db = session_db
+
+    def run_conversation(
+        self,
+        user_message: str,
+        system_message: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
+        task_id: str | None = None,
+        stream_callback=None,
+    ) -> dict[str, object]:
+        del user_message, system_message, conversation_history, task_id
+        if stream_callback is not None:
+            stream_callback("hello\nworld")
+            stream_callback(None)
+        return {"final_response": "hello\nworld"}
+
+
+class _MultilineToolResultAgent(_FakeAgent):
+    def run_conversation(
+        self,
+        user_message: str,
+        system_message: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
+        task_id: str | None = None,
+        stream_callback=None,
+    ) -> dict[str, object]:
+        del system_message, task_id
+        history = list(conversation_history or [])
+        self.calls.append({"user_message": user_message, "history": history})
+        tool_start = getattr(self, "tool_start_callback", None)
+        tool_complete = getattr(self, "tool_complete_callback", None)
+        if tool_start is not None:
+            tool_start("call_1", "tool_name", {"q": "cats"})
+        if tool_complete is not None:
+            tool_complete("call_1", "tool_name", {"q": "cats"}, "line1\nline2")
+        if stream_callback is not None:
+            stream_callback("done")
+            stream_callback(None)
+        return {"final_response": "done"}
+
+
 class _PrivateSessionAgent(_FakeAgent):
     def __init__(self, label: str, session_id: str, session_db: _FakeSessionDB):
         super().__init__(label, session_id, session_db)
@@ -424,6 +467,36 @@ def test_run_extcli_loop_uses_one_ai_line_when_final_response_differs_slightly()
     transcript = output.getvalue()
     assert "main.ai: hello\n" in transcript
     assert transcript.count("main.ai:") == 1
+
+
+def test_run_extcli_loop_escapes_multiline_ai_output_to_one_line() -> None:
+    output = StringIO()
+    inputs = iter(["hello", "/exit"])
+
+    run_extcli_loop(
+        agent_factory=lambda session_id: _MultilineStreamingAgent(_FakeSessionDB()),
+        input_fn=lambda prompt: next(inputs),
+        output=output,
+    )
+
+    transcript = output.getvalue()
+    assert "main.ai: hello\\nworld\n" in transcript
+    assert "main.ai: hello\nworld\n" not in transcript
+
+
+def test_run_extcli_loop_escapes_multiline_tool_result_to_one_line() -> None:
+    output = StringIO()
+    inputs = iter(["hello", "/exit"])
+
+    run_extcli_loop(
+        agent_factory=lambda session_id: _MultilineToolResultAgent("agent", session_id, _FakeSessionDB()),
+        input_fn=lambda prompt: next(inputs),
+        output=output,
+    )
+
+    transcript = output.getvalue()
+    assert "main.tool_result: line1\\nline2\n" in transcript
+    assert "main.tool_result: line1\nline2\n" not in transcript
 
 
 def test_output_uses_main_prefixes(tmp_path):
