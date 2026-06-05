@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 from uuid import uuid4
 
 import pytest
-from a2a.types import TaskState
+from a2a.types import Role, TaskState
 from run_agent import AIAgent
 from toolsets import TOOLSETS, _HERMES_CORE_TOOLS
 from tools.registry import registry
@@ -58,9 +58,17 @@ def _make_mock_parent():
     return parent
 
 
-def _make_a2a_task(*, task_id: str, context_id: str, state, text: str = "", history=None):
+def _make_a2a_task(
+    *,
+    task_id: str,
+    context_id: str,
+    state,
+    text: str = "",
+    history=None,
+    role=None,
+):
     parts = [SimpleNamespace(text=text)] if text else []
-    message = SimpleNamespace(parts=parts) if parts else None
+    message = SimpleNamespace(parts=parts, role=role) if parts else None
     return SimpleNamespace(
         id=task_id,
         context_id=context_id,
@@ -755,7 +763,7 @@ class TestA2ADelegateSession:
                             status=SimpleNamespace(state=TaskState.TASK_STATE_WORKING),
                             history=[
                                 _make_a2a_history_message(
-                                    role="assistant",
+                                    role=Role.ROLE_AGENT,
                                     task_id=first_task_id,
                                     metadata={
                                         "hermes": {
@@ -767,7 +775,7 @@ class TestA2ADelegateSession:
                                     },
                                 ),
                                 _make_a2a_history_message(
-                                    role="assistant",
+                                    role=Role.ROLE_AGENT,
                                     task_id=first_task_id,
                                     metadata={
                                         "hermes": {
@@ -785,6 +793,7 @@ class TestA2ADelegateSession:
                             context_id="ctx-1",
                             state=TaskState.TASK_STATE_COMPLETED,
                             text="first reply",
+                            role=Role.ROLE_AGENT,
                         ),
                     ],
                 },
@@ -793,12 +802,12 @@ class TestA2ADelegateSession:
                         id=second_task_id,
                         context_id="ctx-1",
                         status=SimpleNamespace(state=TaskState.TASK_STATE_SUBMITTED),
-                        history=[
-                            _make_a2a_history_message(
-                                role="assistant",
-                                task_id=second_task_id,
-                                tool_calls=[tool_call],
-                            )
+                            history=[
+                                _make_a2a_history_message(
+                                    role=Role.ROLE_AGENT,
+                                    task_id=second_task_id,
+                                    tool_calls=[tool_call],
+                                )
                         ],
                     ),
                     "polls": [
@@ -807,6 +816,7 @@ class TestA2ADelegateSession:
                             context_id="ctx-1",
                             state=TaskState.TASK_STATE_COMPLETED,
                             text="second reply",
+                            role=Role.ROLE_AGENT,
                         ),
                     ],
                 },

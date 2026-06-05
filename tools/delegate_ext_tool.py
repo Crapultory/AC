@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 import httpx
+from google.protobuf.json_format import MessageToDict
 from aisoc.backend.agent_runtime import load_conversation_history
 from hermes_constants import get_hermes_home
 from toolsets import validate_toolset
@@ -340,7 +341,14 @@ def _a2a_message_text(message) -> str:
 
 def _a2a_message_metadata(message) -> dict[str, Any]:
     metadata = _a2a_field(message, "metadata", None)
-    return metadata if isinstance(metadata, dict) else {}
+    if metadata is None:
+        return {}
+    if isinstance(metadata, dict):
+        return metadata
+    try:
+        return MessageToDict(metadata)
+    except Exception:
+        return {}
 
 
 def _a2a_hermes_metadata(message) -> dict[str, Any]:
@@ -351,11 +359,13 @@ def _a2a_hermes_metadata(message) -> dict[str, Any]:
 def _a2a_is_tool_message(message) -> bool:
     if message is None:
         return False
+    from a2a.types import Role
+
     hermes = _a2a_hermes_metadata(message)
     if hermes.get("kind") == "tool_result":
         return True
     role = _a2a_field(message, "role", None)
-    return role in ("tool", "ROLE_TOOL")
+    return role in ("tool", "ROLE_TOOL", getattr(Role, "ROLE_TOOL", object()))
 
 
 def _a2a_message_tool_calls(message) -> list[dict[str, Any]]:
@@ -419,11 +429,13 @@ def _a2a_tool_result_details(
 def _a2a_is_agent_message(message) -> bool:
     if message is None:
         return False
+    from a2a.types import Role
+
     hermes = _a2a_hermes_metadata(message)
     if hermes.get("kind") in {"tool_call", "tool_result"}:
         return False
     role = _a2a_field(message, "role", None)
-    return role in (None, "assistant", "agent", "ROLE_AGENT")
+    return role in (None, Role.ROLE_AGENT, "assistant", "agent", "ROLE_AGENT")
 
 
 def _a2a_assistant_message_text(message) -> str:
