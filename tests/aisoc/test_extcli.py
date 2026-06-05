@@ -199,3 +199,68 @@ def test_run_extcli_loop_truncates_output_by_default(tmp_path, monkeypatch):
     text = output_path.read_text(encoding="utf-8")
     assert "old data" not in text
     assert "Bye." in text
+
+
+def test_run_extcli_loop_appends_when_requested(tmp_path):
+    output_path = tmp_path / "extcli_output"
+    output_path.write_text("old data\n", encoding="utf-8")
+    inputs = iter(["/exit"])
+
+    run_extcli_loop(
+        agent_factory=lambda session_id: _FakeAgent("agent", session_id, _FakeSessionDB()),
+        input_fn=lambda prompt: next(inputs),
+        output_path=output_path,
+        append_output=True,
+    )
+
+    text = output_path.read_text(encoding="utf-8")
+    assert text.startswith("old data\n")
+    assert "AISOC extcli ready." in text
+    assert "Bye." in text
+
+
+def test_run_extcli_loop_output_stream_bypasses_open_output_file(monkeypatch):
+    def _boom(*args, **kwargs):
+        raise AssertionError("_open_output_file should not be called when output is provided")
+
+    monkeypatch.setattr("aisoc.backend.extcli._open_output_file", _boom)
+    output = StringIO()
+    inputs = iter(["/exit"])
+
+    run_extcli_loop(
+        agent_factory=lambda session_id: _FakeAgent("agent", session_id, _FakeSessionDB()),
+        input_fn=lambda prompt: next(inputs),
+        output=output,
+        output_path=Path("/tmp/should-not-be-used"),
+    )
+
+    assert "Bye." in output.getvalue()
+
+
+def test_run_extcli_loop_closes_output_on_agent_factory_failure(monkeypatch):
+    closed = []
+
+    class _Recorder:
+        def write(self, text):
+            pass
+
+        def flush(self):
+            pass
+
+        def close(self):
+            closed.append(True)
+
+    def _fake_open(path, append=False):
+        del path, append
+        return _Recorder()
+
+    def _boom(session_id: str):
+        del session_id
+        raise RuntimeError("factory failed")
+
+    monkeypatch.setattr("aisoc.backend.extcli._open_output_file", _fake_open)
+
+    with pytest.raises(RuntimeError, match="factory failed"):
+        run_extcli_loop(agent_factory=_boom, input_fn=lambda prompt: "/exit")
+
+    assert closed == [True]

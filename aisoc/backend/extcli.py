@@ -135,10 +135,9 @@ def run_extcli_loop(
         should_close_output = True
     factory = agent_factory or (lambda session_id: default_agent_factory(session_id, platform="aisoc-extcli"))
 
-    session_id = str(uuid4())
-    agent = factory(session_id)
-
     try:
+        session_id = str(uuid4())
+        agent = factory(session_id)
         _write_line(active_output, "AISOC extcli ready. Use /new to reset and /exit to quit.")
         while True:
             try:
@@ -161,7 +160,7 @@ def run_extcli_loop(
 
             try:
                 history = load_conversation_history(agent, session_id)
-                response_text = _run_agent_turn(agent, user_message, history, active_output)
+                _run_agent_turn(agent, user_message, history, active_output)
             except KeyboardInterrupt:
                 _write_line(active_output, "Interrupted.")
                 continue
