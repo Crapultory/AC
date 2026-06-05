@@ -4443,6 +4443,7 @@ class AIAgent:
             goal=function_args.get("goal"),
             context=function_args.get("context"),
             agent=function_args.get("agent"),
+            a2a_name=function_args.get("a2a_name"),
             toolsets=function_args.get("toolsets"),
             max_iterations=function_args.get("max_iterations"),
             is_delegate_output=function_args.get("is_delegate_output", True),

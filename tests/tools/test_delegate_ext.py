@@ -407,6 +407,7 @@ class TestDelegateExtIntegration:
                 "goal": "ship it",
                 "context": "repo root",
                 "agent": "local",
+                "a2a_name": "remote-reviewer",
                 "toolsets": ["terminal"],
                 "max_iterations": 5,
             }
@@ -417,6 +418,7 @@ class TestDelegateExtIntegration:
             goal="ship it",
             context="repo root",
             agent="local",
+            a2a_name="remote-reviewer",
             toolsets=["terminal"],
             max_iterations=5,
             is_delegate_output=True,

@@ -164,6 +164,7 @@ def test_dispatch_helper_injects_runtime_adapters():
             {
                 "goal": "ship it",
                 "context": "repo root",
+                "a2a_name": "remote-reviewer",
                 "is_delegate_output": True,
                 "is_loop": True,
             }
@@ -173,6 +174,7 @@ def test_dispatch_helper_injects_runtime_adapters():
         goal="ship it",
         context="repo root",
         agent=None,
+        a2a_name="remote-reviewer",
         toolsets=None,
         max_iterations=None,
         is_delegate_output=True,
