@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from io import StringIO
 from pathlib import Path
+import threading
 
 import pytest
 
@@ -296,3 +297,74 @@ def test_run_extcli_loop_ends_partial_stream_before_error_line() -> None:
 
     transcript = output.getvalue()
     assert "ai: partial\nerror: boom\n" in transcript
+
+
+def test_main_session_rejects_input_while_busy(tmp_path):
+    session_db = _FakeSessionDB()
+    output_path = tmp_path / "extcli_output"
+    started = threading.Event()
+    release = threading.Event()
+
+    class _BlockingAgent(_FakeAgent):
+        def run_conversation(self, user_message, *args, **kwargs):
+            started.set()
+            release.wait(timeout=2)
+            return super().run_conversation(user_message, *args, **kwargs)
+
+    values = iter(["hello", "second"])
+
+    def _input(prompt: str) -> str:
+        del prompt
+        try:
+            value = next(values)
+        except StopIteration:
+            release.set()
+            raise EOFError()
+        if value == "second":
+            assert started.wait(timeout=1), "main turn never entered busy state"
+        return value
+
+    run_extcli_loop(
+        agent_factory=lambda session_id: _BlockingAgent("agent", session_id, session_db),
+        input_fn=_input,
+        output_path=output_path,
+    )
+
+    release.set()
+    text = output_path.read_text(encoding="utf-8")
+    assert "busy" in text.lower()
+
+
+def test_new_command_is_rejected_while_main_busy(tmp_path):
+    session_db = _FakeSessionDB()
+    output_path = tmp_path / "extcli_output"
+    started = threading.Event()
+    release = threading.Event()
+
+    class _BlockingAgent(_FakeAgent):
+        def run_conversation(self, user_message, *args, **kwargs):
+            started.set()
+            release.wait(timeout=2)
+            return super().run_conversation(user_message, *args, **kwargs)
+
+    values = iter(["hello", "/new"])
+
+    def _input(prompt: str) -> str:
+        del prompt
+        try:
+            value = next(values)
+        except StopIteration:
+            release.set()
+            raise EOFError()
+        if value == "/new":
+            assert started.wait(timeout=1), "main turn never entered busy state"
+        return value
+
+    run_extcli_loop(
+        agent_factory=lambda session_id: _BlockingAgent("agent", session_id, session_db),
+        input_fn=_input,
+        output_path=output_path,
+    )
+
+    release.set()
+    assert "busy" in output_path.read_text(encoding="utf-8").lower()

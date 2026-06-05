@@ -5,6 +5,8 @@ from __future__ import annotations
 from collections.abc import Callable
 import json
 from pathlib import Path
+import threading
+import time
 from typing import TextIO
 from uuid import uuid4
 
@@ -17,6 +19,60 @@ from aisoc.backend.agent_runtime import (
 
 _CALLBACK_MISSING = object()
 DEFAULT_EXTCLI_OUTPUT_PATH = Path("/tmp/extcli_output")
+_FAST_TURN_JOIN_TIMEOUT_SECONDS = 0.01
+
+
+class _ExtCliOutputAdapter:
+    def __init__(self, output: TextIO):
+        self._output = output
+        self._lock = threading.Lock()
+
+    def write(self, text: str) -> None:
+        with self._lock:
+            self._output.write(text)
+            flush = getattr(self._output, "flush", None)
+            if callable(flush):
+                flush()
+
+    def write_line(self, text: str = "") -> None:
+        with self._lock:
+            self._output.write(text + "\n")
+            flush = getattr(self._output, "flush", None)
+            if callable(flush):
+                flush()
+
+    def emit(self, target: str, event_type: str, message: str, *, session_id: str | None = None) -> None:
+        del session_id
+        if event_type == "error":
+            self.write_line(f"error: {message}")
+            return
+        if event_type == "busy":
+            self.write_line(f"{target} busy: {message}")
+            return
+        self.write_line(message)
+
+
+class ExtCliSessionRouter:
+    def __init__(self):
+        self._lock = threading.Lock()
+        self._foreground = "main"
+        self._main_busy = False
+        self._delegate_input = None
+
+    def begin_main_turn(self) -> bool:
+        with self._lock:
+            if self._foreground != "main" or self._main_busy:
+                return False
+            self._main_busy = True
+            return True
+
+    def end_main_turn(self) -> None:
+        with self._lock:
+            self._main_busy = False
+
+    def current_target(self) -> str:
+        with self._lock:
+            return self._foreground
 
 
 def _truncate_result(value: object, *, limit: int = 50) -> str:
@@ -43,7 +99,7 @@ def _run_agent_turn(
     agent: object,
     user_message: str,
     history: list[dict[str, str]],
-    output: TextIO,
+    output_adapter: _ExtCliOutputAdapter,
 ) -> str:
     streamed_chunks: list[str] = []
     ai_prefix_written = False
@@ -53,17 +109,14 @@ def _run_agent_turn(
         nonlocal ai_prefix_written, ai_line_open
         if delta is None:
             if ai_line_open:
-                _write_line(output)
+                output_adapter.write_line()
                 ai_line_open = False
             return
         if not ai_prefix_written:
-            output.write("ai: ")
+            output_adapter.write("ai: ")
             ai_prefix_written = True
         ai_line_open = True
-        output.write(delta)
-        flush = getattr(output, "flush", None)
-        if callable(flush):
-            flush()
+        output_adapter.write(delta)
         streamed_chunks.append(delta)
 
     def _tool_start_callback(tool_call_id: str, function_name: str, function_args: dict | None) -> None:
@@ -71,7 +124,7 @@ def _run_agent_turn(
         payload = ""
         if function_args:
             payload = " " + json.dumps(function_args, ensure_ascii=True, separators=(",", ":"))
-        _write_line(output, f"tool call: {function_name}{payload}")
+        output_adapter.write_line(f"tool call: {function_name}{payload}")
 
     def _tool_complete_callback(
         tool_call_id: str,
@@ -80,7 +133,7 @@ def _run_agent_turn(
         function_result: object,
     ) -> None:
         del tool_call_id, function_name, function_args
-        _write_line(output, f"tool result: {_truncate_result(function_result)}")
+        output_adapter.write_line(f"tool result: {_truncate_result(function_result)}")
 
     old_tool_start = getattr(agent, "tool_start_callback", _CALLBACK_MISSING)
     old_tool_complete = getattr(agent, "tool_complete_callback", _CALLBACK_MISSING)
@@ -110,14 +163,45 @@ def _run_agent_turn(
         else:
             setattr(agent, "tool_complete_callback", old_tool_complete)
         if ai_line_open:
-            _write_line(output)
+            output_adapter.write_line()
 
     final_response = str(result.get("final_response") or "")
     if not streamed_chunks and final_response:
-        _write_line(output, f"ai: {final_response}")
+        output_adapter.write_line(f"ai: {final_response}")
     elif streamed_chunks and not final_response:
         final_response = "".join(streamed_chunks)
     return final_response
+
+
+def _run_agent_turn_worker(
+    agent: object,
+    user_message: str,
+    output_adapter: _ExtCliOutputAdapter,
+    router: ExtCliSessionRouter,
+) -> None:
+    try:
+        history = load_conversation_history(agent, getattr(agent, "session_id", None))
+        _run_agent_turn(agent, user_message, history, output_adapter)
+    except Exception as exc:
+        output_adapter.emit("main", "error", str(exc), session_id=getattr(agent, "session_id", None))
+    finally:
+        router.end_main_turn()
+
+
+def _start_main_turn(
+    agent: object,
+    user_message: str,
+    output_adapter: _ExtCliOutputAdapter,
+    router: ExtCliSessionRouter,
+) -> threading.Thread:
+    worker = threading.Thread(
+        target=_run_agent_turn_worker,
+        args=(agent, user_message, output_adapter, router),
+        daemon=True,
+    )
+    worker.start()
+    worker.join(timeout=_FAST_TURN_JOIN_TIMEOUT_SECONDS)
+    return worker
 
 
 def run_extcli_loop(
@@ -138,41 +222,58 @@ def run_extcli_loop(
         )
         active_output = _open_output_file(resolved_output_path, append=append_output)
         should_close_output = True
+    output_adapter = _ExtCliOutputAdapter(active_output)
     factory = agent_factory or (lambda session_id: default_agent_factory(session_id, platform="aisoc-extcli"))
+    router = ExtCliSessionRouter()
+    active_workers: list[threading.Thread] = []
 
     try:
         session_id = str(uuid4())
         agent = factory(session_id)
-        _write_line(active_output, "AISOC extcli ready. Use /new to reset and /exit to quit.")
+        output_adapter.write_line("AISOC extcli ready. Use /new to reset and /exit to quit.")
         while True:
             try:
                 raw = input_fn("extcli> ")
             except EOFError:
-                _write_line(active_output, "Bye.")
+                output_adapter.write_line("Bye.")
                 return
 
             user_message = raw.strip()
             if not user_message:
                 continue
             if user_message == "/exit":
-                _write_line(active_output, "Bye.")
+                output_adapter.write_line("Bye.")
                 return
+            if router.current_target() == "main" and not router.begin_main_turn():
+                output_adapter.emit("main", "busy", "main session is busy")
+                continue
             if user_message == "/new":
+                router.end_main_turn()
                 session_id = str(uuid4())
                 agent = factory(session_id)
-                _write_line(active_output, "Started a new session.")
+                output_adapter.write_line("Started a new session.")
                 continue
 
             try:
-                history = load_conversation_history(agent, session_id)
-                _run_agent_turn(agent, user_message, history, active_output)
+                worker = _start_main_turn(agent, user_message, output_adapter, router)
+                if worker.is_alive():
+                    active_workers = [existing for existing in active_workers if existing.is_alive()]
+                    active_workers.append(worker)
             except KeyboardInterrupt:
-                _write_line(active_output, "Interrupted.")
+                router.end_main_turn()
+                output_adapter.write_line("Interrupted.")
                 continue
             except Exception as exc:
-                _write_line(active_output, f"error: {exc}")
+                router.end_main_turn()
+                output_adapter.write_line(f"error: {exc}")
                 continue
     finally:
+        deadline = time.time() + 2
+        for worker in active_workers:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            worker.join(timeout=remaining)
         if should_close_output:
             close = getattr(active_output, "close", None)
             if callable(close):
