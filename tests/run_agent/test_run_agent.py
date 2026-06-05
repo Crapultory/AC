@@ -183,6 +183,66 @@ def test_dispatch_helper_injects_runtime_adapters():
     )
 
 
+def test_dispatch_helper_omitted_loop_uses_runtime_input_adapter():
+    agent = object.__new__(AIAgent)
+    agent._delegate_ext_input_factory = lambda: "INPUT"
+
+    with patch(
+        "tools.delegate_ext_tool.delegate_ext",
+        return_value='{"ok": true}',
+    ) as mock_delegate_ext:
+        agent._dispatch_delegate_ext(
+            {
+                "goal": "ship it",
+                "context": "repo root",
+            }
+        )
+
+    mock_delegate_ext.assert_called_once_with(
+        goal="ship it",
+        context="repo root",
+        agent=None,
+        toolsets=None,
+        max_iterations=None,
+        is_delegate_output=True,
+        output=None,
+        is_loop=True,
+        input="INPUT",
+        parent_agent=agent,
+    )
+
+
+def test_dispatch_helper_skips_input_factory_when_loop_disabled():
+    agent = object.__new__(AIAgent)
+    factory = MagicMock(return_value="INPUT")
+    agent._delegate_ext_input_factory = factory
+
+    with patch(
+        "tools.delegate_ext_tool.delegate_ext",
+        return_value='{"ok": true}',
+    ) as mock_delegate_ext:
+        agent._dispatch_delegate_ext(
+            {
+                "goal": "ship it",
+                "is_loop": False,
+            }
+        )
+
+    factory.assert_not_called()
+    mock_delegate_ext.assert_called_once_with(
+        goal="ship it",
+        context=None,
+        agent=None,
+        toolsets=None,
+        max_iterations=None,
+        is_delegate_output=True,
+        output=None,
+        is_loop=False,
+        input=None,
+        parent_agent=agent,
+    )
+
+
 class TestProviderModelNormalization:
     def test_aiagent_strips_matching_native_provider_prefix(self):
         with (

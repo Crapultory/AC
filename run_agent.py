@@ -4420,16 +4420,24 @@ class AIAgent:
         from tools.delegate_ext_tool import delegate_ext as _delegate_ext
 
         runtime_output = getattr(self, "_delegate_ext_output_adapter", None)
-        input_factory = getattr(self, "_delegate_ext_input_factory", None)
-        runtime_input = (
-            input_factory()
-            if callable(input_factory)
-            else getattr(self, "_delegate_ext_input_adapter", None)
-        )
         raw_is_loop = function_args.get("is_loop") if "is_loop" in function_args else None
-        effective_is_loop = (
-            raw_is_loop if raw_is_loop is not None else (runtime_input is not None)
-        )
+        runtime_input = None
+
+        if raw_is_loop is None:
+            input_factory = getattr(self, "_delegate_ext_input_factory", None)
+            if callable(input_factory):
+                runtime_input = input_factory()
+            else:
+                runtime_input = getattr(self, "_delegate_ext_input_adapter", None)
+            effective_is_loop = runtime_input is not None
+        else:
+            effective_is_loop = raw_is_loop
+            if effective_is_loop:
+                input_factory = getattr(self, "_delegate_ext_input_factory", None)
+                if callable(input_factory):
+                    runtime_input = input_factory()
+                else:
+                    runtime_input = getattr(self, "_delegate_ext_input_adapter", None)
 
         return _delegate_ext(
             goal=function_args.get("goal"),
