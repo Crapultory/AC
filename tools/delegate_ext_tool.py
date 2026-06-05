@@ -9,6 +9,7 @@ import time
 import uuid
 from typing import Any, Dict, List, Optional
 
+from aisoc.backend.agent_runtime import load_conversation_history
 from toolsets import validate_toolset
 from tools.delegate_tool import (
     _build_child_system_prompt,
@@ -245,6 +246,7 @@ def _run_local_delegate(
     start = time.monotonic()
 
     def _run_single_turn(user_message: str) -> dict[str, Any]:
+        history = load_conversation_history(child, _child_session_id(child))
         task_id = (
             f"delegate-ext-{uuid.uuid4().hex[:8]}"
             if getattr(parent_agent, "_current_task_id", None)
@@ -252,6 +254,7 @@ def _run_local_delegate(
         )
         result = child.run_conversation(
             user_message=user_message,
+            conversation_history=history,
             task_id=task_id,
         )
         final_response = str(result.get("final_response") or "")

@@ -183,6 +183,13 @@ class ExtCliSessionRouter:
         if input_adapter is not None:
             input_adapter.close()
 
+    def delegate_waiting_for_input(self) -> bool:
+        with self._lock:
+            input_adapter = self._delegate_input if self._foreground == "delegate" else None
+        if input_adapter is None:
+            return False
+        return input_adapter.is_waiting_for_input()
+
 
 def _truncate_result(value: object, *, limit: int = 50) -> str:
     text = str(value)
@@ -369,11 +376,20 @@ def _wait_for_foreground_handoff(
     workers: list[threading.Thread],
 ) -> list[threading.Thread]:
     live_workers = [worker for worker in workers if worker.is_alive()]
-    if not live_workers or router.current_target() != "main":
+    if not live_workers:
         return live_workers
 
     deadline = time.monotonic() + _FAST_TURN_JOIN_TIMEOUT_SECONDS
-    while live_workers and router.current_target() == "main":
+    while live_workers:
+        target = router.current_target()
+        if target == "main":
+            should_wait = True
+        elif target == "delegate":
+            should_wait = not router.delegate_waiting_for_input()
+        else:
+            should_wait = False
+        if not should_wait:
+            break
         remaining = deadline - time.monotonic()
         if remaining <= 0:
             break

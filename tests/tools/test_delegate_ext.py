@@ -12,6 +12,18 @@ from tools.delegate_ext_tool import (
 )
 
 
+class _FakeSessionDB:
+    def __init__(self):
+        self._messages_by_session: dict[str, list[dict[str, object]]] = {}
+
+    def get_messages_as_conversation(self, session_id: str, include_ancestors: bool = False):
+        del include_ancestors
+        return list(self._messages_by_session.get(session_id, []))
+
+    def save_messages(self, session_id: str, messages: list[dict[str, object]]) -> None:
+        self._messages_by_session[session_id] = list(messages)
+
+
 def _make_mock_parent():
     parent = MagicMock()
     parent.base_url = "https://openrouter.ai/api/v1"
@@ -307,6 +319,70 @@ class TestDelegateExt:
         )
 
         assert result["loop_exit_reason"] == "main_command"
+
+    @patch("run_agent.AIAgent")
+    def test_loop_mode_restores_history_from_session_db_each_turn(self, mock_agent_cls):
+        parent = _make_mock_parent()
+        session_db = _FakeSessionDB()
+        parent._session_db = session_db
+
+        class _Input:
+            def __init__(self, values):
+                self._values = iter(values)
+
+            def read_line(self):
+                return next(self._values)
+
+        class _HistoryAwareChild:
+            def __init__(self):
+                self.session_id = "child-session"
+                self._session_db = session_db
+                self.observed_histories: list[list[dict[str, object]]] = []
+
+            def run_conversation(
+                self,
+                user_message: str,
+                system_message: str | None = None,
+                conversation_history: list[dict[str, object]] | None = None,
+                task_id: str | None = None,
+            ) -> dict[str, object]:
+                del system_message, task_id
+                history = list(conversation_history or [])
+                self.observed_histories.append(history)
+                response = f"child:{user_message}"
+                messages = list(history)
+                messages.append({"role": "user", "content": user_message})
+                messages.append({"role": "assistant", "content": response})
+                self._session_db.save_messages(self.session_id, messages)
+                return {
+                    "final_response": response,
+                    "completed": True,
+                    "api_calls": 1,
+                }
+
+            def close(self):
+                pass
+
+        child = _HistoryAwareChild()
+        mock_agent_cls.return_value = child
+
+        result = json.loads(
+            delegate_ext(
+                goal="start",
+                is_loop=True,
+                input=_Input(["follow up", "/main"]),
+                parent_agent=parent,
+            )
+        )
+
+        assert result["final_response"] == "child:follow up"
+        assert child.observed_histories == [
+            [],
+            [
+                {"role": "user", "content": "start"},
+                {"role": "assistant", "content": "child:start"},
+            ],
+        ]
 
 
 class TestDelegateExtIntegration:
