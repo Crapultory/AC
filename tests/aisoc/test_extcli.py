@@ -92,6 +92,34 @@ class _StreamingFailureAgent:
         raise RuntimeError("boom")
 
 
+class _PrivateSessionAgent(_FakeAgent):
+    def __init__(self, label: str, session_id: str, session_db: _FakeSessionDB):
+        super().__init__(label, session_id, session_db)
+        self._private_session_id = session_id
+        del self.session_id
+
+    def run_conversation(
+        self,
+        user_message: str,
+        system_message: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
+        task_id: str | None = None,
+        stream_callback=None,
+    ) -> dict[str, object]:
+        del system_message, task_id
+        history = list(conversation_history or [])
+        self.calls.append({"user_message": user_message, "history": history})
+        messages: list[dict[str, object]] = list(history)
+        messages.append({"role": "user", "content": user_message})
+        response = f"{self.label}:{user_message}"
+        messages.append({"role": "assistant", "content": response})
+        self._session_db.save_messages(self._private_session_id, messages)
+        if stream_callback is not None:
+            stream_callback(response)
+            stream_callback(None)
+        return {"final_response": response}
+
+
 def test_run_extcli_loop_supports_new_exit_and_truncated_tool_results() -> None:
     created_agents: list[_FakeAgent] = []
     session_db = _FakeSessionDB()
@@ -159,6 +187,36 @@ def test_run_extcli_loop_supports_new_exit_and_truncated_tool_results() -> None:
     assert "tool result: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx..." in transcript
     assert "Started a new session." in transcript
     assert "Bye." in transcript
+
+
+def test_run_extcli_loop_uses_factory_session_id_for_worker_history() -> None:
+    created_agents: list[_PrivateSessionAgent] = []
+    session_db = _FakeSessionDB()
+    inputs = iter(["hello", "follow", "/exit"])
+    output = StringIO()
+
+    def _agent_factory(session_id: str) -> _PrivateSessionAgent:
+        agent = _PrivateSessionAgent(f"agent{len(created_agents) + 1}", session_id, session_db)
+        created_agents.append(agent)
+        return agent
+
+    run_extcli_loop(
+        agent_factory=_agent_factory,
+        input_fn=lambda prompt: next(inputs),
+        output=output,
+    )
+
+    assert len(created_agents) == 1
+    assert created_agents[0].calls == [
+        {"user_message": "hello", "history": []},
+        {
+            "user_message": "follow",
+            "history": [
+                {"role": "user", "content": "hello"},
+                {"role": "assistant", "content": "agent1:hello"},
+            ],
+        },
+    ]
 
 
 def test_run_extcli_loop_skips_empty_input() -> None:
@@ -381,3 +439,47 @@ def test_new_command_is_rejected_while_main_busy(tmp_path):
     assert [call["user_message"] for call in created_agents[0].calls] == ["hello"]
     assert "Started a new session." not in text
     assert "busy" in text.lower()
+
+
+def test_exit_waits_for_busy_main_turn_before_shutdown():
+    session_db = _FakeSessionDB()
+    started = threading.Event()
+    release = threading.Event()
+    finished = threading.Event()
+    loop_done = threading.Event()
+    output = StringIO()
+
+    class _BlockingAgent(_FakeAgent):
+        def run_conversation(self, user_message, *args, **kwargs):
+            started.set()
+            release.wait(timeout=2)
+            try:
+                return super().run_conversation(user_message, *args, **kwargs)
+            finally:
+                finished.set()
+
+    inputs = iter(["hello", "/exit"])
+
+    def _run_loop() -> None:
+        try:
+            run_extcli_loop(
+                agent_factory=lambda session_id: _BlockingAgent("agent", session_id, session_db),
+                input_fn=lambda prompt: next(inputs),
+                output=output,
+            )
+        finally:
+            loop_done.set()
+
+    loop_thread = threading.Thread(target=_run_loop)
+    loop_thread.start()
+
+    assert started.wait(timeout=1), "main turn never entered busy state"
+    assert not loop_done.wait(timeout=0.2), "loop exited before busy turn finished"
+
+    release.set()
+    loop_thread.join(timeout=1)
+
+    assert not loop_thread.is_alive()
+    assert finished.is_set()
+    assert loop_done.is_set()
+    assert "Bye." in output.getvalue()

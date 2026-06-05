@@ -6,7 +6,6 @@ from collections.abc import Callable
 import json
 from pathlib import Path
 import threading
-import time
 from typing import TextIO
 from uuid import uuid4
 
@@ -175,29 +174,30 @@ def _run_agent_turn(
 
 def _run_agent_turn_worker(
     agent: object,
+    session_id: str,
     user_message: str,
     output_adapter: _ExtCliOutputAdapter,
     router: ExtCliSessionRouter,
 ) -> None:
     try:
-        history = load_conversation_history(agent, getattr(agent, "session_id", None))
+        history = load_conversation_history(agent, session_id)
         _run_agent_turn(agent, user_message, history, output_adapter)
     except Exception as exc:
-        output_adapter.emit("main", "error", str(exc), session_id=getattr(agent, "session_id", None))
+        output_adapter.emit("main", "error", str(exc), session_id=session_id)
     finally:
         router.end_main_turn()
 
 
 def _start_main_turn(
     agent: object,
+    session_id: str,
     user_message: str,
     output_adapter: _ExtCliOutputAdapter,
     router: ExtCliSessionRouter,
 ) -> threading.Thread:
     worker = threading.Thread(
         target=_run_agent_turn_worker,
-        args=(agent, user_message, output_adapter, router),
-        daemon=True,
+        args=(agent, session_id, user_message, output_adapter, router),
     )
     worker.start()
     worker.join(timeout=_FAST_TURN_JOIN_TIMEOUT_SECONDS)
@@ -255,7 +255,7 @@ def run_extcli_loop(
                 continue
 
             try:
-                worker = _start_main_turn(agent, user_message, output_adapter, router)
+                worker = _start_main_turn(agent, session_id, user_message, output_adapter, router)
                 if worker.is_alive():
                     active_workers = [existing for existing in active_workers if existing.is_alive()]
                     active_workers.append(worker)
@@ -268,12 +268,8 @@ def run_extcli_loop(
                 output_adapter.write_line(f"error: {exc}")
                 continue
     finally:
-        deadline = time.time() + 2
         for worker in active_workers:
-            remaining = deadline - time.time()
-            if remaining <= 0:
-                break
-            worker.join(timeout=remaining)
+            worker.join()
         if should_close_output:
             close = getattr(active_output, "close", None)
             if callable(close):
