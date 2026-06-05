@@ -92,6 +92,26 @@ class _StreamingFailureAgent:
         raise RuntimeError("boom")
 
 
+class _MultiChunkAgent:
+    def __init__(self, session_db: _FakeSessionDB):
+        self.session_db = session_db
+
+    def run_conversation(
+        self,
+        user_message: str,
+        system_message: str | None = None,
+        conversation_history: list[dict[str, str]] | None = None,
+        task_id: str | None = None,
+        stream_callback=None,
+    ) -> dict[str, object]:
+        del user_message, system_message, conversation_history, task_id
+        if stream_callback is not None:
+            stream_callback("hello ")
+            stream_callback("world")
+            stream_callback(None)
+        return {"final_response": "hello world"}
+
+
 class _PrivateSessionAgent(_FakeAgent):
     def __init__(self, label: str, session_id: str, session_db: _FakeSessionDB):
         super().__init__(label, session_id, session_db)
@@ -357,6 +377,21 @@ def test_run_extcli_loop_ends_partial_stream_before_error_line() -> None:
     assert "main.ai: partial\nmain.error: boom\n" in transcript
 
 
+def test_run_extcli_loop_aggregates_streamed_ai_output_into_one_line() -> None:
+    output = StringIO()
+    inputs = iter(["hello", "/exit"])
+
+    run_extcli_loop(
+        agent_factory=lambda session_id: _MultiChunkAgent(_FakeSessionDB()),
+        input_fn=lambda prompt: next(inputs),
+        output=output,
+    )
+
+    transcript = output.getvalue()
+    assert "main.ai: hello world\n" in transcript
+    assert transcript.count("main.ai:") == 1
+
+
 def test_output_uses_main_prefixes(tmp_path):
     session_db = _FakeSessionDB()
     output_path = tmp_path / "extcli_output"
@@ -378,9 +413,11 @@ def test_output_uses_main_prefixes(tmp_path):
 def test_output_adapter_failure_does_not_deadlock(tmp_path):
     del tmp_path
 
+    writes: list[str] = []
+
     class _BrokenSink:
         def write(self, text):
-            del text
+            writes.append(text)
             raise OSError("disk full")
 
         def flush(self):
@@ -388,7 +425,28 @@ def test_output_adapter_failure_does_not_deadlock(tmp_path):
 
     adapter = ExtCliOutputAdapter(_BrokenSink())
     adapter.emit("main", "status", "hello", session_id="s1")
-    assert True
+    adapter.emit("main", "status", "again", session_id="s1")
+    assert writes == ["main.status: hello\n", "main.status: again\n"]
+
+
+def test_sync_failures_use_prefixed_error_output(monkeypatch) -> None:
+    output = StringIO()
+    inputs = iter(["hello", "/exit"])
+
+    def _boom(*args, **kwargs):
+        del args, kwargs
+        raise RuntimeError("sync boom")
+
+    monkeypatch.setattr("aisoc.backend.extcli._start_main_turn", _boom)
+
+    run_extcli_loop(
+        agent_factory=lambda session_id: _FakeAgent("agent", session_id, _FakeSessionDB()),
+        input_fn=lambda prompt: next(inputs),
+        output=output,
+    )
+
+    transcript = output.getvalue()
+    assert "main.error: sync boom\n" in transcript
 
 
 def test_main_session_rejects_input_while_busy(tmp_path):

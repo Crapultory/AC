@@ -108,17 +108,25 @@ def _run_agent_turn(
     output_adapter: ExtCliOutputAdapter,
 ) -> str:
     streamed_chunks: list[str] = []
+    streamed_output_emitted = False
 
-    def _stream_callback(delta: str | None) -> None:
-        if delta is None:
+    def _emit_streamed_output() -> None:
+        nonlocal streamed_output_emitted
+        if streamed_output_emitted or not streamed_chunks:
             return
-        streamed_chunks.append(delta)
         output_adapter.emit(
             "main",
             "ai",
-            delta,
+            "".join(streamed_chunks),
             session_id=getattr(agent, "session_id", None),
         )
+        streamed_output_emitted = True
+
+    def _stream_callback(delta: str | None) -> None:
+        if delta is None:
+            _emit_streamed_output()
+            return
+        streamed_chunks.append(delta)
 
     def _tool_start_callback(tool_call_id: str, function_name: str, function_args: dict | None) -> None:
         del tool_call_id
@@ -158,6 +166,9 @@ def _run_agent_turn(
             str(uuid4()),
             stream_callback=_stream_callback,
         )
+    except Exception:
+        _emit_streamed_output()
+        raise
     finally:
         if old_tool_start is _CALLBACK_MISSING:
             try:
@@ -174,15 +185,27 @@ def _run_agent_turn(
         else:
             setattr(agent, "tool_complete_callback", old_tool_complete)
     final_response = str(result.get("final_response") or "")
-    if final_response and final_response != "".join(streamed_chunks):
+    streamed_text = "".join(streamed_chunks)
+    if streamed_text:
+        if final_response and final_response != streamed_text:
+            output_adapter.emit(
+                "main",
+                "ai",
+                final_response,
+                session_id=getattr(agent, "session_id", None),
+            )
+        elif not final_response:
+            final_response = streamed_text
+            _emit_streamed_output()
+        else:
+            _emit_streamed_output()
+    elif final_response:
         output_adapter.emit(
             "main",
             "ai",
             final_response,
             session_id=getattr(agent, "session_id", None),
         )
-    elif streamed_chunks and not final_response:
-        final_response = "".join(streamed_chunks)
     return final_response
 
 
@@ -279,7 +302,7 @@ def run_extcli_loop(
                 continue
             except Exception as exc:
                 router.end_main_turn()
-                output_adapter.write_line(f"error: {exc}")
+                output_adapter.emit("main", "error", str(exc), session_id=session_id)
                 continue
     finally:
         for worker in active_workers:
