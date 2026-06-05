@@ -7,9 +7,12 @@ import logging
 import threading
 import time
 import uuid
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
+import httpx
 from aisoc.backend.agent_runtime import load_conversation_history
+from hermes_constants import get_hermes_home
 from toolsets import validate_toolset
 from tools.delegate_tool import (
     _build_child_system_prompt,
@@ -36,6 +39,63 @@ A2A_LIST_SCHEMA = {
         "properties": {},
     },
 }
+
+
+def _a2a_registry_path() -> Path:
+    return Path(get_hermes_home()) / "a2a.json"
+
+
+def _fetch_agent_card(base_url: str) -> tuple[dict[str, Any] | None, str | None]:
+    card_url = base_url.rstrip("/") + "/.well-known/agent-card.json"
+    try:
+        response = httpx.get(card_url, timeout=5.0)
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as exc:
+        return None, str(exc)
+    if not isinstance(payload, dict):
+        return None, "agent card must be a JSON object."
+    return payload, None
+
+
+def _extract_a2a_capabilities(card_json: dict[str, Any] | None) -> list[str]:
+    if not isinstance(card_json, dict):
+        return []
+    capabilities = card_json.get("capabilities")
+    if not isinstance(capabilities, dict):
+        return []
+    return [str(name) for name in capabilities.keys()]
+
+
+def _load_a2a_registry(force_refresh: bool = False) -> dict[str, dict[str, Any]]:
+    if A2A_REGISTRY and not force_refresh:
+        return dict(A2A_REGISTRY)
+
+    path = _a2a_registry_path()
+    if not path.exists():
+        A2A_REGISTRY.clear()
+        return {}
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    entries = raw.get("a2a")
+    if not isinstance(entries, dict):
+        raise ValueError("a2a.json must contain an object-valued 'a2a' mapping.")
+
+    loaded: dict[str, dict[str, Any]] = {}
+    for name, base_url in entries.items():
+        card_json, error = _fetch_agent_card(str(base_url))
+        loaded[str(name)] = {
+            "name": str(name),
+            "url": str(base_url),
+            "available": error is None,
+            "capabilities": _extract_a2a_capabilities(card_json) if error is None else [],
+            "agent_card_name": card_json.get("name") if isinstance(card_json, dict) else None,
+            "error": error,
+        }
+
+    A2A_REGISTRY.clear()
+    A2A_REGISTRY.update(loaded)
+    return dict(A2A_REGISTRY)
 
 
 def _child_session_id(child) -> str | None:
@@ -128,12 +188,18 @@ def _normalize_max_iterations(value: Optional[int], parent_agent) -> tuple[int, 
 
 def a2a_list() -> str:
     """Return the currently loaded A2A registry entries."""
+    try:
+        loaded = _load_a2a_registry(force_refresh=True)
+    except (OSError, ValueError, json.JSONDecodeError) as exc:
+        return tool_error(str(exc), success=False)
     return json.dumps(
         {
             "success": True,
-            "count": len(A2A_REGISTRY),
-            "agents": list(A2A_REGISTRY.values()),
-        }
+            "count": len(loaded),
+            "registry_path": str(_a2a_registry_path()),
+            "agents": list(loaded.values()),
+        },
+        ensure_ascii=False,
     )
 
 

@@ -6,8 +6,10 @@ from run_agent import AIAgent
 from toolsets import TOOLSETS, _HERMES_CORE_TOOLS
 from tools.registry import registry
 from tools.delegate_ext_tool import (
+    A2A_REGISTRY,
     DELEGATE_EXT_SCHEMA,
     _strip_recursive_delegate_tool,
+    a2a_list,
     delegate_ext,
 )
 
@@ -78,6 +80,9 @@ class TestDelegateExtSchema:
 
 
 class TestDelegateExt:
+    def teardown_method(self):
+        A2A_REGISTRY.clear()
+
     def test_requires_parent_agent(self):
         result = json.loads(delegate_ext(goal="test"))
         assert "error" in result
@@ -97,6 +102,60 @@ class TestDelegateExt:
         assert result["error"]
         assert result["agent"] == "a2a"
         assert "not implemented" in result["error"].lower()
+
+    def test_a2a_list_reads_profile_local_registry(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / "profile"
+        hermes_home.mkdir()
+        (hermes_home / "a2a.json").write_text(
+            '{"a2a":{"test":"http://127.0.0.1/a2a"}}',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("tools.delegate_ext_tool.get_hermes_home", lambda: hermes_home)
+        monkeypatch.setattr(
+            "tools.delegate_ext_tool._fetch_agent_card",
+            lambda url: (
+                {"name": "Test Agent", "capabilities": {"streaming": True}},
+                None,
+            ),
+        )
+
+        result = json.loads(a2a_list())
+
+        assert result["success"] is True
+        assert result["count"] == 1
+        assert result["agents"][0]["name"] == "test"
+        assert result["agents"][0]["agent_card_name"] == "Test Agent"
+
+    def test_a2a_list_keeps_broken_agent_entries(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / "profile"
+        hermes_home.mkdir()
+        (hermes_home / "a2a.json").write_text(
+            '{"a2a":{"broken":"http://127.0.0.1/a2a"}}',
+            encoding="utf-8",
+        )
+        monkeypatch.setattr("tools.delegate_ext_tool.get_hermes_home", lambda: hermes_home)
+        monkeypatch.setattr(
+            "tools.delegate_ext_tool._fetch_agent_card",
+            lambda url: (None, "connection refused"),
+        )
+
+        result = json.loads(a2a_list())
+
+        assert result["success"] is True
+        assert result["agents"][0]["available"] is False
+        assert result["agents"][0]["capabilities"] == []
+        assert "connection refused" in result["agents"][0]["error"]
+
+    def test_a2a_list_fails_on_malformed_registry(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / "profile"
+        hermes_home.mkdir()
+        (hermes_home / "a2a.json").write_text('{"a2a":[1,2,3]}', encoding="utf-8")
+        monkeypatch.setattr("tools.delegate_ext_tool.get_hermes_home", lambda: hermes_home)
+
+        result = json.loads(a2a_list())
+
+        assert result["success"] is False
+        assert "a2a" in result["error"].lower()
 
     @patch("run_agent.AIAgent")
     def test_local_mode_uses_defaults(self, mock_agent_cls):
