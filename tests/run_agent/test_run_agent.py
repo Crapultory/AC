@@ -151,6 +151,38 @@ def test_aiagent_reuses_existing_errors_log_handler():
             root_logger.addHandler(handler)
 
 
+def test_dispatch_helper_injects_runtime_adapters():
+    agent = object.__new__(AIAgent)
+    agent._delegate_ext_output_adapter = "OUTPUT"
+    agent._delegate_ext_input_factory = lambda: "INPUT"
+
+    with patch(
+        "tools.delegate_ext_tool.delegate_ext",
+        return_value='{"ok": true}',
+    ) as mock_delegate_ext:
+        agent._dispatch_delegate_ext(
+            {
+                "goal": "ship it",
+                "context": "repo root",
+                "is_delegate_output": True,
+                "is_loop": True,
+            }
+        )
+
+    mock_delegate_ext.assert_called_once_with(
+        goal="ship it",
+        context="repo root",
+        agent=None,
+        toolsets=None,
+        max_iterations=None,
+        is_delegate_output=True,
+        output="OUTPUT",
+        is_loop=True,
+        input="INPUT",
+        parent_agent=agent,
+    )
+
+
 class TestProviderModelNormalization:
     def test_aiagent_strips_matching_native_provider_prefix(self):
         with (
@@ -2083,6 +2115,29 @@ class TestExecuteToolCalls:
         assert len(messages) == 1
         assert messages[0]["role"] == "tool"
         assert messages[0]["tool_call_id"] == "c1"
+
+    def test_delegate_ext_is_handled_by_agent_loop_dispatch(self, agent):
+        tc = _mock_tool_call(
+            name="delegate_ext",
+            arguments='{"goal":"inspect repo","context":"focus on tests"}',
+            call_id="c1",
+        )
+        mock_msg = _mock_assistant_msg(content="", tool_calls=[tc])
+        messages = []
+
+        with (
+            patch.object(agent, "_dispatch_delegate_ext", return_value='{"ok": true}') as mock_dispatch,
+            patch("run_agent.handle_function_call") as mock_hfc,
+        ):
+            agent._execute_tool_calls(mock_msg, messages, "task-1")
+
+        mock_dispatch.assert_called_once_with(
+            {"goal": "inspect repo", "context": "focus on tests"}
+        )
+        mock_hfc.assert_not_called()
+        assert len(messages) == 1
+        assert messages[0]["role"] == "tool"
+        assert '"ok": true' in messages[0]["content"]
 
     def test_result_truncation_over_100k(self, agent, tmp_path, monkeypatch):
         monkeypatch.setenv("HERMES_HOME", str(tmp_path / ".hermes"))

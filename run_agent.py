@@ -4415,6 +4415,35 @@ class AIAgent:
             parent_agent=self,
         )
 
+    def _dispatch_delegate_ext(self, function_args: dict) -> str:
+        """Single call site for delegate_ext dispatch."""
+        from tools.delegate_ext_tool import delegate_ext as _delegate_ext
+
+        runtime_output = getattr(self, "_delegate_ext_output_adapter", None)
+        input_factory = getattr(self, "_delegate_ext_input_factory", None)
+        runtime_input = (
+            input_factory()
+            if callable(input_factory)
+            else getattr(self, "_delegate_ext_input_adapter", None)
+        )
+        raw_is_loop = function_args.get("is_loop") if "is_loop" in function_args else None
+        effective_is_loop = (
+            raw_is_loop if raw_is_loop is not None else (runtime_input is not None)
+        )
+
+        return _delegate_ext(
+            goal=function_args.get("goal"),
+            context=function_args.get("context"),
+            agent=function_args.get("agent"),
+            toolsets=function_args.get("toolsets"),
+            max_iterations=function_args.get("max_iterations"),
+            is_delegate_output=function_args.get("is_delegate_output", True),
+            output=runtime_output,
+            is_loop=effective_is_loop,
+            input=runtime_input,
+            parent_agent=self,
+        )
+
     def _invoke_tool(self, function_name: str, function_args: dict, effective_task_id: str,
                      tool_call_id: Optional[str] = None, messages: list = None,
                      pre_tool_block_checked: bool = False) -> str:
