@@ -304,6 +304,7 @@ def test_main_session_rejects_input_while_busy(tmp_path):
     output_path = tmp_path / "extcli_output"
     started = threading.Event()
     release = threading.Event()
+    created_agents: list[_FakeAgent] = []
 
     class _BlockingAgent(_FakeAgent):
         def run_conversation(self, user_message, *args, **kwargs):
@@ -325,13 +326,18 @@ def test_main_session_rejects_input_while_busy(tmp_path):
         return value
 
     run_extcli_loop(
-        agent_factory=lambda session_id: _BlockingAgent("agent", session_id, session_db),
+        agent_factory=lambda session_id: created_agents.append(
+            _BlockingAgent("agent", session_id, session_db)
+        ) or created_agents[-1],
         input_fn=_input,
         output_path=output_path,
     )
 
     release.set()
     text = output_path.read_text(encoding="utf-8")
+    assert len(created_agents) == 1
+    assert [call["user_message"] for call in created_agents[0].calls] == ["hello"]
+    assert "agent:second" not in text
     assert "busy" in text.lower()
 
 
@@ -340,6 +346,7 @@ def test_new_command_is_rejected_while_main_busy(tmp_path):
     output_path = tmp_path / "extcli_output"
     started = threading.Event()
     release = threading.Event()
+    created_agents: list[_FakeAgent] = []
 
     class _BlockingAgent(_FakeAgent):
         def run_conversation(self, user_message, *args, **kwargs):
@@ -361,10 +368,16 @@ def test_new_command_is_rejected_while_main_busy(tmp_path):
         return value
 
     run_extcli_loop(
-        agent_factory=lambda session_id: _BlockingAgent("agent", session_id, session_db),
+        agent_factory=lambda session_id: created_agents.append(
+            _BlockingAgent("agent", session_id, session_db)
+        ) or created_agents[-1],
         input_fn=_input,
         output_path=output_path,
     )
 
     release.set()
-    assert "busy" in output_path.read_text(encoding="utf-8").lower()
+    text = output_path.read_text(encoding="utf-8")
+    assert len(created_agents) == 1
+    assert [call["user_message"] for call in created_agents[0].calls] == ["hello"]
+    assert "Started a new session." not in text
+    assert "busy" in text.lower()
