@@ -4,6 +4,7 @@ from unittest.mock import MagicMock, patch
 
 from run_agent import AIAgent
 from toolsets import TOOLSETS, _HERMES_CORE_TOOLS
+from tools.registry import registry
 from tools.delegate_ext_tool import (
     DELEGATE_EXT_SCHEMA,
     _strip_recursive_delegate_tool,
@@ -39,6 +40,11 @@ def _make_mock_parent():
 
 
 class TestDelegateExtSchema:
+    def test_a2a_list_schema_is_registered(self):
+        schema = registry.get_schema("a2a_list")
+        assert schema is not None
+        assert schema["name"] == "a2a_list"
+
     def test_schema_fields_present(self):
         assert DELEGATE_EXT_SCHEMA["name"] == "delegate_ext"
         props = DELEGATE_EXT_SCHEMA["parameters"]["properties"]
@@ -53,6 +59,10 @@ class TestDelegateExtSchema:
         props = DELEGATE_EXT_SCHEMA["parameters"]["properties"]
         assert "is_delegate_output" in props
         assert "is_loop" in props
+
+    def test_schema_includes_a2a_name(self):
+        props = DELEGATE_EXT_SCHEMA["parameters"]["properties"]
+        assert "a2a_name" in props
 
 
 class TestDelegateExt:
@@ -300,8 +310,14 @@ class TestDelegateExt:
 
 
 class TestDelegateExtIntegration:
+    def test_hermes_core_tools_include_a2a_list(self):
+        assert "a2a_list" in _HERMES_CORE_TOOLS
+
     def test_hermes_core_tools_include_delegate_ext(self):
         assert "delegate_ext" in _HERMES_CORE_TOOLS
+
+    def test_delegation_toolset_includes_a2a_list(self):
+        assert "a2a_list" in TOOLSETS["delegation"]["tools"]
 
     def test_delegation_toolset_includes_delegate_ext(self):
         assert "delegate_ext" in TOOLSETS["delegation"]["tools"]

@@ -24,6 +24,17 @@ logger = logging.getLogger(__name__)
 DEFAULT_AGENT_MODE = "local"
 DEFAULT_TOOLSETS = ["hermes-cli"]
 DEFAULT_MAX_ITERATIONS = 90
+A2A_REGISTRY: Dict[str, Dict[str, Any]] = {}
+
+
+A2A_LIST_SCHEMA = {
+    "name": "a2a_list",
+    "description": "List profile-configured A2A agents and summarize their capabilities.",
+    "parameters": {
+        "type": "object",
+        "properties": {},
+    },
+}
 
 
 def _child_session_id(child) -> str | None:
@@ -112,6 +123,17 @@ def _normalize_max_iterations(value: Optional[int], parent_agent) -> tuple[int, 
     if max_iterations <= 0:
         return 0, "max_iterations must be a positive integer."
     return max_iterations, None
+
+
+def a2a_list() -> str:
+    """Return the currently loaded A2A registry entries."""
+    return json.dumps(
+        {
+            "success": True,
+            "count": len(A2A_REGISTRY),
+            "agents": list(A2A_REGISTRY.values()),
+        }
+    )
 
 
 def _register_active_child(parent_agent, child) -> None:
@@ -358,6 +380,7 @@ def delegate_ext(
     goal: Optional[str] = None,
     context: Optional[str] = None,
     agent: str = DEFAULT_AGENT_MODE,
+    a2a_name: Optional[str] = None,
     toolsets: Optional[List[str]] = None,
     max_iterations: Optional[int] = None,
     is_delegate_output: bool = True,
@@ -383,6 +406,7 @@ def delegate_ext(
         return tool_error(
             "delegate_ext a2a mode is not implemented yet.",
             agent="a2a",
+            a2a_name=a2a_name,
             success=False,
         )
 
@@ -432,6 +456,10 @@ DELEGATE_EXT_SCHEMA = {
                 "enum": ["local", "a2a"],
                 "description": "Delegation target mode. Default: local. a2a is reserved for remote agents and currently unimplemented.",
             },
+            "a2a_name": {
+                "type": "string",
+                "description": "Configured remote A2A agent name. Only used when agent='a2a'.",
+            },
             "toolsets": {
                 "type": "array",
                 "items": {"type": "string"},
@@ -457,6 +485,17 @@ DELEGATE_EXT_SCHEMA = {
 
 
 registry.register(
+    name="a2a_list",
+    toolset="delegation_ext",
+    schema=A2A_LIST_SCHEMA,
+    handler=lambda args, **kw: a2a_list(),
+    check_fn=check_delegate_requirements,
+    emoji="🗂️",
+    description="List configured remote A2A agents",
+)
+
+
+registry.register(
     name="delegate_ext",
     toolset="delegation_ext",
     schema=DELEGATE_EXT_SCHEMA,
@@ -464,6 +503,7 @@ registry.register(
         goal=args.get("goal"),
         context=args.get("context"),
         agent=args.get("agent", DEFAULT_AGENT_MODE),
+        a2a_name=args.get("a2a_name"),
         toolsets=args.get("toolsets"),
         max_iterations=args.get("max_iterations"),
         is_delegate_output=args.get("is_delegate_output", True),
