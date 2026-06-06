@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Any, Tuple, List
@@ -72,6 +73,158 @@ class _ThreadContextCache:
     fetched_at: float = field(default_factory=time.monotonic)
     message_count: int = 0
     parent_text: str = ""  # Raw text of the thread parent (for reply_to_text injection)
+
+
+@dataclass
+class _SlackDelegateRoute:
+    channel_id: str
+    thread_ts: str
+    input_adapter: Any = None
+    session_id: str | None = None
+
+
+class _SlackDelegateInputAdapter:
+    def __init__(self, adapter: "SlackAdapter", *, channel_id: str, thread_ts: str) -> None:
+        self._adapter = adapter
+        self._channel_id = str(channel_id or "")
+        self._thread_ts = str(thread_ts or "")
+        self._condition = threading.Condition()
+        self._lines: list[str] = []
+        self._closed = False
+        self._waiting_for_input = False
+
+    @property
+    def channel_id(self) -> str:
+        return self._channel_id
+
+    @property
+    def thread_ts(self) -> str:
+        return self._thread_ts
+
+    def enter_foreground(self) -> bool:
+        return bool(self._adapter._activate_delegate_foreground(self))
+
+    def exit_foreground(self) -> None:
+        self._adapter._release_delegate_foreground(self)
+
+    def push_line(self, text: str) -> bool:
+        with self._condition:
+            if self._closed:
+                return False
+            self._waiting_for_input = False
+            self._lines.append(text)
+            self._condition.notify_all()
+            return True
+
+    def read_line(self) -> str | None:
+        with self._condition:
+            while not self._lines and not self._closed:
+                self._waiting_for_input = True
+                self._condition.notify_all()
+                self._condition.wait()
+            self._waiting_for_input = False
+            if self._lines:
+                line = self._lines.pop(0)
+                self._condition.notify_all()
+                return line
+            return None
+
+    def close(self) -> None:
+        with self._condition:
+            self._closed = True
+            self._waiting_for_input = False
+            self._condition.notify_all()
+
+    def is_waiting_for_input(self) -> bool:
+        with self._condition:
+            return self._waiting_for_input
+
+    def wait_for_state_change(self, timeout: float | None = None) -> None:
+        with self._condition:
+            self._condition.wait(timeout=timeout)
+
+
+class _SlackDelegateOutputAdapter:
+    def __init__(self, adapter: "SlackAdapter", *, channel_id: str, thread_ts: str) -> None:
+        self._adapter = adapter
+        self._channel_id = str(channel_id or "")
+        self._thread_ts = str(thread_ts or "")
+        try:
+            self._loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._loop = None
+
+    async def _emit_async(
+        self,
+        source: str,
+        event_type: str,
+        content: str,
+        *,
+        session_id: str | None = None,
+    ) -> None:
+        if session_id:
+            self._adapter._record_delegate_session_id(
+                channel_id=self._channel_id,
+                thread_ts=self._thread_ts,
+                session_id=session_id,
+            )
+        prefix = source
+        if session_id and source != "main":
+            prefix = f"{source}[{session_id}]"
+        await self._adapter.send(
+            chat_id=self._channel_id,
+            content=f"{prefix}.{event_type}: {content}",
+            metadata=self._adapter._delegate_foreground_target(
+                channel_id=self._channel_id,
+                thread_ts=self._thread_ts,
+            ),
+        )
+
+    def emit(
+        self,
+        source: str,
+        event_type: str,
+        content: str,
+        *,
+        session_id: str | None = None,
+    ) -> None:
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+
+        if current_loop is not None:
+            current_loop.create_task(
+                self._emit_async(
+                    source,
+                    event_type,
+                    content,
+                    session_id=session_id,
+                )
+            )
+            return
+
+        loop = self._loop
+        if loop is not None and loop.is_running():
+            asyncio.run_coroutine_threadsafe(
+                self._emit_async(
+                    source,
+                    event_type,
+                    content,
+                    session_id=session_id,
+                ),
+                loop,
+            )
+            return
+
+        asyncio.run(
+            self._emit_async(
+                source,
+                event_type,
+                content,
+                session_id=session_id,
+            )
+        )
 
 
 def check_slack_requirements() -> bool:
@@ -375,6 +528,8 @@ class SlackAdapter(BasePlatformAdapter):
         # Keyed by message_ts → list of interaction dicts.
         self._block_kit_interactions: Dict[str, List[Dict[str, Any]]] = {}
         self._BLOCK_KIT_INTERACTIONS_MAX = 200
+        self._delegate_foreground_lock = threading.RLock()
+        self._delegate_foreground_routes: Dict[Tuple[str, str], _SlackDelegateRoute] = {}
 
     def _describe_slack_api_error(self, response: Any, *, file_obj: Optional[Dict[str, Any]] = None) -> Optional[str]:
         """Convert Slack API auth/permission failures into actionable user-facing text."""
@@ -1428,6 +1583,135 @@ class SlackAdapter(BasePlatformAdapter):
             if metadata.get("thread_ts"):
                 return metadata["thread_ts"]
         return reply_to
+
+    def _delegate_route_key(
+        self,
+        *,
+        channel_id: str,
+        thread_ts: str,
+    ) -> Tuple[str, str] | None:
+        channel = str(channel_id or "").strip()
+        thread = str(thread_ts or "").strip()
+        if not channel or not thread:
+            return None
+        return channel, thread
+
+    def _delegate_foreground_target(
+        self,
+        *,
+        channel_id: str,
+        thread_ts: str,
+    ) -> Optional[Dict[str, str]]:
+        if self._delegate_route_key(channel_id=channel_id, thread_ts=thread_ts) is None:
+            return None
+        return {"thread_id": str(thread_ts)}
+
+    def _get_delegate_route(
+        self,
+        *,
+        channel_id: str,
+        thread_ts: str,
+    ) -> _SlackDelegateRoute | None:
+        key = self._delegate_route_key(channel_id=channel_id, thread_ts=thread_ts)
+        if key is None:
+            return None
+        with self._delegate_foreground_lock:
+            return self._delegate_foreground_routes.get(key)
+
+    def _clear_delegate_route(
+        self,
+        *,
+        channel_id: str,
+        thread_ts: str,
+    ) -> _SlackDelegateRoute | None:
+        key = self._delegate_route_key(channel_id=channel_id, thread_ts=thread_ts)
+        if key is None:
+            return None
+        with self._delegate_foreground_lock:
+            return self._delegate_foreground_routes.pop(key, None)
+
+    def _record_delegate_session_id(
+        self,
+        *,
+        channel_id: str,
+        thread_ts: str,
+        session_id: str | None,
+    ) -> None:
+        if not session_id:
+            return
+        key = self._delegate_route_key(channel_id=channel_id, thread_ts=thread_ts)
+        if key is None:
+            return
+        with self._delegate_foreground_lock:
+            route = self._delegate_foreground_routes.get(key)
+            if route is not None:
+                route.session_id = str(session_id)
+
+    def _activate_delegate_foreground(
+        self,
+        input_adapter: _SlackDelegateInputAdapter,
+    ) -> bool:
+        key = self._delegate_route_key(
+            channel_id=input_adapter.channel_id,
+            thread_ts=input_adapter.thread_ts,
+        )
+        if key is None:
+            return False
+        with self._delegate_foreground_lock:
+            current = self._delegate_foreground_routes.get(key)
+            if current is not None and current.input_adapter not in {None, input_adapter}:
+                return False
+            route = current or _SlackDelegateRoute(
+                channel_id=input_adapter.channel_id,
+                thread_ts=input_adapter.thread_ts,
+            )
+            route.input_adapter = input_adapter
+            self._delegate_foreground_routes[key] = route
+            return True
+
+    def _release_delegate_foreground(
+        self,
+        input_adapter: _SlackDelegateInputAdapter | None,
+    ) -> bool:
+        if input_adapter is None:
+            return False
+        key = self._delegate_route_key(
+            channel_id=input_adapter.channel_id,
+            thread_ts=input_adapter.thread_ts,
+        )
+        if key is None:
+            return False
+        with self._delegate_foreground_lock:
+            current = self._delegate_foreground_routes.get(key)
+            if current is None:
+                return False
+            if current.input_adapter not in {None, input_adapter}:
+                return False
+            self._delegate_foreground_routes.pop(key, None)
+            return True
+
+    def build_delegate_foreground_runtime(
+        self,
+        *,
+        channel_id: str,
+        thread_ts: str,
+    ) -> Dict[str, Any]:
+        return {
+            "output": _SlackDelegateOutputAdapter(
+                self,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+            ),
+            "input_factory": lambda: _SlackDelegateInputAdapter(
+                self,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+            ),
+            "metadata": self._delegate_foreground_target(
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+            ),
+        }
 
     async def _upload_file(
         self,
