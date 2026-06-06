@@ -8,13 +8,17 @@ These tests are self-contained on purpose so they do not rely on fixtures from
 from __future__ import annotations
 
 import asyncio
+import json
 import sys
-from unittest.mock import AsyncMock, MagicMock
+import threading
+import time
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from gateway.config import PlatformConfig
 from gateway.platforms.base import SendResult
+from tools.a2a_delegate_tool import _a2a_completed_state, a2a_delegate
 
 
 def _ensure_slack_mock() -> None:
@@ -63,7 +67,67 @@ def adapter():
     slack_adapter._running = True
     slack_adapter.handle_message = AsyncMock()
     slack_adapter.send = AsyncMock(return_value=SendResult(success=True, message_id="msg-1"))
+    slack_adapter._resolve_user_name = AsyncMock(return_value="testuser")
+    slack_adapter._fetch_thread_context = AsyncMock(return_value="")
+    slack_adapter._fetch_thread_parent_text = AsyncMock(return_value=None)
     return slack_adapter
+
+
+def _make_event(
+    text: str,
+    *,
+    channel: str = "D123",
+    channel_type: str = "im",
+    ts: str = "1717171717.000001",
+    thread_ts: str | None = None,
+    user: str = "U_USER",
+) -> dict:
+    event = {
+        "text": text,
+        "user": user,
+        "channel": channel,
+        "channel_type": channel_type,
+        "ts": ts,
+    }
+    if thread_ts is not None:
+        event["thread_ts"] = thread_ts
+    return event
+
+
+def _make_mock_parent_agent():
+    parent = MagicMock()
+    parent.base_url = "https://openrouter.ai/api/v1"
+    parent.api_key = "***"
+    parent.provider = "openrouter"
+    parent.api_mode = "chat_completions"
+    parent.model = "anthropic/claude-sonnet-4"
+    parent.platform = "slack"
+    parent.reasoning_config = None
+    parent.prefill_messages = None
+    parent.max_tokens = None
+    parent._fallback_chain = None
+    parent.providers_allowed = None
+    parent.providers_ignored = None
+    parent.providers_order = None
+    parent.provider_sort = None
+    parent.openrouter_min_coding_score = None
+    parent._session_db = None
+    parent.session_id = "parent-session"
+    parent._print_fn = None
+    parent._credential_pool = None
+    parent._active_children = []
+    parent._active_children_lock = threading.Lock()
+    parent._current_task_id = "parent-task"
+    return parent
+
+
+async def _wait_for_route(adapter, *, channel_id: str, thread_ts: str, timeout: float = 2.0) -> None:
+    deadline = time.monotonic() + timeout
+    while time.monotonic() < deadline:
+        if adapter._get_delegate_route(channel_id=channel_id, thread_ts=thread_ts) is not None:
+            return
+        await asyncio.sleep(0.01)
+    raise AssertionError(f"delegate route did not activate for {channel_id}/{thread_ts}")
 
 
 class TestSlackDelegateForegroundRouteState:
@@ -135,3 +199,217 @@ class TestSlackDelegateForegroundRouteState:
             "thread_id": "1717171717.000300",
         }
         assert "entered foreground loop" in adapter.send.await_args.kwargs["content"]
+
+
+class TestSlackDelegateForegroundInterception:
+    @pytest.mark.asyncio
+    async def test_foreground_delegate_thread_message_is_pushed_and_skips_main_pipeline(self, adapter):
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="D123",
+            thread_ts="1717171717.100000",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        await adapter._handle_slack_message(
+            _make_event(
+                "follow up from Slack",
+                ts="1717171717.100001",
+                thread_ts="1717171717.100000",
+            )
+        )
+
+        assert input_adapter.read_line() == "follow up from Slack"
+        adapter.handle_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_delegate_commands_are_forwarded_to_delegate_while_foreground(self, adapter):
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="D123",
+            thread_ts="1717171717.200000",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        await adapter._handle_slack_message(
+            _make_event(
+                "!main",
+                ts="1717171717.200001",
+                thread_ts="1717171717.200000",
+            )
+        )
+        await adapter._handle_slack_message(
+            _make_event(
+                "!exit",
+                ts="1717171717.200002",
+                thread_ts="1717171717.200000",
+            )
+        )
+        await adapter._handle_slack_message(
+            _make_event(
+                "/new",
+                ts="1717171717.200003",
+                thread_ts="1717171717.200000",
+            )
+        )
+
+        assert input_adapter.read_line() == "/main"
+        assert input_adapter.read_line() == "/exit"
+        assert input_adapter.read_line() == "/new"
+        adapter.handle_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_failed_delegate_push_releases_route_and_falls_back_to_main(self, adapter):
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="D123",
+            thread_ts="1717171717.300000",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+        input_adapter.close()
+
+        await adapter._handle_slack_message(
+            _make_event(
+                "route this through main",
+                ts="1717171717.300001",
+                thread_ts="1717171717.300000",
+            )
+        )
+
+        assert adapter._get_delegate_route(
+            channel_id="D123",
+            thread_ts="1717171717.300000",
+        ) is None
+        adapter.handle_message.assert_awaited_once()
+        msg_event = adapter.handle_message.await_args.args[0]
+        assert msg_event.text == "route this through main"
+
+
+class TestSlackDelegateForegroundLoopRelease:
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("agent_mode", ["local", "a2a"])
+    @pytest.mark.parametrize("return_command", ["/main", "/exit"])
+    async def test_return_commands_release_foreground_route_through_delegate_loop(
+        self,
+        adapter,
+        agent_mode,
+        return_command,
+    ):
+        parent = _make_mock_parent_agent()
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="D123",
+            thread_ts="1717171717.400000",
+        )
+        input_adapter = runtime["input_factory"]()
+        result_box = {}
+
+        def _run_local_delegate() -> None:
+            child = MagicMock()
+            child.session_id = "delegate-local-session"
+            child.run_conversation.return_value = {
+                "final_response": "local start",
+                "completed": True,
+                "api_calls": 1,
+            }
+            with patch("run_agent.AIAgent", return_value=child):
+                result_box["payload"] = json.loads(
+                    a2a_delegate(
+                        goal="start local delegate",
+                        agent="local",
+                        is_loop=True,
+                        input=input_adapter,
+                        output=runtime["output"],
+                        parent_agent=parent,
+                    )
+                )
+
+        def _run_a2a_delegate() -> None:
+            class _FakeSession:
+                def __init__(
+                    self,
+                    base_url,
+                    *,
+                    output=None,
+                    timeout=60.0,
+                    poll_interval=0.05,
+                    session_id=None,
+                ):
+                    del base_url, output, timeout, poll_interval
+                    self.context_id = session_id
+
+                async def send_turn(self, text: str, *, is_delegate_output: bool = True):
+                    del text, is_delegate_output
+                    return {
+                        "final_response": "remote start",
+                        "state": _a2a_completed_state(),
+                        "state_name": "completed",
+                    }
+
+                async def close(self):
+                    return None
+
+            with patch(
+                "tools.a2a_delegate_tool._resolve_a2a_entry",
+                return_value=(
+                    {
+                        "available": True,
+                        "url": "https://example.invalid/a2a",
+                        "agent_card_name": "remote",
+                    },
+                    None,
+                ),
+            ), patch(
+                "tools.a2a_delegate_tool._A2ADelegateSession",
+                _FakeSession,
+            ):
+                result_box["payload"] = json.loads(
+                    a2a_delegate(
+                        goal="start remote delegate",
+                        agent="a2a",
+                        a2a_name="remote",
+                        is_loop=True,
+                        input=input_adapter,
+                        output=runtime["output"],
+                        parent_agent=parent,
+                    )
+                )
+
+        worker = threading.Thread(
+            target=_run_local_delegate if agent_mode == "local" else _run_a2a_delegate,
+            daemon=True,
+        )
+        worker.start()
+
+        await _wait_for_route(
+            adapter,
+            channel_id="D123",
+            thread_ts="1717171717.400000",
+        )
+
+        await adapter._handle_slack_message(
+            _make_event(
+                return_command,
+                ts="1717171717.400001",
+                thread_ts="1717171717.400000",
+            )
+        )
+
+        worker.join(timeout=5)
+        assert not worker.is_alive()
+
+        payload = result_box["payload"]
+        assert payload["loop_exit_reason"] == "main_command"
+        assert adapter._get_delegate_route(
+            channel_id="D123",
+            thread_ts="1717171717.400000",
+        ) is None
+
+        adapter.handle_message.reset_mock()
+        await adapter._handle_slack_message(
+            _make_event(
+                "back to main",
+                ts="1717171717.400002",
+                thread_ts="1717171717.400000",
+            )
+        )
+        adapter.handle_message.assert_awaited_once()

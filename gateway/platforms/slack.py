@@ -1713,6 +1713,34 @@ class SlackAdapter(BasePlatformAdapter):
             ),
         }
 
+    def _maybe_route_delegate_foreground_message(
+        self,
+        event: Dict[str, Any],
+        *,
+        original_text: str,
+    ) -> bool:
+        channel_id = str(event.get("channel", "") or "").strip()
+        ts = str(event.get("ts", "") or "").strip()
+        channel_type = str(event.get("channel_type", "") or "").strip()
+        is_dm = channel_type in {"im", "mpim"} or (not channel_type and channel_id.startswith("D"))
+
+        if is_dm:
+            thread_ts = str(event.get("thread_ts") or "")
+            if not thread_ts and self._dm_top_level_threads_as_sessions():
+                thread_ts = ts
+        else:
+            thread_ts = str(event.get("thread_ts") or ts or "")
+
+        route = self._get_delegate_route(channel_id=channel_id, thread_ts=thread_ts)
+        if route is None or route.input_adapter is None:
+            return False
+
+        if route.input_adapter.push_line(original_text):
+            return True
+
+        self._clear_delegate_route(channel_id=channel_id, thread_ts=thread_ts)
+        return False
+
     async def _upload_file(
         self,
         chat_id: str,
@@ -2530,10 +2558,23 @@ class SlackAdapter(BasePlatformAdapter):
                 # Strip "@suffix" the same way get_command() does, so
                 # forms like ``!stop@hermes`` still resolve.
                 cmd_name = first_token.split("@", 1)[0].lower()
-                if cmd_name and "/" not in cmd_name and is_gateway_known_command(cmd_name):
+                if (
+                    cmd_name
+                    and "/" not in cmd_name
+                    and (
+                        is_gateway_known_command(cmd_name)
+                        or cmd_name in {"main", "exit"}
+                    )
+                ):
                     original_text = "/" + original_text[1:]
             except Exception:  # pragma: no cover - defensive
                 pass
+
+        if self._maybe_route_delegate_foreground_message(
+            event,
+            original_text=original_text,
+        ):
+            return
 
         text = original_text
 
