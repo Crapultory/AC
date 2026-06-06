@@ -179,10 +179,14 @@ class _SlackDelegateOutputAdapter:
         self._thread_ts = str(thread_ts) if thread_ts else None
         self._user_id = str(user_id or "") or None
         self._chat_type = str(chat_type or "group") or "group"
+        # The output adapter is constructed inside the agent's ``run_sync``
+        # worker thread, where ``asyncio.get_running_loop()`` raises. Fall
+        # back to the SlackAdapter's main loop captured during ``connect()``
+        # so emits get scheduled onto the loop that owns the HTTP client.
         try:
             self._loop = asyncio.get_running_loop()
         except RuntimeError:
-            self._loop = None
+            self._loop = getattr(adapter, "_main_loop", None)
 
     def _delegate_metadata(self) -> Dict[str, Any] | None:
         return self._adapter._delegate_foreground_target(
@@ -303,33 +307,27 @@ class _SlackDelegateOutputAdapter:
         *,
         session_id: str | None = None,
     ) -> None:
-        try:
-            current_loop = asyncio.get_running_loop()
-        except RuntimeError:
-            current_loop = None
-
-        if current_loop is not None:
-            current_loop.create_task(
-                self._emit_async(
-                    source,
-                    event_type,
-                    content,
-                    session_id=session_id,
-                )
-            )
-            return
-
+        # Always target the loop that owns the SlackAdapter's HTTP client
+        # (captured at __init__ time). Scheduling on a transient loop such as
+        # the one spawned by ``_run_coro_sync`` for a2a delegate runs would
+        # cause pending sends to be cancelled when that loop tears down.
         loop = self._loop
         if loop is not None and loop.is_running():
-            asyncio.run_coroutine_threadsafe(
-                self._emit_async(
-                    source,
-                    event_type,
-                    content,
-                    session_id=session_id,
-                ),
-                loop,
+            try:
+                current_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                current_loop = None
+
+            coro = self._emit_async(
+                source,
+                event_type,
+                content,
+                session_id=session_id,
             )
+            if current_loop is loop:
+                loop.create_task(coro)
+            else:
+                asyncio.run_coroutine_threadsafe(coro, loop)
             return
 
         asyncio.run(
@@ -645,6 +643,11 @@ class SlackAdapter(BasePlatformAdapter):
         self._BLOCK_KIT_INTERACTIONS_MAX = 200
         self._delegate_foreground_lock = threading.RLock()
         self._delegate_foreground_routes: Dict[str, _SlackDelegateRoute] = {}
+        # The asyncio loop the SlackAdapter's HTTP clients are bound to.
+        # Captured in ``connect()`` (async) so worker-thread callers (e.g.
+        # ``_SlackDelegateOutputAdapter`` constructed inside agent ``run_sync``)
+        # can schedule sends back to the right loop via run_coroutine_threadsafe.
+        self._main_loop: Optional[asyncio.AbstractEventLoop] = None
 
     def _describe_slack_api_error(self, response: Any, *, file_obj: Optional[Dict[str, Any]] = None) -> Optional[str]:
         """Convert Slack API auth/permission failures into actionable user-facing text."""
@@ -970,6 +973,10 @@ class SlackAdapter(BasePlatformAdapter):
             # Start Socket Mode handler in background
             self._handler = AsyncSocketModeHandler(self._app, app_token, proxy=proxy_url)
             _apply_slack_proxy(self._handler.client, proxy_url)
+            try:
+                self._main_loop = asyncio.get_running_loop()
+            except RuntimeError:
+                self._main_loop = None
             self._socket_mode_task = asyncio.create_task(self._handler.start_async())
 
             self._running = True
