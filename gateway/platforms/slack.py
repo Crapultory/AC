@@ -78,16 +78,28 @@ class _ThreadContextCache:
 @dataclass
 class _SlackDelegateRoute:
     channel_id: str
-    thread_ts: str
+    thread_ts: str | None
+    user_id: str | None = None
+    chat_type: str = "group"
     input_adapter: Any = None
     session_id: str | None = None
 
 
 class _SlackDelegateInputAdapter:
-    def __init__(self, adapter: "SlackAdapter", *, channel_id: str, thread_ts: str) -> None:
+    def __init__(
+        self,
+        adapter: "SlackAdapter",
+        *,
+        channel_id: str,
+        thread_ts: str | None,
+        user_id: str | None = None,
+        chat_type: str = "group",
+    ) -> None:
         self._adapter = adapter
         self._channel_id = str(channel_id or "")
-        self._thread_ts = str(thread_ts or "")
+        self._thread_ts = str(thread_ts) if thread_ts else None
+        self._user_id = str(user_id or "") or None
+        self._chat_type = str(chat_type or "group") or "group"
         self._condition = threading.Condition()
         self._lines: list[str] = []
         self._closed = False
@@ -98,8 +110,16 @@ class _SlackDelegateInputAdapter:
         return self._channel_id
 
     @property
-    def thread_ts(self) -> str:
+    def thread_ts(self) -> str | None:
         return self._thread_ts
+
+    @property
+    def user_id(self) -> str | None:
+        return self._user_id
+
+    @property
+    def chat_type(self) -> str:
+        return self._chat_type
 
     def enter_foreground(self) -> bool:
         return bool(self._adapter._activate_delegate_foreground(self))
@@ -145,10 +165,20 @@ class _SlackDelegateInputAdapter:
 
 
 class _SlackDelegateOutputAdapter:
-    def __init__(self, adapter: "SlackAdapter", *, channel_id: str, thread_ts: str) -> None:
+    def __init__(
+        self,
+        adapter: "SlackAdapter",
+        *,
+        channel_id: str,
+        thread_ts: str | None,
+        user_id: str | None = None,
+        chat_type: str = "group",
+    ) -> None:
         self._adapter = adapter
         self._channel_id = str(channel_id or "")
-        self._thread_ts = str(thread_ts or "")
+        self._thread_ts = str(thread_ts) if thread_ts else None
+        self._user_id = str(user_id or "") or None
+        self._chat_type = str(chat_type or "group") or "group"
         try:
             self._loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -166,6 +196,8 @@ class _SlackDelegateOutputAdapter:
             self._adapter._record_delegate_session_id(
                 channel_id=self._channel_id,
                 thread_ts=self._thread_ts,
+                user_id=self._user_id,
+                chat_type=self._chat_type,
                 session_id=session_id,
             )
         prefix = source
@@ -529,7 +561,7 @@ class SlackAdapter(BasePlatformAdapter):
         self._block_kit_interactions: Dict[str, List[Dict[str, Any]]] = {}
         self._BLOCK_KIT_INTERACTIONS_MAX = 200
         self._delegate_foreground_lock = threading.RLock()
-        self._delegate_foreground_routes: Dict[Tuple[str, str], _SlackDelegateRoute] = {}
+        self._delegate_foreground_routes: Dict[str, _SlackDelegateRoute] = {}
 
     def _describe_slack_api_error(self, response: Any, *, file_obj: Optional[Dict[str, Any]] = None) -> Optional[str]:
         """Convert Slack API auth/permission failures into actionable user-facing text."""
@@ -1546,6 +1578,15 @@ class SlackAdapter(BasePlatformAdapter):
             return True  # default: each DM thread is its own session
         return str(raw).strip().lower() in {"1", "true", "yes", "on"}
 
+    @staticmethod
+    def _normalize_delegate_chat_type(channel_id: str, chat_type: str | None) -> str:
+        normalized = str(chat_type or "").strip().lower()
+        if normalized in {"dm", "im", "mpim"}:
+            return "dm"
+        if not normalized or normalized == "group":
+            return "dm" if str(channel_id or "").startswith("D") else "group"
+        return normalized
+
     def _resolve_thread_ts(
         self,
         reply_to: Optional[str] = None,
@@ -1588,21 +1629,48 @@ class SlackAdapter(BasePlatformAdapter):
         self,
         *,
         channel_id: str,
-        thread_ts: str,
-    ) -> Tuple[str, str] | None:
+        thread_ts: str | None,
+        user_id: str | None = None,
+        chat_type: str = "group",
+    ) -> str | None:
         channel = str(channel_id or "").strip()
-        thread = str(thread_ts or "").strip()
-        if not channel or not thread:
+        if not channel:
             return None
-        return channel, thread
+
+        try:
+            from gateway.session import SessionSource, build_session_key
+
+            session_store = getattr(self, "_session_store", None)
+            store_cfg = getattr(session_store, "config", None)
+            gspu = getattr(store_cfg, "group_sessions_per_user", True) if store_cfg else True
+            tspu = getattr(store_cfg, "thread_sessions_per_user", False) if store_cfg else False
+            normalized_chat_type = self._normalize_delegate_chat_type(channel, chat_type)
+            source = SessionSource(
+                platform=Platform.SLACK,
+                chat_id=channel,
+                chat_type=normalized_chat_type,
+                user_id=str(user_id or "") or None,
+                thread_id=str(thread_ts) if thread_ts else None,
+            )
+            return build_session_key(
+                source,
+                group_sessions_per_user=gspu,
+                thread_sessions_per_user=tspu,
+            )
+        except Exception:
+            thread = str(thread_ts or "").strip()
+            normalized_chat_type = self._normalize_delegate_chat_type(channel, chat_type)
+            return f"{channel}:{normalized_chat_type}:{user_id or ''}:{thread}"
 
     def _delegate_foreground_target(
         self,
         *,
         channel_id: str,
-        thread_ts: str,
+        thread_ts: str | None,
     ) -> Optional[Dict[str, str]]:
         if self._delegate_route_key(channel_id=channel_id, thread_ts=thread_ts) is None:
+            return None
+        if not thread_ts:
             return None
         return {"thread_id": str(thread_ts)}
 
@@ -1610,9 +1678,16 @@ class SlackAdapter(BasePlatformAdapter):
         self,
         *,
         channel_id: str,
-        thread_ts: str,
+        thread_ts: str | None,
+        user_id: str | None = None,
+        chat_type: str = "group",
     ) -> _SlackDelegateRoute | None:
-        key = self._delegate_route_key(channel_id=channel_id, thread_ts=thread_ts)
+        key = self._delegate_route_key(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            chat_type=chat_type,
+        )
         if key is None:
             return None
         with self._delegate_foreground_lock:
@@ -1622,9 +1697,16 @@ class SlackAdapter(BasePlatformAdapter):
         self,
         *,
         channel_id: str,
-        thread_ts: str,
+        thread_ts: str | None,
+        user_id: str | None = None,
+        chat_type: str = "group",
     ) -> _SlackDelegateRoute | None:
-        key = self._delegate_route_key(channel_id=channel_id, thread_ts=thread_ts)
+        key = self._delegate_route_key(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            chat_type=chat_type,
+        )
         if key is None:
             return None
         with self._delegate_foreground_lock:
@@ -1634,12 +1716,19 @@ class SlackAdapter(BasePlatformAdapter):
         self,
         *,
         channel_id: str,
-        thread_ts: str,
+        thread_ts: str | None,
+        user_id: str | None = None,
+        chat_type: str = "group",
         session_id: str | None,
     ) -> None:
         if not session_id:
             return
-        key = self._delegate_route_key(channel_id=channel_id, thread_ts=thread_ts)
+        key = self._delegate_route_key(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            chat_type=chat_type,
+        )
         if key is None:
             return
         with self._delegate_foreground_lock:
@@ -1654,6 +1743,8 @@ class SlackAdapter(BasePlatformAdapter):
         key = self._delegate_route_key(
             channel_id=input_adapter.channel_id,
             thread_ts=input_adapter.thread_ts,
+            user_id=input_adapter.user_id,
+            chat_type=input_adapter.chat_type,
         )
         if key is None:
             return False
@@ -1664,6 +1755,8 @@ class SlackAdapter(BasePlatformAdapter):
             route = current or _SlackDelegateRoute(
                 channel_id=input_adapter.channel_id,
                 thread_ts=input_adapter.thread_ts,
+                user_id=input_adapter.user_id,
+                chat_type=input_adapter.chat_type,
             )
             route.input_adapter = input_adapter
             self._delegate_foreground_routes[key] = route
@@ -1678,6 +1771,8 @@ class SlackAdapter(BasePlatformAdapter):
         key = self._delegate_route_key(
             channel_id=input_adapter.channel_id,
             thread_ts=input_adapter.thread_ts,
+            user_id=input_adapter.user_id,
+            chat_type=input_adapter.chat_type,
         )
         if key is None:
             return False
@@ -1694,18 +1789,25 @@ class SlackAdapter(BasePlatformAdapter):
         self,
         *,
         channel_id: str,
-        thread_ts: str,
+        thread_ts: str | None,
+        user_id: str | None = None,
+        chat_type: str = "group",
     ) -> Dict[str, Any]:
+        normalized_chat_type = self._normalize_delegate_chat_type(channel_id, chat_type)
         return {
             "output": _SlackDelegateOutputAdapter(
                 self,
                 channel_id=channel_id,
                 thread_ts=thread_ts,
+                user_id=user_id,
+                chat_type=normalized_chat_type,
             ),
             "input_factory": lambda: _SlackDelegateInputAdapter(
                 self,
                 channel_id=channel_id,
                 thread_ts=thread_ts,
+                user_id=user_id,
+                chat_type=normalized_chat_type,
             ),
             "metadata": self._delegate_foreground_target(
                 channel_id=channel_id,
@@ -1715,30 +1817,31 @@ class SlackAdapter(BasePlatformAdapter):
 
     def _maybe_route_delegate_foreground_message(
         self,
-        event: Dict[str, Any],
         *,
-        original_text: str,
+        channel_id: str,
+        thread_ts: str | None,
+        user_id: str | None = None,
+        chat_type: str = "group",
+        text: str,
     ) -> bool:
-        channel_id = str(event.get("channel", "") or "").strip()
-        ts = str(event.get("ts", "") or "").strip()
-        channel_type = str(event.get("channel_type", "") or "").strip()
-        is_dm = channel_type in {"im", "mpim"} or (not channel_type and channel_id.startswith("D"))
-
-        if is_dm:
-            thread_ts = str(event.get("thread_ts") or "")
-            if not thread_ts and self._dm_top_level_threads_as_sessions():
-                thread_ts = ts
-        else:
-            thread_ts = str(event.get("thread_ts") or ts or "")
-
-        route = self._get_delegate_route(channel_id=channel_id, thread_ts=thread_ts)
+        route = self._get_delegate_route(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            chat_type=chat_type,
+        )
         if route is None or route.input_adapter is None:
             return False
 
-        if route.input_adapter.push_line(original_text):
+        if route.input_adapter.push_line(text):
             return True
 
-        self._clear_delegate_route(channel_id=channel_id, thread_ts=thread_ts)
+        self._clear_delegate_route(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            chat_type=chat_type,
+        )
         return False
 
     async def _upload_file(
@@ -2570,12 +2673,6 @@ class SlackAdapter(BasePlatformAdapter):
             except Exception:  # pragma: no cover - defensive
                 pass
 
-        if self._maybe_route_delegate_foreground_message(
-            event,
-            original_text=original_text,
-        ):
-            return
-
         text = original_text
 
         # Extract quoted/forwarded content from Slack blocks.
@@ -2707,6 +2804,15 @@ class SlackAdapter(BasePlatformAdapter):
         else:
             thread_ts = event.get("thread_ts") or ts  # ts fallback for channels
 
+        delegate_chat_type = "dm" if is_dm else "group"
+        delegate_route = self._get_delegate_route(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            chat_type=delegate_chat_type,
+        )
+        delegate_route_matched = delegate_route is not None and delegate_route.input_adapter is not None
+
         # In channels, respond if:
         #   0. Channel is in free_response_channels, OR require_mention is
         #      disabled — always process regardless of mention.
@@ -2727,7 +2833,9 @@ class SlackAdapter(BasePlatformAdapter):
                 logger.debug("[Slack] Ignoring message in non-allowed channel: %s", channel_id)
                 return
 
-            if channel_id in self._slack_free_response_channels():
+            if delegate_route_matched:
+                pass
+            elif channel_id in self._slack_free_response_channels():
                 pass  # Free-response channel — always process
             elif not self._slack_require_mention():
                 pass  # Mention requirement disabled globally for Slack
@@ -2971,6 +3079,22 @@ class SlackAdapter(BasePlatformAdapter):
                 ) or None
             except Exception:  # pragma: no cover - defensive
                 reply_to_text = None
+
+        if delegate_route_matched:
+            delegate_input_text = text
+            if reply_to_text and thread_ts and thread_ts != ts:
+                reply_snippet = reply_to_text[:500]
+                delegate_input_text = (
+                    f'[Replying to: "{reply_snippet}"]\n\n{delegate_input_text}'
+                )
+            if self._maybe_route_delegate_foreground_message(
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                user_id=user_id,
+                chat_type=delegate_chat_type,
+                text=delegate_input_text,
+            ):
+                return
 
         msg_event = MessageEvent(
             text=text,

@@ -12,6 +12,7 @@ import json
 import sys
 import threading
 import time
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -292,6 +293,138 @@ class TestSlackDelegateForegroundInterception:
         adapter.handle_message.assert_awaited_once()
         msg_event = adapter.handle_message.await_args.args[0]
         assert msg_event.text == "route this through main"
+
+    @pytest.mark.asyncio
+    async def test_legacy_dm_top_level_foreground_stays_top_level_without_synthetic_thread(self, adapter):
+        adapter.config.extra["dm_top_level_threads_as_sessions"] = False
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="D123",
+            thread_ts=None,
+            chat_type="dm",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        runtime["output"].emit(
+            "delegate",
+            "status",
+            "legacy dm foreground",
+            session_id="legacy-dm-session",
+        )
+        await asyncio.sleep(0)
+
+        assert adapter.send.await_args.kwargs["metadata"] is None
+        adapter.send.reset_mock()
+
+        await adapter._handle_slack_message(
+            _make_event(
+                "follow up in legacy dm",
+                ts="1717171717.310001",
+                thread_ts=None,
+            )
+        )
+
+        assert input_adapter.read_line() == "follow up in legacy dm"
+        route = adapter._get_delegate_route(
+            channel_id="D123",
+            thread_ts=None,
+            chat_type="dm",
+        )
+        assert route is not None
+        assert route.thread_ts is None
+
+    @pytest.mark.asyncio
+    async def test_foreground_delegate_respects_thread_per_user_isolation(self, adapter):
+        store = MagicMock()
+        store._entries = {}
+        store._ensure_loaded = MagicMock()
+        store.config = SimpleNamespace(
+            group_sessions_per_user=True,
+            thread_sessions_per_user=True,
+        )
+        adapter.set_session_store(store)
+
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="C123",
+            thread_ts="1717171717.320000",
+            user_id="U_OWNER",
+            chat_type="group",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        await adapter._handle_slack_message(
+            _make_event(
+                "wrong user should not enter delegate",
+                channel="C123",
+                channel_type="channel",
+                ts="1717171717.320001",
+                thread_ts="1717171717.320000",
+                user="U_OTHER",
+            )
+        )
+        await adapter._handle_slack_message(
+            _make_event(
+                "owner reaches delegate",
+                channel="C123",
+                channel_type="channel",
+                ts="1717171717.320002",
+                thread_ts="1717171717.320000",
+                user="U_OWNER",
+            )
+        )
+
+        assert input_adapter.read_line() == "owner reaches delegate"
+        adapter.handle_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_foreground_delegate_receives_enriched_slack_text(self, adapter):
+        adapter._fetch_thread_parent_text = AsyncMock(return_value="Earlier parent message")
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="D123",
+            thread_ts="1717171717.330000",
+            chat_type="dm",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        event = _make_event(
+            "Hello from Slack",
+            ts="1717171717.330001",
+            thread_ts="1717171717.330000",
+        )
+        event["blocks"] = [
+            {
+                "type": "rich_text",
+                "elements": [
+                    {
+                        "type": "rich_text_quote",
+                        "elements": [
+                            {
+                                "type": "rich_text_section",
+                                "elements": [{"type": "text", "text": "Quoted block text"}],
+                            }
+                        ],
+                    }
+                ],
+            }
+        ]
+        event["attachments"] = [
+            {
+                "title": "Unfurled preview",
+                "title_link": "https://example.com/article",
+                "text": "Attachment body text",
+            }
+        ]
+
+        await adapter._handle_slack_message(event)
+
+        delegated_text = input_adapter.read_line()
+        assert delegated_text != "Hello from Slack"
+        assert 'Replying to: "Earlier parent message"' in delegated_text
+        assert "Quoted block text" in delegated_text
+        assert "Unfurled preview" in delegated_text
+        assert "Attachment body text" in delegated_text
 
 
 class TestSlackDelegateForegroundLoopRelease:

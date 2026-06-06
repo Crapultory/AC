@@ -44,18 +44,27 @@ class _RuntimeCaptureAdapter(BasePlatformAdapter):
     async def get_chat_info(self, chat_id: str):
         return {"id": chat_id}
 
-    def build_delegate_foreground_runtime(self, *, channel_id: str, thread_ts: str):
+    def build_delegate_foreground_runtime(
+        self,
+        *,
+        channel_id: str,
+        thread_ts: str | None,
+        user_id: str | None = None,
+        chat_type: str | None = None,
+    ):
         self._runtime_seq += 1
         marker = self._runtime_seq
         runtime = {
             "output": f"output-{marker}",
             "input_factory": lambda marker=marker: f"input-{marker}",
-            "metadata": {"thread_id": thread_ts},
+            "metadata": {"thread_id": thread_ts} if thread_ts else None,
         }
         self.runtime_calls.append(
             {
                 "channel_id": channel_id,
                 "thread_ts": thread_ts,
+                "user_id": user_id,
+                "chat_type": chat_type,
                 "runtime": runtime,
             }
         )
@@ -63,7 +72,8 @@ class _RuntimeCaptureAdapter(BasePlatformAdapter):
 
 
 class _NonSlackRuntimeAdapter(_RuntimeCaptureAdapter):
-    def build_delegate_foreground_runtime(self, *, channel_id: str, thread_ts: str):
+    def build_delegate_foreground_runtime(self, *, channel_id: str, thread_ts: str | None, **kwargs):
+        del kwargs
         raise AssertionError(
             f"delegate runtime should not be requested for non-Slack platform: {channel_id}/{thread_ts}"
         )
@@ -169,6 +179,8 @@ class TestSlackDelegateRuntimeWiring:
         assert len(adapter.runtime_calls) == 1
         assert adapter.runtime_calls[0]["channel_id"] == "D123"
         assert adapter.runtime_calls[0]["thread_ts"] == "1717171717.500000"
+        assert adapter.runtime_calls[0]["user_id"] is None
+        assert adapter.runtime_calls[0]["chat_type"] == "dm"
         assert len(_FakeAgent.instances) == 1
         assert len(_FakeAgent.instances[0].turn_snapshots) == 1
         snapshot = _FakeAgent.instances[0].turn_snapshots[0]
@@ -190,6 +202,7 @@ class TestSlackDelegateRuntimeWiring:
             chat_id="D123",
             chat_type="dm",
             thread_id=None,
+            user_id="U_DM",
         )
 
         result_one = await runner._run_agent(
@@ -218,6 +231,8 @@ class TestSlackDelegateRuntimeWiring:
             "1717171717.600001",
             "1717171717.600002",
         ]
+        assert [call["user_id"] for call in adapter.runtime_calls] == ["U_DM", "U_DM"]
+        assert [call["chat_type"] for call in adapter.runtime_calls] == ["dm", "dm"]
         assert len(_FakeAgent.instances[0].turn_snapshots) == 2
         first_snapshot, second_snapshot = _FakeAgent.instances[0].turn_snapshots
         assert first_snapshot["output"] == "output-1"
@@ -263,3 +278,40 @@ class TestSlackDelegateRuntimeWiring:
                 "input_value": None,
             }
         ]
+
+    @pytest.mark.asyncio
+    async def test_run_agent_legacy_slack_dm_does_not_force_synthetic_thread_runtime(self, monkeypatch, tmp_path):
+        _install_fake_agent(monkeypatch, _FakeAgent)
+        adapter = _RuntimeCaptureAdapter(platform=Platform.SLACK)
+        adapter.config.extra["dm_top_level_threads_as_sessions"] = False
+        runner = _make_runner(adapter)
+        gateway_run = importlib.import_module("gateway.run")
+        monkeypatch.setattr(gateway_run, "_hermes_home", tmp_path)
+        monkeypatch.setattr(gateway_run, "_resolve_runtime_agent_kwargs", lambda: {"api_key": "***"})
+
+        source = SessionSource(
+            platform=Platform.SLACK,
+            chat_id="D123",
+            chat_type="dm",
+            thread_id=None,
+            user_id="U_DM",
+        )
+
+        result = await runner._run_agent(
+            message="legacy dm",
+            context_prompt="",
+            history=[],
+            source=source,
+            session_id="sess-slack-runtime-legacy-dm",
+            session_key="agent:main:slack:dm:D123",
+            event_message_id="1717171717.700001",
+        )
+
+        assert result["final_response"] == "done"
+        assert len(adapter.runtime_calls) == 1
+        assert adapter.runtime_calls[0]["thread_ts"] is None
+        assert adapter.runtime_calls[0]["chat_type"] == "dm"
+        snapshot = _FakeAgent.instances[0].turn_snapshots[0]
+        assert snapshot["output"] == "output-1"
+        assert callable(snapshot["input_factory"])
+        assert snapshot["input_value"] == "input-1"

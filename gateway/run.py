@@ -14169,13 +14169,32 @@ class GatewayRunner:
         if not callable(build_runtime):
             return
 
-        thread_ts = getattr(source, "thread_id", None) or event_message_id
+        thread_ts = getattr(source, "thread_id", None)
         if not thread_ts:
-            return
+            allow_dm_thread_fallback = True
+            if getattr(source, "chat_type", None) == "dm":
+                dm_mode_fn = getattr(adapter, "_dm_top_level_threads_as_sessions", None)
+                if callable(dm_mode_fn):
+                    try:
+                        allow_dm_thread_fallback = bool(dm_mode_fn())
+                    except Exception:
+                        allow_dm_thread_fallback = True
+                else:
+                    extra_cfg = getattr(getattr(adapter, "config", None), "extra", {}) or {}
+                    raw = extra_cfg.get("dm_top_level_threads_as_sessions")
+                    allow_dm_thread_fallback = (
+                        True
+                        if raw is None
+                        else str(raw).strip().lower() in {"1", "true", "yes", "on"}
+                    )
+            if allow_dm_thread_fallback:
+                thread_ts = event_message_id
 
         runtime = build_runtime(
             channel_id=getattr(source, "chat_id", ""),
-            thread_ts=str(thread_ts),
+            thread_ts=str(thread_ts) if thread_ts else None,
+            user_id=getattr(source, "user_id_alt", None) or getattr(source, "user_id", None),
+            chat_type=getattr(source, "chat_type", "group") or "group",
         )
         if not isinstance(runtime, dict):
             return
