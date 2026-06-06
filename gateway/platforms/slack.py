@@ -3082,17 +3082,25 @@ class SlackAdapter(BasePlatformAdapter):
 
         if delegate_route_matched:
             delegate_input_text = text
+            delegate_command_text = (original_text or "").strip()
+            if bot_uid:
+                delegate_command_text = delegate_command_text.replace(f"<@{bot_uid}>", "").strip()
             if reply_to_text and thread_ts and thread_ts != ts:
                 reply_snippet = reply_to_text[:500]
                 delegate_input_text = (
                     f'[Replying to: "{reply_snippet}"]\n\n{delegate_input_text}'
                 )
+            delegate_routed_text = (
+                delegate_command_text
+                if delegate_command_text in {"/main", "/exit"}
+                else delegate_input_text
+            )
             if self._maybe_route_delegate_foreground_message(
                 channel_id=channel_id,
                 thread_ts=thread_ts,
                 user_id=user_id,
                 chat_type=delegate_chat_type,
-                text=delegate_input_text,
+                text=delegate_routed_text,
             ):
                 return
 

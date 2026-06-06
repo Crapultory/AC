@@ -714,23 +714,7 @@ class _A2ADelegateSession:
                 )
 
             if _a2a_is_tool_message(message):
-                tool_name, result_text = _a2a_tool_result_details(
-                    message,
-                    self._tool_names_by_call_id,
-                )
-                tool_call_id = str(_a2a_field(message, "tool_call_id", "") or "")
-                key = f"tool:{tool_call_id}:{tool_name}:{result_text}"
-                if key in self._rendered_tool_entries:
-                    continue
-                self._rendered_tool_entries.add(key)
-                content = f"{tool_name} -> {result_text}" if result_text else tool_name
-                _emit_delegate_event(
-                    self.output,
-                    "delegate",
-                    "tool_result",
-                    content,
-                    session_id=session_id,
-                )
+                continue
 
 
 def _resolve_a2a_entry(a2a_name: Optional[str]) -> tuple[Optional[dict[str, Any]], Optional[str]]:
@@ -977,13 +961,6 @@ def _run_local_delegate(
                     loop_exit_reason="main_command",
                     api_calls=total_api_calls,
                 )
-            _emit_delegate_event(
-                output,
-                "delegate",
-                "user",
-                stripped,
-                session_id=_effective_child_session_id(),
-            )
             last_result = _run_single_turn(stripped)
             total_api_calls += int(last_result.get("api_calls", 0) or 0)
     except Exception as exc:
@@ -1154,13 +1131,6 @@ def _run_a2a_delegate(
                         completed=last_result.get("state") == _a2a_completed_state(),
                     )
 
-                _emit_delegate_event(
-                    output,
-                    "delegate",
-                    "user",
-                    stripped,
-                    session_id=getattr(session, "context_id", None),
-                )
                 last_result = await session.send_turn(
                     stripped,
                     is_delegate_output=is_delegate_output,

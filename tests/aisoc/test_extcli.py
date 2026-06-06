@@ -746,6 +746,7 @@ def test_delegate_loop_takes_foreground_and_returns_to_main(tmp_path):
                 result = json.loads(
                     a2a_delegate(
                         goal="start child",
+                        agent="local",
                         is_loop=True,
                         input=self._delegate_ext_input_factory(),
                         output=self._delegate_ext_output_adapter,
@@ -792,6 +793,7 @@ def test_child_loop_failure_returns_control_to_main(tmp_path):
                 result = json.loads(
                     a2a_delegate(
                         goal="start child",
+                        agent="local",
                         is_loop=True,
                         input=self._delegate_ext_input_factory(),
                         output=self._delegate_ext_output_adapter,
@@ -842,6 +844,7 @@ def test_child_loop_input_closed_unwinds_cleanly(tmp_path):
                 result = json.loads(
                     a2a_delegate(
                         goal="start child",
+                        agent="local",
                         is_loop=True,
                         input=self._delegate_ext_input_factory(),
                         output=self._delegate_ext_output_adapter,
@@ -892,6 +895,7 @@ def test_new_inside_child_loop_is_treated_as_child_input(tmp_path):
                 result = json.loads(
                     a2a_delegate(
                         goal="start child",
+                        agent="local",
                         is_loop=True,
                         input=self._delegate_ext_input_factory(),
                         output=self._delegate_ext_output_adapter,

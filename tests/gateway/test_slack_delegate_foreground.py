@@ -269,6 +269,47 @@ class TestSlackDelegateForegroundInterception:
         adapter.handle_message.assert_not_called()
 
     @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("raw_text", "expected_text"),
+        [
+            ("/main", "/main"),
+            ("!exit", "/exit"),
+        ],
+    )
+    async def test_delegate_return_commands_ignore_slack_thread_enrichment(
+        self,
+        adapter,
+        raw_text,
+        expected_text,
+    ):
+        adapter._fetch_thread_context = AsyncMock(
+            return_value=(
+                "[Thread context — prior messages in this thread (not yet in conversation history):]\n"
+                "[thread parent] testuser: /restart\n"
+                "testuser: 当前有哪些工具可用\n"
+                "[End of thread context]\n\n"
+            )
+        )
+        adapter._fetch_thread_parent_text = AsyncMock(return_value="/restart")
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="D123",
+            thread_ts="1717171717.250000",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        await adapter._handle_slack_message(
+            _make_event(
+                raw_text,
+                ts="1717171717.250001",
+                thread_ts="1717171717.250000",
+            )
+        )
+
+        assert input_adapter.read_line() == expected_text
+        adapter.handle_message.assert_not_called()
+
+    @pytest.mark.asyncio
     async def test_failed_delegate_push_releases_route_and_falls_back_to_main(self, adapter):
         runtime = adapter.build_delegate_foreground_runtime(
             channel_id="D123",
