@@ -14141,6 +14141,53 @@ class GatewayRunner:
         return metadata
 
     @staticmethod
+    def _clear_delegate_foreground_runtime_bindings(agent: Any) -> None:
+        for attr in ("_delegate_ext_input_factory", "_delegate_ext_output_adapter"):
+            try:
+                if hasattr(agent, attr):
+                    delattr(agent, attr)
+            except Exception:
+                continue
+
+    def _bind_delegate_foreground_runtime_for_turn(
+        self,
+        agent: Any,
+        *,
+        source,
+        event_message_id: Optional[str] = None,
+    ) -> None:
+        self._clear_delegate_foreground_runtime_bindings(agent)
+
+        if getattr(source, "platform", None) != Platform.SLACK:
+            return
+
+        adapter = self.adapters.get(source.platform)
+        if adapter is None:
+            return
+
+        build_runtime = getattr(adapter, "build_delegate_foreground_runtime", None)
+        if not callable(build_runtime):
+            return
+
+        thread_ts = getattr(source, "thread_id", None) or event_message_id
+        if not thread_ts:
+            return
+
+        runtime = build_runtime(
+            channel_id=getattr(source, "chat_id", ""),
+            thread_ts=str(thread_ts),
+        )
+        if not isinstance(runtime, dict):
+            return
+
+        output_adapter = runtime.get("output")
+        input_factory = runtime.get("input_factory")
+        if output_adapter is not None:
+            setattr(agent, "_delegate_ext_output_adapter", output_adapter)
+        if callable(input_factory):
+            setattr(agent, "_delegate_ext_input_factory", input_factory)
+
+    @staticmethod
     def _reply_anchor_for_event(event: MessageEvent) -> Optional[str]:
         """Return the platform-specific reply anchor for GatewayRunner sends."""
         return _reply_anchor_for_event(event)
@@ -17159,6 +17206,11 @@ class GatewayRunner:
             agent.reasoning_config = reasoning_config
             agent.service_tier = self._service_tier
             agent.request_overrides = turn_route.get("request_overrides") or {}
+            self._bind_delegate_foreground_runtime_for_turn(
+                agent,
+                source=source,
+                event_message_id=event_message_id,
+            )
 
             _bg_review_release = threading.Event()
             _bg_review_pending: list[str] = []

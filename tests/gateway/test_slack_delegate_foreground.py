@@ -184,6 +184,8 @@ class TestSlackDelegateForegroundRouteState:
             channel_id="C456",
             thread_ts="1717171717.000300",
         )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
 
         runtime["output"].emit(
             "delegate",
@@ -193,12 +195,19 @@ class TestSlackDelegateForegroundRouteState:
         )
         await asyncio.sleep(0)
 
+        route = adapter._get_delegate_route(
+            channel_id="C456",
+            thread_ts="1717171717.000300",
+        )
+        assert route is not None
+        assert route.session_id == "delegate-session-1"
         adapter.send.assert_awaited_once()
         assert adapter.send.await_args.kwargs["chat_id"] == "C456"
         assert adapter.send.await_args.kwargs["metadata"] == {
             "thread_id": "1717171717.000300",
         }
         assert "entered foreground loop" in adapter.send.await_args.kwargs["content"]
+        input_adapter.exit_foreground()
 
 
 class TestSlackDelegateForegroundInterception:
