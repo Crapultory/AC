@@ -184,6 +184,73 @@ class _SlackDelegateOutputAdapter:
         except RuntimeError:
             self._loop = None
 
+    def _delegate_metadata(self) -> Dict[str, Any] | None:
+        return self._adapter._delegate_foreground_target(
+            channel_id=self._channel_id,
+            thread_ts=self._thread_ts,
+        )
+
+    @staticmethod
+    def _truncate_delegate_preview(text: str, limit: int) -> str:
+        if limit > 0 and len(text) > limit:
+            return text[:limit - 3] + "..."
+        return text
+
+    def _format_delegate_tool_call_content(self, content: str) -> str:
+        raw = str(content or "").strip()
+        if not raw:
+            return ""
+
+        tool_name, _sep, raw_args = raw.partition(" ")
+        tool_name = tool_name.strip() or "tool"
+        raw_args = raw_args.strip()
+
+        try:
+            from agent.display import (
+                build_tool_preview,
+                get_tool_emoji,
+                get_tool_preview_max_len,
+            )
+        except Exception:  # pragma: no cover - defensive fallback
+            build_tool_preview = lambda *_args, **_kwargs: None
+            get_tool_emoji = lambda _name, default="⚙️": default
+            get_tool_preview_max_len = lambda: 0
+
+        emoji = get_tool_emoji(tool_name, default="⚙️")
+        preview = None
+        preview_limit = get_tool_preview_max_len()
+        preview_limit = preview_limit if preview_limit > 0 else 40
+
+        if raw_args:
+            parsed_args = None
+            try:
+                parsed_args = json.loads(raw_args)
+            except Exception:
+                parsed_args = None
+
+            if isinstance(parsed_args, dict):
+                preview = build_tool_preview(tool_name, parsed_args)
+                if not preview:
+                    for value in parsed_args.values():
+                        if isinstance(value, list):
+                            value = value[0] if value else ""
+                        if isinstance(value, (str, int, float, bool)):
+                            candidate = " ".join(str(value).split())
+                            if candidate:
+                                preview = candidate
+                                break
+                if not preview:
+                    preview = " ".join(raw_args.split())
+            elif isinstance(parsed_args, (str, int, float, bool)):
+                preview = " ".join(str(parsed_args).split())
+            else:
+                preview = " ".join(raw_args.split())
+
+        if preview:
+            preview = self._truncate_delegate_preview(preview, preview_limit)
+            return f'{emoji} {tool_name}: "{preview}"'
+        return f"{emoji} {tool_name}..."
+
     async def _emit_async(
         self,
         source: str,
@@ -200,16 +267,32 @@ class _SlackDelegateOutputAdapter:
                 chat_type=self._chat_type,
                 session_id=session_id,
             )
+        metadata = self._delegate_metadata()
+        if source == "delegate" and event_type == "ai":
+            rendered = str(content or "").strip()
+            if rendered:
+                await self._adapter.send(
+                    chat_id=self._channel_id,
+                    content=rendered,
+                    metadata=metadata,
+                )
+            return
+        if source == "delegate" and event_type == "tool_call":
+            rendered = self._format_delegate_tool_call_content(content)
+            if rendered:
+                await self._adapter.send(
+                    chat_id=self._channel_id,
+                    content=rendered,
+                    metadata=metadata,
+                )
+            return
         prefix = source
         if session_id and source != "main":
             prefix = f"{source}[{session_id}]"
         await self._adapter.send(
             chat_id=self._channel_id,
             content=f"{prefix}.{event_type}: {content}",
-            metadata=self._adapter._delegate_foreground_target(
-                channel_id=self._channel_id,
-                thread_ts=self._thread_ts,
-            ),
+            metadata=metadata,
         )
 
     def emit(

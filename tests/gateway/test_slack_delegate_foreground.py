@@ -210,6 +210,66 @@ class TestSlackDelegateForegroundRouteState:
         assert "entered foreground loop" in adapter.send.await_args.kwargs["content"]
         input_adapter.exit_foreground()
 
+    @pytest.mark.asyncio
+    async def test_delegate_ai_output_reuses_normal_slack_send(self, adapter):
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="C456",
+            thread_ts="1717171717.000301",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        runtime["output"].emit(
+            "delegate",
+            "ai",
+            "child final answer",
+            session_id="delegate-session-2",
+        )
+        await asyncio.sleep(0)
+
+        route = adapter._get_delegate_route(
+            channel_id="C456",
+            thread_ts="1717171717.000301",
+        )
+        assert route is not None
+        assert route.session_id == "delegate-session-2"
+        adapter.send.assert_awaited_once()
+        assert adapter.send.await_args.kwargs["chat_id"] == "C456"
+        assert adapter.send.await_args.kwargs["metadata"] == {
+            "thread_id": "1717171717.000301",
+        }
+        assert adapter.send.await_args.kwargs["content"] == "child final answer"
+        input_adapter.exit_foreground()
+
+    @pytest.mark.asyncio
+    async def test_delegate_tool_call_output_uses_tool_progress_style(self, adapter):
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="C456",
+            thread_ts="1717171717.000302",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        runtime["output"].emit(
+            "delegate",
+            "tool_call",
+            'web_search {"q":"cats"}',
+            session_id="delegate-session-3",
+        )
+        await asyncio.sleep(0)
+
+        adapter.send.assert_awaited_once()
+        assert adapter.send.await_args.kwargs["chat_id"] == "C456"
+        assert adapter.send.await_args.kwargs["metadata"] == {
+            "thread_id": "1717171717.000302",
+        }
+        content = adapter.send.await_args.kwargs["content"]
+        assert "delegate-session-3" not in content
+        assert "delegate.tool_call" not in content
+        assert "web_search" in content
+        assert "cats" in content
+        input_adapter.exit_foreground()
+
 
 class TestSlackDelegateForegroundInterception:
     @pytest.mark.asyncio
