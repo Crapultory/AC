@@ -9,7 +9,7 @@ from a2a.types import Role, TaskState
 from run_agent import AIAgent
 from toolsets import TOOLSETS
 from tools.registry import registry
-from tools.delegate_ext_tool import (
+from tools.a2a_delegate_tool import (
     A2A_REGISTRY,
     A2A_DELEGATE_SCHEMA,
     _A2ADelegateSession,

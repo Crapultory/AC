@@ -4417,7 +4417,7 @@ class AIAgent:
 
     def _dispatch_a2a_delegate(self, function_args: dict) -> str:
         """Single call site for a2a_delegate dispatch."""
-        from tools.delegate_ext_tool import a2a_delegate as _a2a_delegate
+        from tools.a2a_delegate_tool import a2a_delegate as _a2a_delegate
 
         runtime_output = getattr(self, "_delegate_ext_output_adapter", None)
         raw_is_loop = function_args.get("is_loop") if "is_loop" in function_args else None

@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from aisoc.backend.extcli import ExtCliInputAdapter, ExtCliOutputAdapter, run_extcli_loop
-from tools.delegate_ext_tool import a2a_delegate
+from tools.a2a_delegate_tool import a2a_delegate
 
 
 class _FakeSessionDB:
