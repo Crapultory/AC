@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 import sys
 
 from fastapi.testclient import TestClient
@@ -57,3 +58,17 @@ def test_root_serves_index_html(tmp_path) -> None:
     resp_spa = client.get("/chat")
     assert resp_spa.status_code == 200
     assert marker in resp_spa.text
+
+
+def test_hermes_cmd_aisoc_delegates_to_backend_main(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured: dict[str, object] = {}
+
+    def _fake_cmd_aisoc(args: argparse.Namespace) -> None:
+        captured["args"] = args
+
+    monkeypatch.setattr("aisoc.backend.main.cmd_aisoc", _fake_cmd_aisoc, raising=False)
+
+    args = argparse.Namespace(module="server", port=9120)
+    main_mod.cmd_aisoc(args)
+
+    assert captured["args"] is args

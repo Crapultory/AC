@@ -1232,7 +1232,7 @@ A2A_DELEGATE_SCHEMA = {
     "name": "a2a_delegate",
     "description": (
         "Delegate a single task to another agent. "
-        "Use a2a mode to continue a named remote A2A agent session."
+        "Use a2a mode to continue a named remote agent session."
         "Use local mode to spawn a new local agent with optional toolsets and max iteration limits. "
     ),
     "parameters": {
@@ -1271,14 +1271,14 @@ A2A_DELEGATE_SCHEMA = {
             },
             "is_delegate_output": {
                 "type": "boolean",
-                "description": "Whether delegated output should be handled as delegate output by the runtime.",
+                "description": "Whether delegated output should be handled as delegate output by the runtime,defaults to true.",
             },
             "is_loop": {
                 "type": "boolean",
-                "description": "Whether to run in interactive loop mode when a runtime input adapter is available.",
+                "description": "Whether to run in interactive loop mode when a runtime input adapter is available,defaults to false.",
             },
         },
-        "required": ["goal"],
+        "required": ["goal","agent","a2a_name"],
     },
 }
 
@@ -1307,7 +1307,7 @@ registry.register(
         max_iterations=args.get("max_iterations"),
         session_id=args.get("session_id"),
         is_delegate_output=args.get("is_delegate_output", True),
-        is_loop=args.get("is_loop"),
+        is_loop=args.get("is_loop", False),
         parent_agent=kw.get("parent_agent"),
     ),
     check_fn=check_delegate_requirements,
