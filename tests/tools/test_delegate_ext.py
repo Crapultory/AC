@@ -8,6 +8,7 @@ import pytest
 from a2a.types import Role, TaskState
 from run_agent import AIAgent
 from toolsets import TOOLSETS
+import tools.a2a_delegate_tool as a2a_delegate_tool_module
 from tools.registry import registry
 from tools.a2a_delegate_tool import (
     A2A_REGISTRY,
@@ -204,9 +205,10 @@ class TestDelegateExt:
             '{"a2a":{"test":"http://127.0.0.1/a2a"}}',
             encoding="utf-8",
         )
-        monkeypatch.setattr("tools.delegate_ext_tool.get_hermes_home", lambda: hermes_home)
+        monkeypatch.setattr(a2a_delegate_tool_module, "get_hermes_home", lambda: hermes_home)
         monkeypatch.setattr(
-            "tools.delegate_ext_tool._fetch_agent_card",
+            a2a_delegate_tool_module,
+            "_fetch_agent_card",
             lambda url: (
                 {
                     "name": "Test Agent",
@@ -249,9 +251,10 @@ class TestDelegateExt:
             '{"a2a":{"broken":"http://127.0.0.1/a2a"}}',
             encoding="utf-8",
         )
-        monkeypatch.setattr("tools.delegate_ext_tool.get_hermes_home", lambda: hermes_home)
+        monkeypatch.setattr(a2a_delegate_tool_module, "get_hermes_home", lambda: hermes_home)
         monkeypatch.setattr(
-            "tools.delegate_ext_tool._fetch_agent_card",
+            a2a_delegate_tool_module,
+            "_fetch_agent_card",
             lambda url: (None, "connection refused"),
         )
 
@@ -262,11 +265,72 @@ class TestDelegateExt:
         assert result["agents"][0]["capabilities"] == []
         assert "connection refused" in result["agents"][0]["error"]
 
+    def test_a2a_list_skips_offline_agents_and_merges_extcapabilities(self, tmp_path, monkeypatch):
+        hermes_home = tmp_path / "profile"
+        hermes_home.mkdir()
+        (hermes_home / "a2a.json").write_text(
+            json.dumps(
+                {
+                    "a2a": {
+                        "test": {
+                            "url": "http://127.0.0.1:9086/a2a",
+                            "description": "A2A test endpoint",
+                            "headers": {"Authorization": "Bearer secret-token"},
+                            "status": "active",
+                            "extcapabilities": ["xxx", "bbb"],
+                        },
+                        "offline-agent": {
+                            "url": "http://127.0.0.1:9087/a2a",
+                            "status": "offline",
+                            "extcapabilities": ["should-not-appear"],
+                        },
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        monkeypatch.setattr(a2a_delegate_tool_module, "get_hermes_home", lambda: hermes_home)
+        fetched = []
+
+        def _fake_fetch_agent_card(url, headers=None):
+            fetched.append((url, headers))
+            return (
+                {
+                    "name": "Test Agent",
+                    "description": "Test remote worker.",
+                    "version": "1.0.0",
+                    "capabilities": {"streaming": True},
+                    "skills": [{"name": "research"}],
+                },
+                None,
+            )
+
+        monkeypatch.setattr(a2a_delegate_tool_module, "_fetch_agent_card", _fake_fetch_agent_card)
+
+        result = json.loads(a2a_list())
+
+        assert result["success"] is True
+        assert result["count"] == 1
+        assert [agent["name"] for agent in result["agents"]] == ["test"]
+        assert result["agents"][0]["capabilities"] == [
+            "streaming",
+            "skill:research",
+            "xxx",
+            "bbb",
+        ]
+        assert "headers" not in result["agents"][0]
+        assert fetched == [
+            (
+                "http://127.0.0.1:9086/a2a",
+                {"Authorization": "Bearer secret-token"},
+            )
+        ]
+
     def test_a2a_list_fails_on_malformed_registry(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / "profile"
         hermes_home.mkdir()
         (hermes_home / "a2a.json").write_text('{"a2a":[1,2,3]}', encoding="utf-8")
-        monkeypatch.setattr("tools.delegate_ext_tool.get_hermes_home", lambda: hermes_home)
+        monkeypatch.setattr(a2a_delegate_tool_module, "get_hermes_home", lambda: hermes_home)
 
         result = json.loads(a2a_list())
 
@@ -318,7 +382,7 @@ class TestDelegateExt:
             async def close(self):
                 captured["closed"] = True
 
-        monkeypatch.setattr("tools.delegate_ext_tool._A2ADelegateSession", _FakeSession)
+        monkeypatch.setattr(a2a_delegate_tool_module, "_A2ADelegateSession", _FakeSession)
 
         result = json.loads(
             a2a_delegate(
@@ -343,6 +407,65 @@ class TestDelegateExt:
         assert result["remote_url"] == "http://agent.local/a2a"
         assert result["agent_card_name"] == "Remote Agent"
         assert result["final_response"] == "remote:first"
+
+    def test_a2a_mode_passes_entry_headers_into_remote_session(self, monkeypatch):
+        parent = _make_mock_parent()
+        A2A_REGISTRY["remote"] = {
+            "name": "remote",
+            "url": "http://agent.local",
+            "available": True,
+            "capabilities": ["streaming"],
+            "agent_card": {"supported_interfaces": [{"url": "http://agent.local/a2a"}]},
+            "agent_card_name": "Remote Agent",
+            "headers": {"Authorization": "Bearer token"},
+            "error": None,
+        }
+        captured = {}
+
+        class _FakeSession:
+            def __init__(
+                self,
+                base_url,
+                *,
+                output=None,
+                timeout=60.0,
+                poll_interval=0.05,
+                session_id=None,
+                headers=None,
+            ):
+                del output, timeout, poll_interval
+                captured["base_url"] = base_url
+                captured["session_id"] = session_id
+                captured["headers"] = headers
+                self.context_id = session_id
+
+            async def send_turn(self, text: str, *, is_delegate_output: bool = True):
+                del text, is_delegate_output
+                self.context_id = "ctx-remote"
+                return {
+                    "final_response": "remote:first",
+                    "state": TaskState.TASK_STATE_COMPLETED,
+                    "state_name": "completed",
+                }
+
+            async def close(self):
+                captured["closed"] = True
+
+        monkeypatch.setattr(a2a_delegate_tool_module, "_A2ADelegateSession", _FakeSession)
+
+        result = json.loads(
+            a2a_delegate(
+                goal="test remote",
+                agent="a2a",
+                a2a_name="remote",
+                parent_agent=parent,
+            )
+        )
+
+        assert result["success"] is True
+        assert captured["base_url"] == "http://agent.local/a2a"
+        assert captured["headers"] == {"Authorization": "Bearer token"}
+        assert captured["closed"] is True
 
     def test_a2a_mode_honors_explicit_session_id(self, monkeypatch):
         parent = _make_mock_parent()
@@ -382,7 +505,7 @@ class TestDelegateExt:
             async def close(self):
                 return None
 
-        monkeypatch.setattr("tools.delegate_ext_tool._A2ADelegateSession", _FakeSession)
+        monkeypatch.setattr(a2a_delegate_tool_module, "_A2ADelegateSession", _FakeSession)
 
         result = json.loads(
             a2a_delegate(
@@ -457,7 +580,7 @@ class TestDelegateExt:
             async def close(self):
                 captured["closed"] = True
 
-        monkeypatch.setattr("tools.delegate_ext_tool._A2ADelegateSession", _FakeSession)
+        monkeypatch.setattr(a2a_delegate_tool_module, "_A2ADelegateSession", _FakeSession)
 
         result = json.loads(
             a2a_delegate(
@@ -571,8 +694,8 @@ class TestDelegateExt:
             "api_calls": 1,
         }
         mock_agent_cls.return_value = child
-        monkeypatch.setattr("tools.delegate_ext_tool.get_active_profile_name", lambda: "worker_alpha")
-        monkeypatch.setattr("tools.delegate_ext_tool.time.strftime", lambda fmt: "20260605_123456")
+        monkeypatch.setattr(a2a_delegate_tool_module, "get_active_profile_name", lambda: "worker_alpha")
+        monkeypatch.setattr(a2a_delegate_tool_module.time, "strftime", lambda fmt: "20260605_123456")
 
         result = json.loads(a2a_delegate(goal="inspect code", parent_agent=parent))
 
@@ -618,9 +741,9 @@ class TestDelegateExt:
             async def close(self):
                 return None
 
-        monkeypatch.setattr("tools.delegate_ext_tool.get_active_profile_name", lambda: "worker_alpha")
-        monkeypatch.setattr("tools.delegate_ext_tool.time.strftime", lambda fmt: "20260605_123456")
-        monkeypatch.setattr("tools.delegate_ext_tool._A2ADelegateSession", _FakeSession)
+        monkeypatch.setattr(a2a_delegate_tool_module, "get_active_profile_name", lambda: "worker_alpha")
+        monkeypatch.setattr(a2a_delegate_tool_module.time, "strftime", lambda fmt: "20260605_123456")
+        monkeypatch.setattr(a2a_delegate_tool_module, "_A2ADelegateSession", _FakeSession)
 
         result = json.loads(
             a2a_delegate(
@@ -874,7 +997,7 @@ class TestDelegateExtIntegration:
     def test_a2a_toolset_includes_a2a_delegate(self):
         assert "a2a_delegate" in TOOLSETS["a2a"]["tools"]
 
-    @patch("tools.delegate_ext_tool.a2a_delegate", return_value='{"ok": true}')
+    @patch("tools.a2a_delegate_tool.a2a_delegate", return_value='{"ok": true}')
     def test_dispatch_helper_forwards_args(self, mock_a2a_delegate):
         agent = object.__new__(AIAgent)
 

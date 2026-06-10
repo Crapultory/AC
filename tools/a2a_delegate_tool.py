@@ -49,10 +49,14 @@ def _a2a_registry_path() -> Path:
     return Path(get_hermes_home()) / "a2a.json"
 
 
-def _fetch_agent_card(base_url: str) -> tuple[dict[str, Any] | None, str | None]:
+def _fetch_agent_card(
+    base_url: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
     card_url = base_url.rstrip("/") + "/.well-known/agent-card.json"
     try:
-        response = httpx.get(card_url, timeout=5.0)
+        response = httpx.get(card_url, timeout=5.0, headers=headers or None)
         response.raise_for_status()
         payload = response.json()
     except Exception as exc:
@@ -66,6 +70,61 @@ def _normalize_string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if isinstance(item, str) and item]
+
+
+def _normalize_a2a_headers(value: Any) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    normalized: dict[str, str] = {}
+    for key, item in value.items():
+        if not isinstance(key, str) or not key.strip() or item is None:
+            continue
+        normalized[key] = str(item)
+    return normalized
+
+
+def _merge_capabilities(*capability_lists: list[str]) -> list[str]:
+    merged: list[str] = []
+    for items in capability_lists:
+        for item in items:
+            if item not in merged:
+                merged.append(item)
+    return merged
+
+
+def _normalize_a2a_registry_entry(name: Any, raw_entry: Any) -> dict[str, Any]:
+    entry_name = str(name)
+    normalized: dict[str, Any] = {
+        "name": entry_name,
+        "description": None,
+        "status": None,
+        "headers": {},
+        "extcapabilities": [],
+    }
+    if isinstance(raw_entry, str):
+        normalized["url"] = _normalize_a2a_base_url(raw_entry)
+        return normalized
+    if not isinstance(raw_entry, dict):
+        raise ValueError(f"A2A agent {entry_name!r} must be a URL string or object.")
+
+    normalized["url"] = _normalize_a2a_base_url(raw_entry.get("url", ""))
+    description = raw_entry.get("description")
+    if isinstance(description, str) and description:
+        normalized["description"] = description
+    status = raw_entry.get("status")
+    if status is not None:
+        status_text = str(status).strip().lower()
+        if status_text:
+            normalized["status"] = status_text
+    normalized["headers"] = _normalize_a2a_headers(raw_entry.get("headers"))
+    normalized["extcapabilities"] = _normalize_string_list(raw_entry.get("extcapabilities"))
+    return normalized
+
+
+def _public_a2a_entry(entry: dict[str, Any]) -> dict[str, Any]:
+    public_entry = dict(entry)
+    public_entry.pop("headers", None)
+    return public_entry
 
 
 def _extract_a2a_capabilities(card_json: dict[str, Any] | None) -> list[str]:
@@ -153,15 +212,41 @@ def _load_a2a_registry(force_refresh: bool = False) -> dict[str, dict[str, Any]]
         raise ValueError("a2a.json must contain an object-valued 'a2a' mapping.")
 
     loaded: dict[str, dict[str, Any]] = {}
-    for name, base_url in entries.items():
-        card_json, error = _fetch_agent_card(str(base_url))
+    for name, raw_entry in entries.items():
+        try:
+            entry = _normalize_a2a_registry_entry(name, raw_entry)
+        except ValueError as exc:
+            loaded[str(name)] = {
+                "name": str(name),
+                "url": str(raw_entry.get("url", "")) if isinstance(raw_entry, dict) else str(raw_entry),
+                "available": False,
+                "capabilities": [],
+                "agent_card": None,
+                "agent_card_name": None,
+                "error": str(exc),
+            }
+            continue
+
+        if entry.get("status") == "offline":
+            continue
+
+        fetch_kwargs: dict[str, Any] = {}
+        if entry.get("headers"):
+            fetch_kwargs["headers"] = dict(entry["headers"])
+        card_json, error = _fetch_agent_card(entry["url"], **fetch_kwargs)
         loaded[str(name)] = {
             "name": str(name),
-            "url": str(base_url),
+            "url": entry["url"],
+            "description": entry.get("description"),
+            "status": entry.get("status"),
             "available": error is None,
-            "capabilities": _extract_a2a_capabilities(card_json) if error is None else [],
+            "capabilities": _merge_capabilities(
+                _extract_a2a_capabilities(card_json),
+                entry.get("extcapabilities", []),
+            ),
             "agent_card": _summarize_agent_card(card_json) if error is None else None,
             "agent_card_name": card_json.get("name") if isinstance(card_json, dict) else None,
+            "headers": entry.get("headers", {}),
             "error": error,
         }
 
@@ -286,7 +371,7 @@ def a2a_list() -> str:
             "success": True,
             "count": len(loaded),
             "registry_path": str(_a2a_registry_path()),
-            "agents": list(loaded.values()),
+            "agents": [_public_a2a_entry(entry) for entry in loaded.values()],
         },
         ensure_ascii=False,
     )
@@ -562,12 +647,14 @@ class _A2ADelegateSession:
         self,
         base_url: str,
         *,
+        headers: dict[str, str] | None = None,
         output=None,
         timeout: float = 60.0,
         poll_interval: float = 0.05,
         session_id: str | None = None,
     ) -> None:
         self.base_url = _normalize_a2a_base_url(base_url)
+        self.headers = dict(headers or {})
         self.output = output
         self.timeout = timeout
         self.poll_interval = poll_interval
@@ -589,7 +676,8 @@ class _A2ADelegateSession:
                 read=None,
                 write=60.0,
                 pool=60.0,
-            )
+            ),
+            headers=self.headers or None,
         )
         factory = ClientFactory(
             ClientConfig(
@@ -1043,10 +1131,15 @@ def _run_a2a_delegate(
         return tool_error(entry_error, success=False, agent="a2a", a2a_name=a2a_name)
     assert entry is not None
 
+    session_kwargs: dict[str, Any] = {
+        "output": output,
+        "session_id": session_id,
+    }
+    if entry.get("headers"):
+        session_kwargs["headers"] = dict(entry["headers"])
     session = _A2ADelegateSession(
         _resolve_a2a_remote_url(entry),
-        output=output,
-        session_id=session_id,
+        **session_kwargs,
     )
 
     async def _run_loop() -> str:
@@ -1271,11 +1364,13 @@ A2A_DELEGATE_SCHEMA = {
             },
             "is_delegate_output": {
                 "type": "boolean",
-                "description": "Whether delegated output should be handled as delegate output by the runtime,defaults to true.",
+                "default": True,
+                "description": "Whether delegated output should be handled as delegate output by the runtime",
             },
             "is_loop": {
                 "type": "boolean",
-                "description": "Whether to run in interactive loop mode when a runtime input adapter is available,defaults to false.",
+                "default": False,
+                "description": "Whether to run in interactive loop mode when a runtime input adapter is available",
             },
         },
         "required": ["goal","agent","a2a_name"],
