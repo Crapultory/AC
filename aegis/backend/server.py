@@ -27,6 +27,13 @@ PUBLIC_API_PATHS = frozenset(
 )
 
 
+def _format_browser_host(host: str) -> str:
+    """Return a host string safe to embed in an HTTP URL."""
+    if ":" in host and not host.startswith("["):
+        return f"[{host}]"
+    return host
+
+
 def _install_docs_bearer_auth(app: FastAPI) -> None:
     """Add Swagger/OpenAPI bearer auth so docs can call protected APIs."""
 
@@ -127,9 +134,8 @@ def start_server(
 
     if open_browser:
         try:
-            webbrowser.open(f"http://{host}:{port}/docs")
+            webbrowser.open(f"http://{_format_browser_host(host)}:{port}/docs")
         except Exception:
             pass
 
     uvicorn.run(app, host=host, port=port, log_level="warning", proxy_headers=False)
-

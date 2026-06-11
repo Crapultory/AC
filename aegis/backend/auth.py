@@ -13,9 +13,10 @@ AUTH_HEADER = "Authorization"
 def extract_bearer_token(request: Request) -> str | None:
     """Extract the bearer token from an HTTP request."""
     auth_header = (request.headers.get(AUTH_HEADER) or "").strip()
-    if not auth_header.startswith("Bearer "):
+    scheme, _, token = auth_header.partition(" ")
+    if scheme.lower() != "bearer":
         return None
-    token = auth_header[len("Bearer ") :].strip()
+    token = token.strip()
     return token or None
 
 
@@ -28,4 +29,3 @@ def verify_bearer_token(request: Request, settings: AegisSettings) -> None:
     """Validate request bearer token or raise 401."""
     if not token_matches(extract_bearer_token(request), settings):
         raise HTTPException(status_code=401, detail="Unauthorized")
-

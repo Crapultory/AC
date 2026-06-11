@@ -43,6 +43,28 @@ def test_login_session_and_logout_routes(client: TestClient) -> None:
     assert logout_response.json() == {"logged_out": True}
 
 
+def test_session_accepts_case_insensitive_bearer_schemes(client: TestClient) -> None:
+    lowercase = client.get(
+        "/api/auth/session",
+        headers={"Authorization": "bearer test-session-token"},
+    )
+    assert lowercase.status_code == 200
+    assert lowercase.json() == {
+        "authenticated": True,
+        "token_source": "env",
+    }
+
+    mixed_case = client.get(
+        "/api/auth/session",
+        headers={"Authorization": "BeArEr test-session-token"},
+    )
+    assert mixed_case.status_code == 200
+    assert mixed_case.json() == {
+        "authenticated": True,
+        "token_source": "env",
+    }
+
+
 def test_auth_middleware_protects_other_api_routes(client: TestClient) -> None:
     unauthorized = client.get("/api/does-not-exist")
     assert unauthorized.status_code == 401
@@ -54,6 +76,13 @@ def test_auth_middleware_protects_other_api_routes(client: TestClient) -> None:
     )
     assert authorized.status_code == 404
     assert authorized.json() == {"detail": "Not Found"}
+
+    lowercase = client.get(
+        "/api/does-not-exist",
+        headers={"Authorization": "bearer test-session-token"},
+    )
+    assert lowercase.status_code == 404
+    assert lowercase.json() == {"detail": "Not Found"}
 
 
 def test_public_health_and_bootstrap_routes_are_accessible(client: TestClient) -> None:

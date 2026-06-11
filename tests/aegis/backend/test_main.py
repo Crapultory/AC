@@ -71,3 +71,31 @@ def test_main_invokes_cmd_aegis(monkeypatch: pytest.MonkeyPatch) -> None:
 
     assert exit_code == 0
     assert called == {"port": 9137, "host": "127.0.0.1"}
+
+
+def test_start_server_formats_ipv6_browser_url(monkeypatch: pytest.MonkeyPatch) -> None:
+    backend_server = importlib.import_module("aegis.backend.server")
+    opened: dict[str, object] = {}
+
+    monkeypatch.setattr(backend_server, "create_app", lambda settings: object())
+    monkeypatch.setattr(
+        backend_server,
+        "load_aegis_settings",
+        lambda **kwargs: backend_server.AegisSettings(**kwargs, session_token="token"),
+    )
+    monkeypatch.setattr(
+        backend_server.webbrowser,
+        "open",
+        lambda url: opened.setdefault("url", url),
+    )
+    monkeypatch.setattr(
+        backend_server.uvicorn,
+        "run",
+        lambda app, host, port, log_level, proxy_headers: opened.update(
+            {"host": host, "port": port}
+        ),
+    )
+
+    backend_server.start_server(host="::1", port=9130, open_browser=True)
+
+    assert opened["url"] == "http://[::1]:9130/docs"
