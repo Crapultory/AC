@@ -27,15 +27,12 @@ class AegisStore:
 
     def mutate_locked(self, mutator: Callable[[dict[str, Any]], Any]) -> Any:
         with self._lock:
-            snapshot = deepcopy(self._payload)
-            try:
-                result = mutator(self._payload)
-                self._normalize_payload(self._payload)
-                self._write(self._payload)
-            except Exception:
-                self._payload.clear()
-                self._payload.update(snapshot)
-                raise
+            updated = deepcopy(self._payload)
+            result = mutator(updated)
+            self._normalize_payload(updated)
+            self._write(updated)
+            self._payload.clear()
+            self._payload.update(deepcopy(updated))
             return result
 
     def _load(self) -> dict[str, Any]:
@@ -93,10 +90,13 @@ class AegisStore:
 
 
 _STORE: AegisStore | None = None
+_STORE_LOCK = threading.Lock()
 
 
 def get_aegis_store() -> AegisStore:
     global _STORE
     if _STORE is None:
-        _STORE = AegisStore()
+        with _STORE_LOCK:
+            if _STORE is None:
+                _STORE = AegisStore()
     return _STORE

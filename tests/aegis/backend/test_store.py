@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import threading
+import time
 
 import pytest
 
@@ -110,6 +112,35 @@ def test_mutate_locked_updates_shared_object_and_persists_to_disk(
     assert json.loads((tmp_path / "a2a.json").read_text()) == expected
 
 
+def test_mutate_locked_does_not_expose_live_store_reference(
+    load_backend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    store_module = load_backend("aegis.backend.services.store")
+    store = store_module.get_aegis_store()
+    escaped: dict[str, object] = {}
+
+    def _mutate(payload: dict[str, object]) -> None:
+        escaped["payload"] = payload
+        payload["global"].append({"id": "policy-1"})
+
+    store.mutate_locked(_mutate)
+    cast_payload = escaped["payload"]
+    assert isinstance(cast_payload, dict)
+
+    cast_payload["a2a"]["agent-1"] = {"enabled": True}
+    cast_payload["global"].append({"id": "policy-2"})
+
+    assert store.read_locked() == {"a2a": {}, "global": [{"id": "policy-1"}]}
+    assert json.loads((tmp_path / "a2a.json").read_text()) == {
+        "a2a": {},
+        "global": [{"id": "policy-1"}],
+    }
+
+
 def test_read_locked_returns_copy_that_cannot_mutate_store_state(
     load_backend,
     monkeypatch: pytest.MonkeyPatch,
@@ -129,6 +160,34 @@ def test_read_locked_returns_copy_that_cannot_mutate_store_state(
         "a2a": {},
         "global": [],
     }
+
+
+def test_mutate_locked_rolls_back_after_write_failure(
+    load_backend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    store_module = load_backend("aegis.backend.services.store")
+    store = store_module.get_aegis_store()
+    original_disk = json.loads((tmp_path / "a2a.json").read_text())
+
+    def _fail_write(payload: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "_write", _fail_write)
+
+    with pytest.raises(OSError, match="disk full"):
+        store.mutate_locked(
+            lambda payload: (
+                payload["global"].append({"id": "policy-1"}),
+                payload["a2a"].__setitem__("agent-1", {"enabled": True}),
+            )
+        )
+
+    assert store.read_locked() == {"a2a": {}, "global": []}
+    assert json.loads((tmp_path / "a2a.json").read_text()) == original_disk
 
 
 def test_mutate_locked_does_not_persist_failed_mutations(
@@ -154,3 +213,39 @@ def test_mutate_locked_does_not_persist_failed_mutations(
         "a2a": {},
         "global": [],
     }
+
+
+def test_get_aegis_store_initializes_singleton_once_under_parallel_access(
+    load_backend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    store_module = load_backend("aegis.backend.services.store")
+    created: list[int] = []
+    original_store_cls = store_module.AegisStore
+
+    class CountingStore(original_store_cls):
+        def __init__(self, *args, **kwargs) -> None:
+            time.sleep(0.02)
+            super().__init__(*args, **kwargs)
+            created.append(id(self))
+
+    monkeypatch.setattr(store_module, "AegisStore", CountingStore)
+
+    barrier = threading.Barrier(8)
+    results: list[object] = []
+
+    def _load_store() -> None:
+        barrier.wait()
+        results.append(store_module.get_aegis_store())
+
+    threads = [threading.Thread(target=_load_store) for _ in range(8)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+
+    assert len(created) == 1
+    assert len({id(store) for store in results}) == 1
