@@ -34,6 +34,7 @@ class SystemBootstrapResponse(BaseModel):
 
 
 AgentStatus = Literal["active", "idle", "offline"]
+GlobalRoutingStatus = Literal["active", "inactive"]
 
 
 class AgentUpsertRequest(BaseModel):
@@ -62,3 +63,27 @@ class AgentListResponse(BaseModel):
 class AgentDeleteResponse(BaseModel):
     deleted: bool
     agent_id: str
+
+
+class GlobalRoutingRuleUpsertRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    policy: str
+    status: GlobalRoutingStatus
+
+
+class GlobalRoutingRuleResponse(BaseModel):
+    id: str = Field(min_length=8, max_length=8)
+    name: str
+    policy: str
+    status: GlobalRoutingStatus
+
+
+class GlobalRoutingRuleListResponse(BaseModel):
+    rules: list[GlobalRoutingRuleResponse]
+
+
+class GlobalRoutingRuleDeleteResponse(BaseModel):
+    deleted: bool
+    id: str
