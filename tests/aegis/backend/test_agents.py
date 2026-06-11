@@ -19,10 +19,9 @@ def _write_store(path: Path, payload: dict) -> None:
 def agent_client(
     load_backend,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    hermes_home,
 ) -> Iterator[TestClient]:
     monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
     server = load_backend("aegis.backend.server")
     app = server.create_app()
@@ -32,7 +31,7 @@ def agent_client(
 
 def test_agents_crud_persists_through_shared_store(
     agent_client: TestClient,
-    tmp_path,
+    hermes_home,
 ) -> None:
     create_response = agent_client.post(
         "/api/agents/agent-1",
@@ -102,7 +101,7 @@ def test_agents_crud_persists_through_shared_store(
         "extcapabilities": ["query-url"],
     }
 
-    assert json.loads((tmp_path / "a2a.json").read_text()) == {
+    assert json.loads((hermes_home / "a2a.json").read_text()) == {
         "a2a": {
             "agent-1": {
                 "url": "http://127.0.0.1:9087/a2a",
@@ -118,7 +117,57 @@ def test_agents_crud_persists_through_shared_store(
     delete_response = agent_client.delete("/api/agents/agent-1", headers=AUTH_HEADERS)
     assert delete_response.status_code == 200
     assert delete_response.json() == {"deleted": True, "agent_id": "agent-1"}
-    assert json.loads((tmp_path / "a2a.json").read_text()) == {"a2a": {}, "global": []}
+    assert json.loads((hermes_home / "a2a.json").read_text()) == {"a2a": {}, "global": []}
+
+
+def test_agent_create_and_global_rule_create_share_same_persisted_store(
+    agent_client: TestClient,
+    hermes_home,
+) -> None:
+    agent_response = agent_client.post(
+        "/api/agents/agent-1",
+        headers=AUTH_HEADERS,
+        json={
+            "url": "http://127.0.0.1:9086/a2a",
+            "description": "A2A test endpoint",
+            "headers": {"Authorization": "Bearer abc"},
+            "status": "active",
+            "extcapabilities": ["query-ip"],
+        },
+    )
+    assert agent_response.status_code == 201
+
+    rule_response = agent_client.post(
+        "/api/routing/global",
+        headers=AUTH_HEADERS,
+        json={
+            "name": "Prioritize phishing incidents",
+            "policy": "Route all phishing investigations to the email response queue.",
+            "status": "active",
+        },
+    )
+    assert rule_response.status_code == 201
+    created_rule = rule_response.json()
+
+    assert json.loads((hermes_home / "a2a.json").read_text()) == {
+        "a2a": {
+            "agent-1": {
+                "url": "http://127.0.0.1:9086/a2a",
+                "description": "A2A test endpoint",
+                "headers": {"Authorization": "Bearer abc"},
+                "status": "active",
+                "extcapabilities": ["query-ip"],
+            }
+        },
+        "global": [
+            {
+                "id": created_rule["id"],
+                "name": "Prioritize phishing incidents",
+                "policy": "Route all phishing investigations to the email response queue.",
+                "status": "active",
+            }
+        ],
+    }
 
 
 def test_post_rejects_duplicate_agent(agent_client: TestClient) -> None:

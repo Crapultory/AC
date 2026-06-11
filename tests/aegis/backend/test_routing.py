@@ -19,10 +19,9 @@ def _write_store(path: Path, payload: dict) -> None:
 def routing_client(
     load_backend,
     monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    hermes_home,
 ) -> Iterator[TestClient]:
     monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
 
     server = load_backend("aegis.backend.server")
     app = server.create_app()
@@ -32,7 +31,7 @@ def routing_client(
 
 def test_global_routing_crud_persists_through_shared_store(
     routing_client: TestClient,
-    tmp_path,
+    hermes_home,
 ) -> None:
     create_response = routing_client.post(
         "/api/routing/global",
@@ -82,7 +81,7 @@ def test_global_routing_crud_persists_through_shared_store(
         "status": "inactive",
     }
 
-    assert json.loads((tmp_path / "a2a.json").read_text()) == {
+    assert json.loads((hermes_home / "a2a.json").read_text()) == {
         "a2a": {},
         "global": [
             {
@@ -100,7 +99,7 @@ def test_global_routing_crud_persists_through_shared_store(
     )
     assert delete_response.status_code == 200
     assert delete_response.json() == {"deleted": True, "id": created_rule["id"]}
-    assert json.loads((tmp_path / "a2a.json").read_text()) == {"a2a": {}, "global": []}
+    assert json.loads((hermes_home / "a2a.json").read_text()) == {"a2a": {}, "global": []}
 
 
 def test_create_global_routing_rule_avoids_duplicate_generated_ids(

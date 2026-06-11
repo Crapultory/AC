@@ -24,7 +24,20 @@ def load_backend(monkeypatch: pytest.MonkeyPatch):
 
 
 @pytest.fixture
-def client(load_backend, monkeypatch: pytest.MonkeyPatch) -> Iterator[TestClient]:
+def hermes_home(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    return tmp_path
+
+
+@pytest.fixture
+def client(
+    load_backend,
+    monkeypatch: pytest.MonkeyPatch,
+    hermes_home,
+) -> Iterator[TestClient]:
     monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
     server = load_backend("aegis.backend.server")
     app = server.create_app()

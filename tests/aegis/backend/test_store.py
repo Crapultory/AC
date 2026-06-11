@@ -9,11 +9,8 @@ import pytest
 
 def test_get_aegis_store_creates_default_file_and_returns_shared_instance(
     load_backend,
-    monkeypatch: pytest.MonkeyPatch,
-    tmp_path,
+    hermes_home,
 ) -> None:
-    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-
     store_module = load_backend("aegis.backend.services.store")
 
     first = store_module.get_aegis_store()
@@ -21,7 +18,7 @@ def test_get_aegis_store_creates_default_file_and_returns_shared_instance(
 
     assert first is second
     assert first.read_locked() == {"a2a": {}, "global": []}
-    assert json.loads((tmp_path / "a2a.json").read_text()) == {
+    assert json.loads((hermes_home / "a2a.json").read_text()) == {
         "a2a": {},
         "global": [],
     }
