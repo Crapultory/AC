@@ -105,9 +105,30 @@ def test_mutate_locked_updates_shared_object_and_persists_to_disk(
         "a2a": {"agent-1": {"enabled": True}},
         "global": [{"id": "policy-1"}],
     }
-    assert seen["payload"] is store.read_locked()
+    assert seen["payload"] is not store.read_locked()
     assert store.read_locked() == expected
     assert json.loads((tmp_path / "a2a.json").read_text()) == expected
+
+
+def test_read_locked_returns_copy_that_cannot_mutate_store_state(
+    load_backend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    store_module = load_backend("aegis.backend.services.store")
+    store = store_module.get_aegis_store()
+    snapshot = store.read_locked()
+
+    snapshot["global"].append({"id": "policy-1"})
+    snapshot["a2a"]["agent-1"] = {"enabled": True}
+
+    assert store.read_locked() == {"a2a": {}, "global": []}
+    assert json.loads((tmp_path / "a2a.json").read_text()) == {
+        "a2a": {},
+        "global": [],
+    }
 
 
 def test_mutate_locked_does_not_persist_failed_mutations(

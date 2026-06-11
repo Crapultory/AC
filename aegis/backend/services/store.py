@@ -23,7 +23,7 @@ class AegisStore:
 
     def read_locked(self) -> dict[str, Any]:
         with self._lock:
-            return self._payload
+            return deepcopy(self._payload)
 
     def mutate_locked(self, mutator: Callable[[dict[str, Any]], Any]) -> Any:
         with self._lock:
