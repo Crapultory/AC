@@ -121,6 +121,7 @@ def test_agents_crud_persists_through_shared_store(
 
 
 def test_agent_create_and_global_rule_create_share_same_persisted_store(
+    load_backend,
     agent_client: TestClient,
     hermes_home,
 ) -> None:
@@ -168,6 +169,33 @@ def test_agent_create_and_global_rule_create_share_same_persisted_store(
             }
         ],
     }
+
+    server = load_backend("aegis.backend.server")
+    reloaded_app = server.create_app()
+    with TestClient(reloaded_app) as reloaded_client:
+        reloaded_agent = reloaded_client.get("/api/agents/agent-1", headers=AUTH_HEADERS)
+        assert reloaded_agent.status_code == 200
+        assert reloaded_agent.json() == {
+            "agent_id": "agent-1",
+            "url": "http://127.0.0.1:9086/a2a",
+            "description": "A2A test endpoint",
+            "headers": {"Authorization": "Bearer abc"},
+            "status": "active",
+            "extcapabilities": ["query-ip"],
+        }
+
+        reloaded_rules = reloaded_client.get("/api/routing/global", headers=AUTH_HEADERS)
+        assert reloaded_rules.status_code == 200
+        assert reloaded_rules.json() == {
+            "rules": [
+                {
+                    "id": created_rule["id"],
+                    "name": "Prioritize phishing incidents",
+                    "policy": "Route all phishing investigations to the email response queue.",
+                    "status": "active",
+                }
+            ]
+        }
 
 
 def test_post_rejects_duplicate_agent(agent_client: TestClient) -> None:
