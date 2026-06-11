@@ -139,6 +139,7 @@ Rules:
 
 - `agent_id` is the `a2a` object key
 - request bodies must not contain `agent_id`; creation and update both take it from the path
+- agent `status` only allows `active`, `idle`, or `offline`
 - `PUT` updates the value under the existing path key only
 
 ### Global Routing API
@@ -152,6 +153,7 @@ Rules:
 Rules:
 
 - each rule gets an auto-generated 8-character `id`
+- global rule `status` only allows `active` or `inactive`
 - only global rules are supported in this phase
 - no agent card rule endpoints are exposed
 
@@ -281,16 +283,27 @@ Creation flow:
 
 Lookup and update should search by `id`. No additional indexing layer is needed at this phase because the dataset is small and file-backed.
 
-### 7. Keep Status Semantics Simple
+### 7. Keep Status Semantics Explicit Per Object Type
 
-Only allow:
+Use separate status enums for agents and global rules.
+
+Agent status:
+
+- `active`
+- `idle`
+- `offline`
+
+Global rule status:
 
 - `active`
 - `inactive`
 
-for both agents and global rules.
+This matches the intended domain behavior:
 
-This keeps the API and file format uniform. If the frontend wants labels such as `Enabled` or `Offline`, that mapping should live in frontend presentation code rather than fragmenting backend status values.
+- agents expose runtime connectivity and readiness semantics
+- global rules only expose enabled or disabled semantics
+
+Frontend display labels such as `Enabled`, `Disabled`, `Active`, or `Offline` should still be handled in presentation code rather than by adding duplicate backend values.
 
 ### 8. Persist Safely
 
@@ -363,7 +376,9 @@ Before implementation is considered ready, verify:
 - `/health` and `/api/system/bootstrap` are reachable without auth
 - `/api/auth/login` accepts only the correct token
 - agent CRUD updates `HERMES_HOME/a2a.json`
+- agent status validation rejects values outside `active`, `idle`, `offline`
 - global routing CRUD updates the same file
+- global rule status validation rejects values outside `active`, `inactive`
 - writes are persisted immediately after each mutation
 - malformed file input produces a loud, diagnosable failure
 
