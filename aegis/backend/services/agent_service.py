@@ -4,6 +4,7 @@ from collections.abc import Mapping
 from typing import Any
 
 from fastapi import HTTPException
+from pydantic import ValidationError
 
 from aegis.backend.models import AgentResponse, AgentUpsertRequest
 from aegis.backend.services.store import AegisStore, get_aegis_store
@@ -36,7 +37,7 @@ class AgentService:
                     status_code=409,
                     detail=f"Agent '{agent_id}' already exists.",
                 )
-            agents[agent_id] = body.model_dump()
+            agents[agent_id] = body.model_dump(mode="json")
             return self._build_agent_response(agent_id, agents[agent_id])
 
         return self._store.mutate_locked(_mutate)
@@ -46,7 +47,7 @@ class AgentService:
             agents = payload["a2a"]
             if agent_id not in agents:
                 raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
-            agents[agent_id] = body.model_dump()
+            agents[agent_id] = body.model_dump(mode="json")
             return self._build_agent_response(agent_id, agents[agent_id])
 
         return self._store.mutate_locked(_mutate)
@@ -63,4 +64,16 @@ class AgentService:
 
     @staticmethod
     def _build_agent_response(agent_id: str, payload: Mapping[str, Any]) -> AgentResponse:
-        return AgentResponse(agent_id=agent_id, **dict(payload))
+        if not isinstance(payload, Mapping):
+            raise HTTPException(
+                status_code=500,
+                detail=f"Stored agent '{agent_id}' has an invalid shape.",
+            )
+
+        try:
+            return AgentResponse.model_validate({"agent_id": agent_id, **dict(payload)})
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=500,
+                detail=f"Stored agent '{agent_id}' has an invalid shape.",
+            ) from exc

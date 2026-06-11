@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import AnyHttpUrl, BaseModel, ConfigDict, Field
 
 
 class AuthLoginRequest(BaseModel):
@@ -39,7 +39,7 @@ AgentStatus = Literal["active", "idle", "offline"]
 class AgentUpsertRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    url: str
+    url: AnyHttpUrl
     description: str
     headers: dict[str, str]
     status: AgentStatus
@@ -48,7 +48,7 @@ class AgentUpsertRequest(BaseModel):
 
 class AgentResponse(BaseModel):
     agent_id: str
-    url: str
+    url: AnyHttpUrl
     description: str
     headers: dict[str, str]
     status: AgentStatus

@@ -2,12 +2,17 @@ from __future__ import annotations
 
 import json
 from collections.abc import Iterator
+from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
 
 
 AUTH_HEADERS = {"Authorization": "Bearer test-session-token"}
+
+
+def _write_store(path: Path, payload: dict) -> None:
+    path.write_text(json.dumps(payload), encoding="utf-8")
 
 
 @pytest.fixture
@@ -190,3 +195,112 @@ def test_status_allows_only_expected_values(agent_client: TestClient) -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"] == ["body", "status"]
+
+
+def test_list_agents_returns_controlled_error_for_malformed_persisted_entry(
+    load_backend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _write_store(
+        tmp_path / "a2a.json",
+        {
+            "a2a": {
+                "legacy-agent": "http://127.0.0.1:9086/a2a",
+            },
+            "global": [],
+        },
+    )
+
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    with TestClient(app) as client:
+        response = client.get("/api/agents", headers=AUTH_HEADERS)
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "Stored agent 'legacy-agent' has an invalid shape.",
+    }
+
+
+def test_get_agent_returns_controlled_error_for_malformed_persisted_entry(
+    load_backend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _write_store(
+        tmp_path / "a2a.json",
+        {
+            "a2a": {
+                "broken-agent": {
+                    "url": "http://127.0.0.1:9086/a2a",
+                    "description": "A2A endpoint",
+                    "headers": [],
+                    "status": "active",
+                    "extcapabilities": [],
+                }
+            },
+            "global": [],
+        },
+    )
+
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    with TestClient(app) as client:
+        response = client.get("/api/agents/broken-agent", headers=AUTH_HEADERS)
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "Stored agent 'broken-agent' has an invalid shape.",
+    }
+
+
+def test_create_rejects_invalid_url(agent_client: TestClient) -> None:
+    response = agent_client.post(
+        "/api/agents/agent-1",
+        headers=AUTH_HEADERS,
+        json={
+            "url": "not-a-url",
+            "description": "A2A test endpoint",
+            "headers": {},
+            "status": "active",
+            "extcapabilities": [],
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "url"]
+
+
+def test_update_rejects_invalid_url(agent_client: TestClient) -> None:
+    create_response = agent_client.post(
+        "/api/agents/agent-1",
+        headers=AUTH_HEADERS,
+        json={
+            "url": "https://127.0.0.1:9086/a2a",
+            "description": "A2A test endpoint",
+            "headers": {},
+            "status": "active",
+            "extcapabilities": [],
+        },
+    )
+    assert create_response.status_code == 201
+
+    response = agent_client.put(
+        "/api/agents/agent-1",
+        headers=AUTH_HEADERS,
+        json={
+            "url": "ftp://127.0.0.1:9087/a2a",
+            "description": "Updated endpoint",
+            "headers": {},
+            "status": "idle",
+            "extcapabilities": [],
+        },
+    )
+
+    assert response.status_code == 422
+    assert response.json()["detail"][0]["loc"] == ["body", "url"]
