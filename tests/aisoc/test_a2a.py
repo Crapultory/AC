@@ -13,7 +13,7 @@ from a2a.client import Client, ClientConfig, ClientFactory
 from a2a.types import CancelTaskRequest, GetTaskRequest, Message, Part, Role, SendMessageConfiguration, SendMessageRequest, Task, TaskState
 
 from aisoc.backend.a2a_server import create_a2a_app
-import aisoc.backend.a2a.executor as a2a_executor
+import aisoc.backend.a2a_service.executor as a2a_executor
 from aisoc.backend.config import load_aisoc_settings
 
 

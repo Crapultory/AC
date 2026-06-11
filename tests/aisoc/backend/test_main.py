@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import importlib
 import importlib.util
+import os
 
 import pytest
 
@@ -108,3 +109,55 @@ def test_cmd_aisoc_rejects_a2a_only_flags_for_extcli() -> None:
     with pytest.raises(SystemExit) as exc:
         backend_main.cmd_aisoc(_ns(module="extcli", streaming=True))
     assert exc.value.code == 2
+
+
+def test_main_applies_profile_override_before_dispatch(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    backend_main = _load_backend_main()
+    called: dict[str, object] = {}
+
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.setattr(
+        "hermes_cli.profiles.resolve_profile_env",
+        lambda profile: f"/tmp/hermes-profile-{profile}",
+    )
+
+    def _fake_cmd_aisoc(args: argparse.Namespace) -> None:
+        called["module"] = args.module
+        called["hermes_home"] = os.environ.get("HERMES_HOME")
+
+    monkeypatch.setattr(backend_main, "cmd_aisoc", _fake_cmd_aisoc)
+
+    exit_code = backend_main.main(["-p", "coder", "--module", "extcli"])
+
+    assert exit_code == 0
+    assert called == {
+        "module": "extcli",
+        "hermes_home": "/tmp/hermes-profile-coder",
+    }
+
+
+def test_main_supports_equals_profile_flag(monkeypatch: pytest.MonkeyPatch) -> None:
+    backend_main = _load_backend_main()
+    called: dict[str, object] = {}
+
+    monkeypatch.delenv("HERMES_HOME", raising=False)
+    monkeypatch.setattr(
+        "hermes_cli.profiles.resolve_profile_env",
+        lambda profile: f"/tmp/hermes-profile-{profile}",
+    )
+
+    def _fake_cmd_aisoc(args: argparse.Namespace) -> None:
+        called["port"] = args.port
+        called["hermes_home"] = os.environ.get("HERMES_HOME")
+
+    monkeypatch.setattr(backend_main, "cmd_aisoc", _fake_cmd_aisoc)
+
+    exit_code = backend_main.main(["--profile=writer", "--port", "9133"])
+
+    assert exit_code == 0
+    assert called == {
+        "port": 9133,
+        "hermes_home": "/tmp/hermes-profile-writer",
+    }
