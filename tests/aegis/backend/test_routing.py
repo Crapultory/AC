@@ -273,3 +273,190 @@ def test_get_rule_returns_controlled_error_for_malformed_persisted_entry(
     assert response.json() == {
         "detail": "Stored global routing rule 'deadbeef' has an invalid shape.",
     }
+
+
+def test_get_put_and_delete_fail_closed_for_duplicate_ids_on_disk(
+    load_backend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _write_store(
+        tmp_path / "a2a.json",
+        {
+            "a2a": {},
+            "global": [
+                {
+                    "id": "deadbeef",
+                    "name": "First rule",
+                    "policy": "First policy.",
+                    "status": "active",
+                },
+                {
+                    "id": "deadbeef",
+                    "name": "Second rule",
+                    "policy": "Second policy.",
+                    "status": "inactive",
+                },
+            ],
+        },
+    )
+
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    with TestClient(app) as client:
+        get_response = client.get("/api/routing/global/deadbeef", headers=AUTH_HEADERS)
+        put_response = client.put(
+            "/api/routing/global/deadbeef",
+            headers=AUTH_HEADERS,
+            json={
+                "name": "Updated rule",
+                "policy": "Updated policy.",
+                "status": "active",
+            },
+        )
+        delete_response = client.delete("/api/routing/global/deadbeef", headers=AUTH_HEADERS)
+
+    expected = {"detail": "Stored global routing rule ID 'deadbeef' is duplicated."}
+    assert get_response.status_code == 500
+    assert get_response.json() == expected
+    assert put_response.status_code == 500
+    assert put_response.json() == expected
+    assert delete_response.status_code == 500
+    assert delete_response.json() == expected
+    assert json.loads((tmp_path / "a2a.json").read_text())["global"] == [
+        {
+            "id": "deadbeef",
+            "name": "First rule",
+            "policy": "First policy.",
+            "status": "active",
+        },
+        {
+            "id": "deadbeef",
+            "name": "Second rule",
+            "policy": "Second policy.",
+            "status": "inactive",
+        },
+    ]
+
+
+@pytest.mark.parametrize(
+    ("method", "path", "body"),
+    [
+        (
+            "post",
+            "/api/routing/global",
+            {
+                "name": "Created rule",
+                "policy": "Created policy.",
+                "status": "active",
+            },
+        ),
+        (
+            "put",
+            "/api/routing/global/facecafe",
+            {
+                "name": "Updated rule",
+                "policy": "Updated policy.",
+                "status": "inactive",
+            },
+        ),
+        ("delete", "/api/routing/global/facecafe", None),
+    ],
+)
+def test_mutations_fail_closed_for_malformed_persisted_entries(
+    load_backend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+    method: str,
+    path: str,
+    body: dict[str, str] | None,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _write_store(
+        tmp_path / "a2a.json",
+        {
+            "a2a": {},
+            "global": [
+                {
+                    "id": "facecafe",
+                    "name": "Valid rule",
+                    "policy": "Valid policy.",
+                    "status": "active",
+                },
+                "bad-entry",
+            ],
+        },
+    )
+
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    with TestClient(app) as client:
+        request = getattr(client, method)
+        response = request(path, headers=AUTH_HEADERS, json=body) if body else request(
+            path,
+            headers=AUTH_HEADERS,
+        )
+
+    assert response.status_code == 500
+    assert response.json() == {"detail": "Stored global routing rule is invalid."}
+    assert json.loads((tmp_path / "a2a.json").read_text())["global"] == [
+        {
+            "id": "facecafe",
+            "name": "Valid rule",
+            "policy": "Valid policy.",
+            "status": "active",
+        },
+        "bad-entry",
+    ]
+
+
+def test_create_global_routing_rule_fails_when_id_generation_is_exhausted(
+    load_backend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _write_store(
+        tmp_path / "a2a.json",
+        {
+            "a2a": {},
+            "global": [
+                {
+                    "id": "dddddddd",
+                    "name": "Existing rule",
+                    "policy": "Keep existing routing.",
+                    "status": "active",
+                }
+            ],
+        },
+    )
+
+    server = load_backend("aegis.backend.server")
+    routing_service = server.build_routing_router.__globals__["RoutingService"].__module__
+    routing_service_module = __import__(routing_service, fromlist=["_MAX_ID_GENERATION_ATTEMPTS"])
+    monkeypatch.setattr(routing_service_module, "_MAX_ID_GENERATION_ATTEMPTS", 2)
+    monkeypatch.setattr(
+        routing_service_module.secrets,
+        "choice",
+        lambda _alphabet: "d",
+    )
+    app = server.create_app()
+    with TestClient(app) as client:
+        response = client.post(
+            "/api/routing/global",
+            headers=AUTH_HEADERS,
+            json={
+                "name": "Created rule",
+                "policy": "Created policy.",
+                "status": "active",
+            },
+        )
+
+    assert response.status_code == 500
+    assert response.json() == {
+        "detail": "Unable to generate a unique global routing rule ID.",
+    }
