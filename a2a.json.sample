@@ -1,9 +1,48 @@
-{"a2a":{
-   "test":{"url":"http://127.0.0.1:9086/a2a",
-           "description":"A2A test endpoint",
-           "headers":{"Authorization":"Bearer <token>"},
-           "status":"active",
-           "extcapabilities":["支持情报调查，用于ip,domain等快速情报查询","支持网络隔离控制"]
-           }
-}}
-
+{
+  "a2a": {
+    "agent-active": {
+      "url": "http://127.0.0.1:9086/a2a",
+      "description": "Primary A2A test endpoint",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      },
+      "status": "active",
+      "extcapabilities": [
+        "query-ip",
+        "query-domain"
+      ]
+    },
+    "agent-idle": {
+      "url": "http://127.0.0.1:9087/a2a",
+      "description": "Secondary endpoint waiting for work",
+      "headers": {},
+      "status": "idle",
+      "extcapabilities": [
+        "query-url"
+      ]
+    },
+    "agent-offline": {
+      "url": "http://127.0.0.1:9088/a2a",
+      "description": "Endpoint temporarily unavailable",
+      "headers": {
+        "X-Token": "<token>"
+      },
+      "status": "offline",
+      "extcapabilities": []
+    }
+  },
+  "global": [
+    {
+      "id": "deadbeef",
+      "name": "Prioritize phishing incidents",
+      "policy": "Route phishing investigations to the email response queue first.",
+      "status": "active"
+    },
+    {
+      "id": "facecafe",
+      "name": "Fallback unmatched cases",
+      "policy": "Keep this rule disabled until the fallback queue is ready.",
+      "status": "inactive"
+    }
+  ]
+}
