@@ -12,6 +12,7 @@ import uvicorn
 
 from aegis.backend.auth import verify_bearer_token
 from aegis.backend.config import AegisSettings, is_loopback_host, load_aegis_settings
+from aegis.backend.routes.agents import build_agents_router
 from aegis.backend.routes.auth import build_auth_router
 from aegis.backend.routes.system import build_system_router
 
@@ -100,6 +101,7 @@ def create_app(settings: AegisSettings | None = None) -> FastAPI:
         return await call_next(request)
 
     app.include_router(build_auth_router(active_settings))
+    app.include_router(build_agents_router())
     app.include_router(build_system_router(active_settings))
     _install_docs_bearer_auth(app)
     return app
