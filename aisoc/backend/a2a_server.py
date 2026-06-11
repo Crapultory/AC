@@ -19,7 +19,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 import uvicorn
 
-from aisoc.backend.a2a import HermesA2AExecutor
+from aisoc.backend.a2a_service import HermesA2AExecutor
 from aisoc.backend.agent_runtime import prepare_hermes_home
 from aisoc.backend.config import AisocSettings, is_loopback_host, load_aisoc_settings
 

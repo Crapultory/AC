@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 from a2a.types import Role, TaskState
+import a2a.client as a2a_client
 
 from tools.a2a_delegate_tool import A2A_REGISTRY, _A2ADelegateSession, a2a_delegate
 
@@ -231,6 +232,47 @@ async def test_a2a_session_suppresses_tool_result_events():
         ("delegate", "tool_call", 'web_search {"q":"cats"}', "ctx-1"),
         ("delegate", "ai", "final reply", "ctx-1"),
     ]
+
+
+@pytest.mark.asyncio
+async def test_a2a_session_open_applies_configured_headers(monkeypatch):
+    captured = {}
+
+    class _FakeHTTPClient:
+        def __init__(self, *args, **kwargs):
+            del args
+            captured["headers"] = kwargs.get("headers")
+
+        async def aclose(self):
+            captured["http_closed"] = True
+
+    class _FakeRemoteClient:
+        async def close(self):
+            captured["client_closed"] = True
+
+    class _FakeClientFactory:
+        def __init__(self, config):
+            captured["config_http_client"] = config.httpx_client
+
+        async def create_from_url(self, base_url):
+            captured["base_url"] = base_url
+            return _FakeRemoteClient()
+
+    monkeypatch.setattr("tools.a2a_delegate_tool.httpx.AsyncClient", _FakeHTTPClient)
+    monkeypatch.setattr(a2a_client, "ClientFactory", _FakeClientFactory)
+
+    session = _A2ADelegateSession(
+        "http://agent.local",
+        headers={"Authorization": "Bearer token"},
+    )
+
+    await session.open()
+    await session.close()
+
+    assert captured["headers"] == {"Authorization": "Bearer token"}
+    assert captured["base_url"] == "http://agent.local"
+    assert captured["http_closed"] is True
+    assert captured["client_closed"] is True
 
 
 @patch("tools.a2a_delegate_tool.load_conversation_history", return_value=[])
