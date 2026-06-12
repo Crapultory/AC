@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from fastapi.testclient import TestClient
 
 
@@ -83,6 +84,30 @@ def test_auth_middleware_protects_other_api_routes(client: TestClient) -> None:
     )
     assert lowercase.status_code == 404
     assert lowercase.json() == {"detail": "Not Found"}
+
+
+@pytest.mark.parametrize(
+    "origin",
+    [
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+)
+def test_auth_middleware_allows_cors_preflight_for_protected_routes(
+    client: TestClient,
+    origin: str,
+) -> None:
+    response = client.options(
+        "/api/agents",
+        headers={
+            "Origin": origin,
+            "Access-Control-Request-Method": "GET",
+        },
+    )
+
+    assert response.status_code == 200
+    assert response.headers["access-control-allow-origin"] == origin
+    assert "GET" in response.headers["access-control-allow-methods"]
 
 
 def test_public_health_and_bootstrap_routes_are_accessible(client: TestClient) -> None:

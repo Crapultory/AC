@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping
+from copy import deepcopy
 from typing import Any
 
 from fastapi import HTTPException
@@ -11,6 +12,13 @@ from aegis.backend.services.store import AegisStore, get_aegis_store
 
 
 class AgentService:
+    _LEGACY_AGENT_DEFAULTS = {
+        "description": "",
+        "headers": {},
+        "status": "offline",
+        "extcapabilities": [],
+    }
+
     def __init__(self, store: AegisStore | None = None) -> None:
         self._store = store or get_aegis_store()
 
@@ -63,17 +71,26 @@ class AgentService:
         self._store.mutate_locked(_mutate)
 
     @staticmethod
-    def _build_agent_response(agent_id: str, payload: Mapping[str, Any]) -> AgentResponse:
-        if not isinstance(payload, Mapping):
-            raise HTTPException(
-                status_code=500,
-                detail=f"Stored agent '{agent_id}' has an invalid shape.",
-            )
+    def _build_agent_response(agent_id: str, payload: Mapping[str, Any] | str) -> AgentResponse:
+        normalized_payload = AgentService._normalize_stored_agent_payload(agent_id, payload)
 
         try:
-            return AgentResponse.model_validate({"agent_id": agent_id, **dict(payload)})
+            return AgentResponse.model_validate({"agent_id": agent_id, **dict(normalized_payload)})
         except ValidationError as exc:
             raise HTTPException(
                 status_code=500,
                 detail=f"Stored agent '{agent_id}' has an invalid shape.",
             ) from exc
+
+    @classmethod
+    def _normalize_stored_agent_payload(
+        cls, agent_id: str, payload: Mapping[str, Any] | str
+    ) -> Mapping[str, Any]:
+        if isinstance(payload, str):
+            return {"url": payload, **deepcopy(cls._LEGACY_AGENT_DEFAULTS)}
+        if isinstance(payload, Mapping):
+            return payload
+        raise HTTPException(
+            status_code=500,
+            detail=f"Stored agent '{agent_id}' has an invalid shape.",
+        )

@@ -159,6 +159,64 @@ def test_read_locked_returns_copy_that_cannot_mutate_store_state(
     }
 
 
+def test_read_locked_reloads_external_file_changes(
+    load_backend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    store_module = load_backend("aegis.backend.services.store")
+    store = store_module.get_aegis_store()
+
+    assert store.read_locked() == {"a2a": {}, "global": []}
+
+    external_payload = {
+        "a2a": {"agent-1": {"url": "http://127.0.0.1:9086/a2a"}},
+        "global": [{"id": "policy-1"}],
+    }
+    (tmp_path / "a2a.json").write_text(json.dumps(external_payload), encoding="utf-8")
+
+    assert store.read_locked() == external_payload
+
+
+def test_mutate_locked_reconciles_external_file_changes_before_writing(
+    load_backend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    store_module = load_backend("aegis.backend.services.store")
+    store = store_module.get_aegis_store()
+
+    (tmp_path / "a2a.json").write_text(
+        json.dumps(
+            {
+                "a2a": {
+                    "agent-1": {"url": "http://127.0.0.1:9086/a2a"},
+                },
+                "global": [{"id": "policy-1"}],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    store.mutate_locked(
+        lambda payload: payload["a2a"].__setitem__(
+            "agent-2", {"url": "http://127.0.0.1:9087/a2a"}
+        )
+    )
+
+    assert store.read_locked() == {
+        "a2a": {
+            "agent-1": {"url": "http://127.0.0.1:9086/a2a"},
+            "agent-2": {"url": "http://127.0.0.1:9087/a2a"},
+        },
+        "global": [{"id": "policy-1"}],
+    }
+
+
 def test_mutate_locked_rolls_back_after_write_failure(
     load_backend,
     monkeypatch: pytest.MonkeyPatch,

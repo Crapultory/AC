@@ -83,7 +83,9 @@ def create_app(settings: AegisSettings | None = None) -> FastAPI:
         allow_origins=[
             "http://127.0.0.1",
             "http://localhost",
+            "http://127.0.0.1:3000",
             "http://127.0.0.1:9130",
+            "http://localhost:3000",
             "http://localhost:9130",
         ],
         allow_methods=["*"],
@@ -93,7 +95,7 @@ def create_app(settings: AegisSettings | None = None) -> FastAPI:
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next):
         path = request.url.path
-        if path.startswith("/api/") and path not in PUBLIC_API_PATHS:
+        if request.method != "OPTIONS" and path.startswith("/api/") and path not in PUBLIC_API_PATHS:
             try:
                 verify_bearer_token(request, active_settings)
             except Exception as exc:

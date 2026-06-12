@@ -23,17 +23,23 @@ class AegisStore:
 
     def read_locked(self) -> dict[str, Any]:
         with self._lock:
-            return deepcopy(self._payload)
+            return deepcopy(self._reload_from_disk_locked())
 
     def mutate_locked(self, mutator: Callable[[dict[str, Any]], Any]) -> Any:
         with self._lock:
-            updated = deepcopy(self._payload)
+            updated = deepcopy(self._reload_from_disk_locked())
             result = mutator(updated)
             self._normalize_payload(updated)
             self._write(updated)
             self._payload.clear()
             self._payload.update(deepcopy(updated))
             return result
+
+    def _reload_from_disk_locked(self) -> dict[str, Any]:
+        latest = self._load()
+        self._payload.clear()
+        self._payload.update(deepcopy(latest))
+        return self._payload
 
     def _load(self) -> dict[str, Any]:
         self._path.parent.mkdir(parents=True, exist_ok=True)

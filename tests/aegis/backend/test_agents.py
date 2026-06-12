@@ -274,7 +274,7 @@ def test_status_allows_only_expected_values(agent_client: TestClient) -> None:
     assert response.json()["detail"][0]["loc"] == ["body", "status"]
 
 
-def test_list_agents_returns_controlled_error_for_malformed_persisted_entry(
+def test_list_agents_supports_legacy_string_persisted_entries(
     load_backend,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
@@ -296,9 +296,18 @@ def test_list_agents_returns_controlled_error_for_malformed_persisted_entry(
     with TestClient(app) as client:
         response = client.get("/api/agents", headers=AUTH_HEADERS)
 
-    assert response.status_code == 500
+    assert response.status_code == 200
     assert response.json() == {
-        "detail": "Stored agent 'legacy-agent' has an invalid shape.",
+        "agents": [
+            {
+                "agent_id": "legacy-agent",
+                "url": "http://127.0.0.1:9086/a2a",
+                "description": "",
+                "headers": {},
+                "status": "offline",
+                "extcapabilities": [],
+            }
+        ]
     }
 
 
