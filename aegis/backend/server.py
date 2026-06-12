@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import os
+from pathlib import Path
 import webbrowser
 
 from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.openapi.utils import get_openapi
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from aegis.backend.auth import verify_bearer_token
@@ -108,6 +111,39 @@ def create_app(settings: AegisSettings | None = None) -> FastAPI:
     app.include_router(build_routing_router())
     app.include_router(build_system_router(active_settings))
     _install_docs_bearer_auth(app)
+
+    dist_index = None
+    dist_root = active_settings.dist_dir
+    if active_settings.dist_dir:
+        candidate = active_settings.dist_dir / "index.html"
+        if candidate.exists():
+            dist_index = candidate
+        assets_dir = active_settings.dist_dir / "assets"
+        if assets_dir.exists():
+            app.mount("/assets", StaticFiles(directory=assets_dir), name="assets")
+
+    if dist_index is not None:
+
+        @app.get("/", include_in_schema=False)
+        async def root_index():
+            return FileResponse(dist_index)
+
+        @app.get("/{front_path:path}", include_in_schema=False)
+        async def spa_fallback(front_path: str):
+            if front_path.startswith("api/") or front_path == "health":
+                return JSONResponse(status_code=404, content={"detail": "Not Found"})
+
+            if dist_root:
+                candidate = (dist_root / front_path).resolve()
+                try:
+                    candidate.relative_to(dist_root.resolve())
+                except ValueError:
+                    candidate = None
+                if candidate and candidate.is_file():
+                    return FileResponse(candidate)
+
+            return FileResponse(dist_index)
+
     return app
 
 
@@ -124,11 +160,13 @@ def start_server(
             "Use --insecure to intentionally expose Aegis on the network."
         )
 
+    dist_dir = Path(__file__).resolve().parent / "web_dist"
     settings = load_aegis_settings(
         host=host,
         port=port,
         open_browser=open_browser,
         allow_public=allow_public,
+        dist_dir=dist_dir,
     )
     app = create_app(settings)
 
@@ -137,10 +175,12 @@ def start_server(
         print(settings.session_token)
     else:
         print("Aegis session token source: AEGIS_SESSION_TOKEN")
+    if os.environ.get("AEGIS_DEBUG_AUTH") == "1":
+        print(f"AEGIS_DEBUG_AUTH session token: {settings.session_token}")
 
     if open_browser:
         try:
-            webbrowser.open(f"http://{_format_browser_host(host)}:{port}/docs")
+            webbrowser.open(f"http://{_format_browser_host(host)}:{port}/login")
         except Exception:
             pass
 

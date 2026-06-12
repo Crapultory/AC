@@ -13,6 +13,12 @@ source .venv/bin/activate
 python aegis/backend/main.py
 ```
 
+Or use the Hermes entrypoint:
+
+```bash
+hermes aegis
+```
+
 Default bind settings:
 
 - Host: `127.0.0.1`
@@ -84,6 +90,16 @@ Interactive docs are available at:
 ```text
 http://127.0.0.1:9130/docs
 ```
+
+The hosted frontend login page is available at:
+
+```text
+http://127.0.0.1:9130/login
+```
+
+`hermes aegis` automatically builds `aegis/frontend` when the source files are
+newer than `aegis/backend/web_dist`. Use `--skip-build` only when the dist has
+already been prepared.
 
 ## Manual Smoke Checks
 

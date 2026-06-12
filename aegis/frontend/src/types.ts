@@ -1,26 +1,46 @@
+export type AgentStatus = 'Active' | 'Idle' | 'Offline';
+export type RoutingRuleStatus = 'Enabled' | 'Disabled';
+
 export interface Agent {
   id: string;
   name: string;
   type: 'agent' | 'vip_tool';
   description: string;
-  status: 'Active' | 'Idle' | 'Offline';
+  status: AgentStatus;
   tasksCount: number;
   lastUpdated: string;
-  skillDescription?: string; // For remote agent skills configuration
+  skillDescription?: string;
   a2aAddr?: string;
   authHeaderKey?: string;
   authHeaderValue?: string;
+  extCapabilities?: string[];
 }
 
 export interface RoutingRule {
   id: string;
   priority: number;
   ruleName: string;
-  agentId: string; // The agent mapped by this rule
-  conditions: string; // e.g. "Severity == Critical"
-  actions: string; // e.g. "Assign to SOAR Agent"
-  status: 'Enabled' | 'Disabled';
+  agentId: string;
+  conditions: string;
+  actions: string;
+  status: RoutingRuleStatus;
   updateTime: string;
+}
+
+export interface AgentDraft {
+  agentId: string;
+  url: string;
+  description: string;
+  status: AgentStatus;
+  authHeaderKey: string;
+  authHeaderValue: string;
+  extCapabilitiesText: string;
+}
+
+export interface RoutingRuleDraft {
+  name: string;
+  policy: string;
+  status: RoutingRuleStatus;
 }
 
 export interface ChainStep {

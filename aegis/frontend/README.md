@@ -1,13 +1,13 @@
 # Aegis Frontend
 
-`aegis/frontend/` 是 Aegis 安全协同中枢的独立前端原型模块。它基于 `React 19 + Vite 6 + Tailwind CSS 4 + Motion`，当前以本地 mock 数据驱动，用来演示中控总览、智能对话、Agent 编排和路由策略配置四个核心页面。
+`aegis/frontend/` 是 Aegis 安全协同中枢的前端控制台。它基于 `React 19 + Vite 6 + Tailwind CSS 4 + Motion`，其中 `Agent Orchestration` 与 `Routing Policy` 已接入 `aegis/backend` 的真实 API，并由后台直接托管生产静态资源。
 
 ## 当前能力
 
 - `Overview`：展示安全中枢总览、拓扑星图、Agent 索引和安全态势卡片。
 - `Aegis Chat`：提供本地模拟的安全分析会话流，按预设场景回放 Agent/VIP Tool 协同链路。
-- `Agent Orchestration`：支持新增、编辑、删除 Agent/VIP Tool 配置，并写入本地缓存。
-- `Routing Policy`：支持新增、编辑、启停全局路由规则，并写入本地缓存。
+- `Agent Orchestration`：支持登录后对 `/api/agents` 执行新增、编辑、删除。
+- `Routing Policy`：支持登录后对 `/api/routing/global` 执行新增、编辑、删除。
 
 ## 技术栈
 
@@ -31,21 +31,34 @@
    `cd aegis/frontend`
 2. 安装依赖：
    `npm install`
-3. 启动开发服务器：
-   `npm run dev`
+3. 启动 Aegis 后端（推荐）：
+   `hermes aegis`
 4. 在浏览器打开：
-   `http://127.0.0.1:3000`
+   `http://127.0.0.1:9130/login`
 
 说明：
 
-- 当前原型不依赖后端服务，也不需要配置 `GEMINI_API_KEY`。
-- 页面状态保存在浏览器 `localStorage`，键名包括 `aegis_agents`、`aegis_rules`、`aegis_convs`。
+- 登录令牌来自后端 `AEGIS_SESSION_TOKEN`。
+- Agent 与 Global Rule 数据持久化在 `HERMES_HOME/a2a.json`。
+- Chat 页面的会话回放仍然保存在浏览器 `localStorage`，键名为 `aegis_convs`。
+
+如果只想跑前端开发服务器：
+
+1. 启动后端：
+   `python aegis/backend/main.py --no-open`
+2. 另一个终端进入 `aegis/frontend`
+3. 运行：
+   `npm run dev`
+4. 打开：
+   `http://127.0.0.1:3000/login`
+
+Vite 已经代理 `/api` 和 `/health` 到 `http://127.0.0.1:9130`。
 
 ## 常用命令
 
 - `npm run dev`：启动开发环境，默认监听 `0.0.0.0:3000`
 - `npm run lint`：执行 `tsc --noEmit`
-- `npm run build`：生成生产构建产物
+- `npm run build`：生成生产构建产物到 `aegis/backend/web_dist`
 - `npm run preview`：本地预览构建结果
 
 ## 目录结构
@@ -63,8 +76,13 @@ aegis/frontend
 │   ├── types.ts
 │   ├── vite-env.d.ts
 │   ├── data/mockData.ts
+│   ├── lib
+│   │   ├── adapters.ts
+│   │   ├── api.ts
+│   │   └── auth.ts
 │   └── components
 │       ├── Sidebar.tsx
+│       ├── LoginScreen.tsx
 │       ├── OverviewTab.tsx
 │       ├── ChatTab.tsx
 │       ├── AgentTab.tsx
@@ -73,9 +91,9 @@ aegis/frontend
 
 ## 数据与交互说明
 
-- 所有页面都使用 `src/data/mockData.ts` 中的初始化数据。
-- 用户在页面上的配置编辑会写回 `localStorage`，刷新页面后会保留。
-- Chat 页面的回复与执行链路为前端模拟逻辑，不会真正调用 A2A、RPC 或外部安全系统。
+- `Agent Orchestration` 读取和写入 `/api/agents`。
+- `Routing Policy` 读取和写入 `/api/routing/global`。
+- Chat 页面的回复与执行链路仍为前端模拟逻辑，不会真正调用 A2A、RPC 或外部安全系统。
 - 当前侧边栏品牌图标接入的是 `logo/aegis-icon-brand-tile-color.svg`。
 
 ## 本次 Review 摘要
@@ -86,5 +104,5 @@ aegis/frontend
 
 ## 已知边界
 
-- 当前仍是高保真原型，不包含真实 API、鉴权、A2A 通信或服务端持久化。
-- 侧边栏 logo 已切到正式品牌资源，但页面其余视觉元素仍然属于原型阶段，后续可以继续统一品牌规范。
+- 当前只对接了 `Agent Orchestration` 和 `Routing Policy` 两个后端模块。
+- `Overview` 与 `Aegis Chat` 仍然偏演示态，尚未接真实安全执行链路。

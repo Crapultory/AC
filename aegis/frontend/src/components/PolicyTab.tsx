@@ -1,181 +1,169 @@
-import React, { useState, useMemo } from 'react';
-import { RoutingRule } from '../types';
-import { 
-  Plus, 
-  Search, 
-  Edit2, 
-  Trash2, 
-  X 
-} from 'lucide-react';
-import { motion, AnimatePresence } from 'motion/react';
+import React, { useMemo, useState } from 'react';
+import { Edit2, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
+import { ApiError } from '../lib/api';
+import { RoutingRule, RoutingRuleDraft } from '../types';
 
 interface PolicyTabProps {
   rules: RoutingRule[];
-  setRules: React.Dispatch<React.SetStateAction<RoutingRule[]>>;
+  busy: boolean;
+  onCreate: (draft: RoutingRuleDraft) => Promise<void>;
+  onUpdate: (ruleId: string, draft: RoutingRuleDraft) => Promise<void>;
+  onDelete: (ruleId: string) => Promise<void>;
+  onRefresh: () => Promise<void>;
 }
 
-export default function PolicyTab({ rules, setRules }: PolicyTabProps) {
+export default function PolicyTab({
+  rules,
+  busy,
+  onCreate,
+  onDelete,
+  onRefresh,
+  onUpdate,
+}: PolicyTabProps) {
   const [searchTerm, setSearchTerm] = useState('');
-  
-  // Dialog State
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<RoutingRule | null>(null);
-
-  // Form Fields
   const [formName, setFormName] = useState('');
   const [formConditions, setFormConditions] = useState('');
   const [formStatus, setFormStatus] = useState<'Enabled' | 'Disabled'>('Enabled');
+  const [submitting, setSubmitting] = useState(false);
+  const [error, setError] = useState('');
 
-  // Show only global routing rules on this prototype page.
   const filteredRules = useMemo(() => {
-    return rules.filter(r => {
-      const matchSearch = r.ruleName.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          r.conditions.toLowerCase().includes(searchTerm.toLowerCase());
-      
-      const isGlobal = r.conditions === 'Default' || r.agentId === 'all';
-
-      return matchSearch && isGlobal;
+    return rules.filter((rule) => {
+      const matchSearch =
+        rule.ruleName.toLowerCase().includes(searchTerm.toLowerCase()) ||
+        rule.conditions.toLowerCase().includes(searchTerm.toLowerCase());
+      return matchSearch;
     });
   }, [rules, searchTerm]);
 
-  const handleToggleRuleStatus = (id: string) => {
-    setRules(prev => prev.map(r => {
-      if (r.id === id) {
-        return {
-          ...r,
-          status: r.status === 'Enabled' ? 'Disabled' : 'Enabled',
-          updateTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-        };
-      }
-      return r;
-    }));
-  };
-
-  const handleOpenCreateModal = () => {
+  function handleOpenCreateModal() {
     setEditingRule(null);
     setFormName('');
     setFormConditions('');
     setFormStatus('Enabled');
+    setError('');
     setIsModalOpen(true);
-  };
+  }
 
-  const handleOpenEditModal = (rule: RoutingRule) => {
+  function handleOpenEditModal(rule: RoutingRule) {
     setEditingRule(rule);
     setFormName(rule.ruleName);
     setFormConditions(rule.conditions);
     setFormStatus(rule.status);
+    setError('');
     setIsModalOpen(true);
-  };
+  }
 
-  const handleDeleteRule = (id: string) => {
-    if (window.confirm('Delete this routing policy? (确定要删除这条路由策略/规则吗？)')) {
-      setRules(prev => prev.filter(r => r.id !== id));
-    }
-  };
-
-  const handleSaveRule = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (!formName.trim() || !formConditions.trim()) {
-      alert('请填写规则名称与具体的路由规则内容！');
+  async function handleDeleteRule(ruleId: string) {
+    if (!window.confirm('Delete this routing policy? (确定要删除这条路由策略/规则吗？)')) {
       return;
     }
 
-    if (editingRule) {
-      setRules(prev => prev.map(r => {
-        if (r.id === editingRule.id) {
-          return {
-            ...r,
-            ruleName: formName,
-            agentId: 'all',
-            conditions: formConditions,
-            actions: 'Auto Directed',
-            priority: r.priority,
-            status: formStatus,
-            updateTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-          };
-        }
-        return r;
-      }));
-    } else {
-      const newRule: RoutingRule = {
-        id: `rule-custom-${Date.now()}`,
-        priority: rules.length + 1,
-        ruleName: formName,
-        agentId: 'all',
-        conditions: formConditions,
-        actions: 'Auto Directed',
-        status: formStatus,
-        updateTime: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })
-      };
-      setRules(prev => [...prev, newRule]);
+    try {
+      await onDelete(ruleId);
+      setError('');
+    } catch (caughtError) {
+      setError(caughtError instanceof ApiError ? caughtError.message : '删除路由规则失败。');
+    }
+  }
+
+  async function handleSaveRule(event: React.FormEvent) {
+    event.preventDefault();
+    if (!formName.trim() || !formConditions.trim()) {
+      setError('请填写规则名称与具体的路由规则内容。');
+      return;
     }
 
-    setIsModalOpen(false);
-  };
+    setSubmitting(true);
+    setError('');
+
+    const draft: RoutingRuleDraft = {
+      name: formName.trim(),
+      policy: formConditions.trim(),
+      status: formStatus,
+    };
+
+    try {
+      if (editingRule) {
+        await onUpdate(editingRule.id, draft);
+      } else {
+        await onCreate(draft);
+      }
+      setIsModalOpen(false);
+    } catch (caughtError) {
+      setError(caughtError instanceof ApiError ? caughtError.message : '保存路由规则失败。');
+    } finally {
+      setSubmitting(false);
+    }
+  }
 
   return (
-    <div className="space-y-6 flex-1 overflow-y-auto p-6 scrollbar-thin select-none text-xs">
-      
-      {/* Visual Policy Rules Explanation Card */}
-      <div className="p-5 bg-[#05080F] border border-slate-800 rounded-xl relative overflow-hidden flex flex-col md:flex-row gap-4 justify-between items-start md:items-center">
-        <div className="absolute right-0 top-0 h-32 w-32 bg-cyan-500/5 rounded-full blur-2xl" />
-        <div className="space-y-1.5 flex-1 max-w-2xl">
-          <h3 className="text-sm font-bold text-white flex items-center gap-1.5 uppercase tracking-widest italic">
-            Aegis Smart Policy Router (路由Policy中枢)
+    <div className="flex-1 space-y-6 overflow-y-auto p-6 text-xs scrollbar-thin select-none">
+      <div className="relative flex flex-col justify-between gap-4 overflow-hidden rounded-xl border border-slate-800 bg-[#05080F] p-5 md:flex-row md:items-center">
+        <div className="absolute right-0 top-0 h-32 w-32 rounded-full bg-cyan-500/5 blur-2xl" />
+        <div className="max-w-2xl flex-1 space-y-1.5">
+          <h3 className="flex items-center gap-1.5 text-sm font-bold uppercase tracking-widest italic text-white">
+            Aegis Smart Policy Router (路由 Policy 中枢)
           </h3>
-          <p className="text-slate-400 leading-relaxed">
-            默认基于 <strong>Agent Card技能描述</strong> (通过 A2A / JSON-RPC 反射自描述) 进行匹配自适应路由。
-            当需要补充跨智能体的统一分流、兜底拦截或默认处置策略时，
-            在此仅维护 <strong>Global Routing Rules (全局路由规则)</strong>，由 Aegis 连接器优先生效并覆盖默认自动路由。
+          <p className="leading-relaxed text-slate-400">
+            当前页面直接管理 `a2a.json` 中的 <strong>Global Routing Rules</strong>。
+            这些全局策略会优先于默认 Agent 能力匹配，用于统一分流、兜底拦截与默认处置。
           </p>
         </div>
-        <div className="shrink-0 py-2 px-3 bg-[#03060C] border border-slate-800 rounded font-mono text-cyan-400 font-bold text-[10px]">
-          Core Mode: <strong className="text-white">Profile Reflexive</strong>
+        <div className="shrink-0 rounded border border-slate-800 bg-[#03060C] px-3 py-2 text-[10px] font-bold text-cyan-400">
+          Core Mode: <strong className="text-white">Global Rules Only</strong>
         </div>
       </div>
 
-      {/* Main Container */}
-      <div className="bg-[#05080F] border border-slate-800 rounded-xl flex flex-col overflow-hidden">
-        
-        {/* Search Toolbar */}
-        <div className="p-4 bg-[#03060C] border-b border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="flex flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#05080F]">
+        <div className="flex flex-col justify-between gap-4 border-b border-slate-800 bg-[#03060C] p-4 md:flex-row md:items-center">
           <button
             type="button"
-            className="px-3 py-1.5 bg-[#020408] border border-slate-800 rounded-lg shrink-0 text-xs font-bold text-cyan-400 cursor-default"
+            className="cursor-default rounded-lg border border-slate-800 bg-[#020408] px-3 py-1.5 text-xs font-bold text-cyan-400"
           >
             Global Routing Rules (全局规则路由)
           </button>
 
-          {/* Sub-toolbar tools */}
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative">
-              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-600" />
+              <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
               <input
                 type="text"
                 value={searchTerm}
-                onChange={(e) => setSearchTerm(e.target.value)}
+                onChange={(event) => setSearchTerm(event.target.value)}
                 placeholder="Search global rule, condition..."
-                className="bg-[#020408] border border-slate-800 rounded px-3 py-1.5 pl-8 text-xs text-white focus:outline-none focus:border-cyan-500 placeholder-slate-700 w-52 font-mono"
+                className="w-52 rounded border border-slate-800 bg-[#020408] py-1.5 pl-8 pr-3 font-mono text-xs text-white placeholder-slate-700 focus:border-cyan-500 focus:outline-none"
               />
             </div>
 
             <button
+              onClick={() => void onRefresh()}
+              className="flex shrink-0 items-center gap-1 rounded border border-slate-800 bg-[#020408] px-3 py-1.5 text-xs font-semibold text-slate-300 transition-all hover:bg-slate-900"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${busy ? 'animate-spin' : ''}`} /> Refresh
+            </button>
+
+            <button
               onClick={handleOpenCreateModal}
-              className="px-3 py-1.5 bg-cyan-500 hover:bg-cyan-600 text-white rounded font-bold transition-all flex items-center gap-1 text-xs shrink-0 select-none shadow-[0_0_10px_rgba(6,182,212,0.35)] border-0"
+              className="flex shrink-0 items-center gap-1 rounded border-0 bg-cyan-500 px-3 py-1.5 text-xs font-bold text-white shadow-[0_0_10px_rgba(6,182,212,0.35)] transition-all hover:bg-cyan-600"
             >
               <Plus className="h-3.5 w-3.5" /> 新建路由规则
             </button>
           </div>
         </div>
 
-        {/* Rules Matrix Table */}
+        {error ? <div className="border-b border-rose-900/30 bg-rose-950/20 px-4 py-3 text-xs text-rose-300">{error}</div> : null}
+
         <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse">
+          <table className="w-full border-collapse text-left">
             <thead>
-              <tr className="bg-[#03060C] border-b border-slate-800 text-slate-500 font-mono text-[9px] uppercase tracking-wider">
+              <tr className="border-b border-slate-800 bg-[#03060C] font-mono text-[9px] uppercase tracking-wider text-slate-500">
                 <th className="p-3">Rule Name & Config</th>
                 <th className="p-3">Routing Scope</th>
-                <th className="p-3">Global Rule Content (规则内容)</th>
+                <th className="p-3">Global Rule Content</th>
                 <th className="p-3">Active State</th>
                 <th className="p-3">Last Change</th>
                 <th className="p-3 text-center">Actions</th>
@@ -184,176 +172,146 @@ export default function PolicyTab({ rules, setRules }: PolicyTabProps) {
             <tbody className="divide-y divide-slate-800/50">
               {filteredRules.length === 0 ? (
                 <tr>
-                  <td colSpan={6} className="p-8 text-center text-slate-500 font-mono text-xs">
+                  <td colSpan={6} className="p-8 text-center font-mono text-xs text-slate-500">
                     No rules matching standard set.
                   </td>
                 </tr>
               ) : (
-                filteredRules.map((rule) => {
-                  return (
-                    <tr key={rule.id} className="hover:bg-[#03060C]/60 transition-colors">
-                      {/* Rule configuration name */}
-                      <td className="p-3 min-w-[160px]">
-                        <div>
-                          <div className="font-bold text-slate-200 text-xs">{rule.ruleName}</div>
-                          <div className="text-[10px] text-slate-500 font-mono">Rule ID: {rule.id}</div>
-                        </div>
-                      </td>
- 
-                      {/* Global routing scope */}
-                      <td className="p-3 whitespace-nowrap">
-                        <span className="text-slate-400 font-bold bg-[#080C14] border border-slate-800 px-1.5 py-0.5 rounded text-[10px] font-mono">
-                          All Work Agents
+                filteredRules.map((rule) => (
+                  <tr key={rule.id} className="transition-colors hover:bg-[#03060C]/60">
+                    <td className="min-w-[160px] p-3">
+                      <div>
+                        <div className="text-xs font-bold text-slate-200">{rule.ruleName}</div>
+                        <div className="text-[10px] font-mono text-slate-500">Rule ID: {rule.id}</div>
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap p-3">
+                      <span className="rounded border border-slate-800 bg-[#080C14] px-1.5 py-0.5 font-mono text-[10px] font-bold text-slate-400">
+                        All Work Agents
+                      </span>
+                    </td>
+                    <td className="max-w-sm p-3">
+                      <div className="line-clamp-2 text-xs leading-relaxed text-cyan-400 font-mono">{rule.conditions}</div>
+                    </td>
+                    <td className="whitespace-nowrap p-3">
+                      {rule.status === 'Enabled' ? (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-900/30 bg-emerald-950/20 px-2 py-0.5 font-mono text-[9px] font-bold text-emerald-400">
+                          ACTIVE (启用)
                         </span>
-                      </td>
- 
-                      {/* Rule Content */}
-                      <td className="p-3 max-w-sm">
-                        <div className="text-cyan-400 text-xs leading-relaxed font-mono line-clamp-2">
-                          {rule.conditions}
-                        </div>
-                      </td>
- 
-                      {/* Active toggle */}
-                      <td className="p-3 whitespace-nowrap">
+                      ) : (
+                        <span className="inline-flex items-center gap-1 rounded-full border border-slate-800/80 bg-slate-900/40 px-2 py-0.5 font-mono text-[9px] text-slate-500">
+                          DISABLED (停用)
+                        </span>
+                      )}
+                    </td>
+                    <td className="whitespace-nowrap p-3 font-mono text-slate-500">{rule.updateTime}</td>
+                    <td className="whitespace-nowrap p-3 text-center">
+                      <div className="flex justify-center gap-2">
                         <button
-                          onClick={() => handleToggleRuleStatus(rule.id)}
-                          className="flex items-center gap-1 transition-all cursor-pointer"
+                          onClick={() => handleOpenEditModal(rule)}
+                          className="rounded border border-slate-800 bg-[#080C14] p-1 text-cyan-400 transition-all hover:bg-slate-850 hover:text-cyan-300"
+                          title="Edit global routing rule"
                         >
-                          {rule.status === 'Enabled' ? (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-950/20 text-emerald-400 border border-emerald-900/30 font-mono text-[9px] font-bold">
-                              ACTIVE (启用)
-                            </span>
-                          ) : (
-                            <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-900/40 text-slate-500 border border-slate-800/80 font-mono text-[9px]">
-                              DISABLED (停用)
-                            </span>
-                          )}
+                          <Edit2 className="h-3 w-3" />
                         </button>
-                      </td>
- 
-                      {/* Telemetry timestamp */}
-                      <td className="p-3 font-mono text-slate-500 whitespace-nowrap">
-                        {rule.updateTime}
-                      </td>
- 
-                      {/* Actions */}
-                      <td className="p-3 text-center whitespace-nowrap">
-                        <div className="flex gap-2 justify-center">
-                          <button
-                            onClick={() => handleOpenEditModal(rule)}
-                            className="p-1 bg-[#080C14] border border-slate-800 rounded text-cyan-400 hover:text-cyan-300 hover:bg-slate-850 transition-all cursor-pointer"
-                            title="Edit global routing rule"
-                          >
-                            <Edit2 className="h-3 w-3" />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteRule(rule.id)}
-                            className="p-1 bg-rose-950/10 border border-rose-900/40 rounded text-rose-400 hover:text-rose-300 hover:bg-rose-950/20 transition-all cursor-pointer"
-                            title="Delete global routing rule"
-                          >
-                            <Trash2 className="h-3 w-3" />
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })
+                        <button
+                          onClick={() => void handleDeleteRule(rule.id)}
+                          className="rounded border border-rose-900/40 bg-rose-950/10 p-1 text-rose-400 transition-all hover:bg-rose-950/20 hover:text-rose-300"
+                          title="Delete global routing rule"
+                        >
+                          <Trash2 className="h-3 w-3" />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
               )}
             </tbody>
           </table>
         </div>
       </div>
 
-      {/* CRUD Rule dialog modal */}
       <AnimatePresence>
         {isModalOpen && (
-          <div className="fixed inset-0 bg-black/85 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-            <motion.div 
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm">
+            <motion.div
               initial={{ scale: 0.96, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.96, opacity: 0 }}
-              className="bg-[#05080F] border border-slate-800 w-full max-w-md rounded-xl overflow-hidden shadow-2xl flex flex-col"
+              className="flex w-full max-w-md flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#05080F] shadow-2xl"
             >
-              {/* Header */}
-              <div className="bg-[#03060C] p-4 border-b border-slate-800/80 flex justify-between items-center">
-                <h4 className="text-xs font-bold text-white uppercase tracking-wider">
+              <div className="flex items-center justify-between border-b border-slate-800/80 bg-[#03060C] p-4">
+                <h4 className="text-xs font-bold uppercase tracking-wider text-white">
                   {editingRule ? '编辑全局路由规则' : '创建全局路由规则'}
                 </h4>
-                <button 
+                <button
                   onClick={() => setIsModalOpen(false)}
-                  className="p-1 text-slate-500 hover:text-white rounded hover:bg-slate-800 transition-all cursor-pointer"
+                  className="rounded p-1 text-slate-500 transition-all hover:bg-slate-800 hover:text-white"
                 >
                   <X className="h-4 w-4" />
                 </button>
               </div>
 
-              {/* Form Body */}
-              <form onSubmit={handleSaveRule} className="p-4 space-y-4">
+              <form onSubmit={(event) => void handleSaveRule(event)} className="space-y-4 p-4">
                 <div className="space-y-3.5">
-                  
-                  {/* Name field */}
                   <div className="space-y-1">
-                    <label className="text-[9px] font-mono text-slate-500 uppercase tracking-wider font-bold">条目规则名称 (Rule Name) *</label>
+                    <label className="text-[9px] font-mono font-bold uppercase tracking-wider text-slate-500">条目规则名称 (Rule Name) *</label>
                     <input
                       type="text"
                       required
                       value={formName}
-                      onChange={(e) => setFormName(e.target.value)}
+                      onChange={(event) => setFormName(event.target.value)}
                       placeholder="e.g. 钓鱼邮件重设优先级"
-                      className="w-full bg-[#020408] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500 placeholder-slate-700 font-mono"
+                      className="w-full rounded border border-slate-800 bg-[#020408] px-2.5 py-1.5 font-mono text-xs text-white placeholder-slate-700 focus:border-cyan-500 focus:outline-none"
                     />
                   </div>
 
                   <div className="space-y-1">
-                    <label className="text-[9px] font-mono text-slate-500 uppercase tracking-wider font-bold">作用范围 (Routing Scope)</label>
-                    <div className="w-full bg-[#020408] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-300 font-mono">
+                    <label className="text-[9px] font-mono font-bold uppercase tracking-wider text-slate-500">作用范围 (Routing Scope)</label>
+                    <div className="w-full rounded border border-slate-800 bg-[#020408] px-2.5 py-1.5 font-mono text-xs text-slate-300">
                       All Agents / Global Fallback
                     </div>
                   </div>
 
-                  {/* Rule Content Parameter */}
                   <div className="space-y-1">
-                    <label className="text-[9px] font-mono text-slate-500 uppercase tracking-wider font-bold">全局规则内容 (Rule Content) *</label>
+                    <label className="text-[9px] font-mono font-bold uppercase tracking-wider text-slate-500">全局规则内容 (Rule Content) *</label>
                     <textarea
                       rows={4}
                       required
                       value={formConditions}
-                      onChange={(e) => setFormConditions(e.target.value)}
-                      placeholder="e.g. 请输入统一分流、过滤、兜底处置的全局策略内容..."
-                      className="w-full bg-[#020408] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500 placeholder-slate-700 font-mono"
+                      onChange={(event) => setFormConditions(event.target.value)}
+                      placeholder="请输入统一分流、过滤、兜底处置的全局策略内容..."
+                      className="w-full rounded border border-slate-800 bg-[#020408] px-2.5 py-1.5 font-mono text-xs text-white placeholder-slate-700 focus:border-cyan-500 focus:outline-none"
                     />
                   </div>
 
-                  {/* Status Toggle */}
                   <div className="space-y-1">
-                    <label className="text-[9px] font-mono text-slate-500 uppercase tracking-wider font-bold">规则状态 (Status)</label>
+                    <label className="text-[9px] font-mono font-bold uppercase tracking-wider text-slate-500">规则状态 (Status)</label>
                     <select
                       value={formStatus}
-                      onChange={(e) => setFormStatus(e.target.value as any)}
-                      className="w-full bg-[#020408] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-cyan-400 focus:outline-none focus:border-cyan-500 font-mono"
+                      onChange={(event) => setFormStatus(event.target.value as 'Enabled' | 'Disabled')}
+                      className="w-full rounded border border-slate-800 bg-[#020408] px-2.5 py-1.5 font-mono text-xs text-cyan-400 focus:border-cyan-500 focus:outline-none"
                     >
                       <option value="Enabled">Enabled (启用)</option>
                       <option value="Disabled">Disabled (停用)</option>
                     </select>
                   </div>
-
                 </div>
 
-                {/* Submit buttons */}
-                <div className="pt-4 border-t border-slate-800 flex justify-end gap-2 text-xs">
+                <div className="flex justify-end gap-2 border-t border-slate-800 pt-4 text-xs">
                   <button
                     type="button"
                     onClick={() => setIsModalOpen(false)}
-                    className="px-4 py-2 border border-slate-800 bg-[#020408] hover:bg-slate-800/50 text-slate-400 hover:text-white rounded transition-all font-semibold cursor-pointer"
+                    className="cursor-pointer rounded border border-slate-800 bg-[#020408] px-4 py-2 font-semibold text-slate-400 transition-all hover:bg-slate-800/50 hover:text-white"
                   >
                     取消
                   </button>
                   <button
                     type="submit"
-                    className="px-5 py-2 bg-cyan-500 hover:bg-cyan-600 text-white rounded hover:shadow-[0_0_10px_rgba(6,182,212,0.4)] transition-all font-semibold border-0 cursor-pointer"
+                    disabled={submitting}
+                    className="cursor-pointer rounded border-0 bg-cyan-500 px-5 py-2 font-semibold text-white transition-all hover:bg-cyan-600 hover:shadow-[0_0_10px_rgba(6,182,212,0.4)] disabled:cursor-not-allowed disabled:opacity-60"
                   >
-                    保存规则
+                    {submitting ? 'Saving...' : '保存规则'}
                   </button>
                 </div>
               </form>
@@ -361,7 +319,6 @@ export default function PolicyTab({ rules, setRules }: PolicyTabProps) {
           </div>
         )}
       </AnimatePresence>
-
     </div>
   );
 }

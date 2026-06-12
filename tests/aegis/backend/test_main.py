@@ -21,6 +21,10 @@ def _ns(**kwargs) -> argparse.Namespace:
         host="127.0.0.1",
         no_open=False,
         insecure=False,
+        skip_build=False,
+        stop=False,
+        status=False,
+        profile=None,
     )
     defaults.update(kwargs)
     return argparse.Namespace(**defaults)
@@ -38,6 +42,7 @@ def test_build_parser_defaults_to_standalone_port() -> None:
 
     assert args.port == 9130
     assert args.host == "127.0.0.1"
+    assert args.skip_build is False
 
 
 def test_cmd_aegis_dispatches_server_start(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -47,11 +52,13 @@ def test_cmd_aegis_dispatches_server_start(monkeypatch: pytest.MonkeyPatch) -> N
     def _fake_start_server(**kwargs) -> None:
         called.update(kwargs)
 
+    monkeypatch.setattr(backend_main, "_ensure_server_dist_available", lambda skip_build: called.setdefault("skip_build", skip_build))
     monkeypatch.setattr("aegis.backend.server.start_server", _fake_start_server)
 
     backend_main.cmd_aegis(_ns(port=9135, host="0.0.0.0", no_open=True, insecure=True))
 
     assert called == {
+        "skip_build": False,
         "host": "0.0.0.0",
         "port": 9135,
         "open_browser": False,
@@ -100,7 +107,28 @@ def test_start_server_formats_ipv6_browser_url(monkeypatch: pytest.MonkeyPatch) 
 
     backend_server.start_server(host="::1", port=9130, open_browser=True)
 
-    assert opened["url"] == "http://[::1]:9130/docs"
+    assert opened["url"] == "http://[::1]:9130/login"
+
+
+def test_root_serves_index_html(tmp_path) -> None:
+    backend_server = importlib.import_module("aegis.backend.server")
+    config = importlib.import_module("aegis.backend.config")
+
+    dist_dir = tmp_path / "web_dist"
+    dist_dir.mkdir(parents=True)
+    marker = "<div id='aegis-root'>aegis</div>"
+    (dist_dir / "index.html").write_text(marker, encoding="utf-8")
+
+    app = backend_server.create_app(config.load_aegis_settings(dist_dir=dist_dir))
+    client = TestClient(app)
+
+    resp_root = client.get("/")
+    assert resp_root.status_code == 200
+    assert marker in resp_root.text
+
+    resp_spa = client.get("/login")
+    assert resp_spa.status_code == 200
+    assert marker in resp_spa.text
 
 
 def test_create_app_keeps_public_endpoints_available_when_store_is_invalid(

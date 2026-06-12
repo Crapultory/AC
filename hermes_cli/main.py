@@ -11111,6 +11111,13 @@ def cmd_aisoc(args):
     return backend_cmd_aisoc(args)
 
 
+def cmd_aegis(args):
+    """Delegate Aegis startup to the backend entrypoint."""
+    from aegis.backend.main import cmd_aegis as backend_cmd_aegis
+
+    return backend_cmd_aegis(args)
+
+
 def cmd_completion(args, parser=None):
     """Print shell completion script."""
     from hermes_cli.completion import generate_bash, generate_zsh, generate_fish
@@ -11163,7 +11170,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
     {
         "acp", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
         "computer-use",
-        "config", "cron", "curator", "dashboard", "aisoc", "debug", "doctor",
+        "config", "cron", "curator", "dashboard", "aegis", "aisoc", "debug", "doctor",
         "dump", "fallback", "gateway", "hooks", "import", "insights",
         "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate",
         "model", "pairing", "plugins", "portal", "postinstall", "profile", "proxy",
@@ -14380,6 +14387,19 @@ Examples:
         help="List running hermes dashboard processes and exit",
     )
     dashboard_parser.set_defaults(func=cmd_dashboard)
+
+    # =========================================================================
+    # aegis command
+    # =========================================================================
+    aegis_parser = subparsers.add_parser(
+        "aegis",
+        help="Start the Aegis web console",
+        description="Launch the Aegis console for agent orchestration and routing policy controls",
+    )
+    from aegis.backend.main import configure_aegis_parser as _configure_aegis_parser
+
+    _configure_aegis_parser(aegis_parser)
+    aegis_parser.set_defaults(func=cmd_aegis)
 
     # =========================================================================
     # aisoc command

@@ -7,8 +7,12 @@ describe('PolicyTab', () => {
   it('shows only the global routing rules entry point', () => {
     render(
       <PolicyTab
+        busy={false}
+        onCreate={vi.fn(async () => {})}
+        onDelete={vi.fn(async () => {})}
+        onRefresh={vi.fn(async () => {})}
+        onUpdate={vi.fn(async () => {})}
         rules={initialRules}
-        setRules={vi.fn()}
       />,
     );
 

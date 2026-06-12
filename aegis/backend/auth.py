@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import os
+
 from fastapi import HTTPException, Request
 
 from aegis.backend.config import AegisSettings
@@ -22,7 +24,14 @@ def extract_bearer_token(request: Request) -> str | None:
 
 def token_matches(token: str | None, settings: AegisSettings) -> bool:
     """Return True when a candidate token matches the configured session token."""
-    return bool(token) and token == settings.session_token
+    if not token:
+        return False
+
+    env_token = (os.environ.get("AEGIS_SESSION_TOKEN") or "").strip()
+    if env_token:
+        return token == env_token
+
+    return token == settings.session_token
 
 
 def verify_bearer_token(request: Request, settings: AegisSettings) -> None:
