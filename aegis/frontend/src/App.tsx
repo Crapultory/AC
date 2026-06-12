@@ -114,7 +114,7 @@ export default function App() {
             <AgentTab agents={agents} setAgents={setAgents} />
           )}
           {activeTab === 'policy' && (
-            <PolicyTab agents={agents} rules={rules} setRules={setRules} />
+            <PolicyTab rules={rules} setRules={setRules} />
           )}
         </main>
       </div>

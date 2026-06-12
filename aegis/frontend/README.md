@@ -7,7 +7,7 @@
 - `Overview`：展示安全中枢总览、拓扑星图、Agent 索引和安全态势卡片。
 - `Aegis Chat`：提供本地模拟的安全分析会话流，按预设场景回放 Agent/VIP Tool 协同链路。
 - `Agent Orchestration`：支持新增、编辑、删除 Agent/VIP Tool 配置，并写入本地缓存。
-- `Routing Policy`：支持新增、编辑、启停策略规则，并写入本地缓存。
+- `Routing Policy`：支持新增、编辑、启停全局路由规则，并写入本地缓存。
 
 ## 技术栈
 

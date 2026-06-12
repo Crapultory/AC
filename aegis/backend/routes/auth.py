@@ -36,4 +36,3 @@ def build_auth_router(settings: AegisSettings) -> APIRouter:
         return AuthLogoutResponse(logged_out=True)
 
     return router
-

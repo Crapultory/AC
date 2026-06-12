@@ -66,7 +66,9 @@ The file-backed store uses this shape:
 ```
 
 `a2a` stores agent definitions keyed by agent ID. `global` stores global
-routing rules as an array.
+routing rules as an array. Agent URLs are persisted as normalized HTTP URLs;
+legacy entries without a scheme such as `127.0.0.1:9086/a2a` are accepted and
+served back as `http://127.0.0.1:9086/a2a`.
 
 ## API Surface In Scope
 

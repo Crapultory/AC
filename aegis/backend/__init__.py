@@ -1,2 +1,1 @@
 """Standalone Aegis backend package."""
-

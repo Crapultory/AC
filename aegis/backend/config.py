@@ -58,4 +58,3 @@ def is_loopback_host(host: str) -> bool:
     """Return True when host binds loopback only."""
     normalized = (host or "").strip().lower()
     return normalized in {"127.0.0.1", "localhost", "::1"}
-

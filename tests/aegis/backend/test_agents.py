@@ -311,6 +311,43 @@ def test_list_agents_supports_legacy_string_persisted_entries(
     }
 
 
+def test_list_agents_normalizes_legacy_string_entry_without_scheme(
+    load_backend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    _write_store(
+        tmp_path / "a2a.json",
+        {
+            "a2a": {
+                "legacy-agent": "127.0.0.1:9086/a2a",
+            },
+            "global": [],
+        },
+    )
+
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    with TestClient(app) as client:
+        response = client.get("/api/agents", headers=AUTH_HEADERS)
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "agents": [
+            {
+                "agent_id": "legacy-agent",
+                "url": "http://127.0.0.1:9086/a2a",
+                "description": "",
+                "headers": {},
+                "status": "offline",
+                "extcapabilities": [],
+            }
+        ]
+    }
+
+
 def test_get_agent_returns_controlled_error_for_malformed_persisted_entry(
     load_backend,
     monkeypatch: pytest.MonkeyPatch,
@@ -360,6 +397,35 @@ def test_create_rejects_invalid_url(agent_client: TestClient) -> None:
 
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"] == ["body", "url"]
+
+
+def test_create_normalizes_url_without_scheme(agent_client: TestClient, hermes_home) -> None:
+    response = agent_client.post(
+        "/api/agents/agent-1",
+        headers=AUTH_HEADERS,
+        json={
+            "url": "127.0.0.1:9086/a2a",
+            "description": "A2A test endpoint",
+            "headers": {},
+            "status": "active",
+            "extcapabilities": [],
+        },
+    )
+
+    assert response.status_code == 201
+    assert response.json()["url"] == "http://127.0.0.1:9086/a2a"
+    assert json.loads((hermes_home / "a2a.json").read_text()) == {
+        "a2a": {
+            "agent-1": {
+                "url": "http://127.0.0.1:9086/a2a",
+                "description": "A2A test endpoint",
+                "headers": {},
+                "status": "active",
+                "extcapabilities": [],
+            }
+        },
+        "global": [],
+    }
 
 
 def test_update_rejects_invalid_url(agent_client: TestClient) -> None:

@@ -23,4 +23,3 @@ def build_system_router(settings: AegisSettings) -> APIRouter:
         )
 
     return router
-

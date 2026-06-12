@@ -3,8 +3,10 @@ from __future__ import annotations
 import argparse
 import importlib
 import importlib.util
+import json
 
 import pytest
+from fastapi.testclient import TestClient
 
 
 def _load_backend_main():
@@ -99,3 +101,35 @@ def test_start_server_formats_ipv6_browser_url(monkeypatch: pytest.MonkeyPatch) 
     backend_server.start_server(host="::1", port=9130, open_browser=True)
 
     assert opened["url"] == "http://[::1]:9130/docs"
+
+
+def test_create_app_keeps_public_endpoints_available_when_store_is_invalid(
+    load_backend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "a2a.json").write_text(json.dumps({"a2a": [], "global": []}))
+
+    backend_server = load_backend("aegis.backend.server")
+    app = backend_server.create_app()
+
+    with TestClient(app) as client:
+        health_response = client.get("/health")
+        assert health_response.status_code == 200
+        assert health_response.json() == {"status": "ok"}
+
+        session_response = client.get("/api/auth/session")
+        assert session_response.status_code == 200
+        assert session_response.json() == {
+            "authenticated": False,
+            "token_source": "env",
+        }
+
+    with TestClient(app, raise_server_exceptions=False) as client:
+        protected_response = client.get(
+            "/api/agents",
+            headers={"Authorization": "Bearer test-session-token"},
+        )
+        assert protected_response.status_code == 500

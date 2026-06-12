@@ -1,31 +1,21 @@
 import React, { useState, useMemo } from 'react';
-import { RoutingRule, Agent } from '../types';
-import { initialRules } from '../data/mockData';
+import { RoutingRule } from '../types';
 import { 
   Plus, 
   Search, 
   Edit2, 
   Trash2, 
-  ToggleLeft, 
-  ToggleRight, 
-  Layers, 
-  ShieldAlert, 
-  Award,
-  ArrowUp,
-  ArrowDown,
   X 
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
 interface PolicyTabProps {
-  agents: Agent[];
   rules: RoutingRule[];
   setRules: React.Dispatch<React.SetStateAction<RoutingRule[]>>;
 }
 
-export default function PolicyTab({ agents, rules, setRules }: PolicyTabProps) {
+export default function PolicyTab({ rules, setRules }: PolicyTabProps) {
   const [searchTerm, setSearchTerm] = useState('');
-  const [activeSubTab, setActiveSubTab] = useState<'agent' | 'global'>('agent');
   
   // Dialog State
   const [isModalOpen, setIsModalOpen] = useState(false);
@@ -33,23 +23,20 @@ export default function PolicyTab({ agents, rules, setRules }: PolicyTabProps) {
 
   // Form Fields
   const [formName, setFormName] = useState('');
-  const [formAgentId, setFormAgentId] = useState('');
   const [formConditions, setFormConditions] = useState('');
   const [formStatus, setFormStatus] = useState<'Enabled' | 'Disabled'>('Enabled');
 
-  // Filter Rules (Priority sorting removed, sorting by newest update time or ID instead)
+  // Show only global routing rules on this prototype page.
   const filteredRules = useMemo(() => {
     return rules.filter(r => {
       const matchSearch = r.ruleName.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           r.conditions.toLowerCase().includes(searchTerm.toLowerCase());
       
-      const mappedAgent = agents.find(a => a.id === r.agentId);
       const isGlobal = r.conditions === 'Default' || r.agentId === 'all';
-      const matchSubTab = activeSubTab === 'global' ? isGlobal : !isGlobal;
 
-      return matchSearch && matchSubTab;
+      return matchSearch && isGlobal;
     });
-  }, [rules, searchTerm, activeSubTab]);
+  }, [rules, searchTerm]);
 
   const handleToggleRuleStatus = (id: string) => {
     setRules(prev => prev.map(r => {
@@ -67,7 +54,6 @@ export default function PolicyTab({ agents, rules, setRules }: PolicyTabProps) {
   const handleOpenCreateModal = () => {
     setEditingRule(null);
     setFormName('');
-    setFormAgentId(activeSubTab === 'global' ? 'all' : (agents[0]?.id || 'all'));
     setFormConditions('');
     setFormStatus('Enabled');
     setIsModalOpen(true);
@@ -76,7 +62,6 @@ export default function PolicyTab({ agents, rules, setRules }: PolicyTabProps) {
   const handleOpenEditModal = (rule: RoutingRule) => {
     setEditingRule(rule);
     setFormName(rule.ruleName);
-    setFormAgentId(rule.agentId);
     setFormConditions(rule.conditions);
     setFormStatus(rule.status);
     setIsModalOpen(true);
@@ -101,7 +86,7 @@ export default function PolicyTab({ agents, rules, setRules }: PolicyTabProps) {
           return {
             ...r,
             ruleName: formName,
-            agentId: activeSubTab === 'global' ? 'all' : formAgentId,
+            agentId: 'all',
             conditions: formConditions,
             actions: 'Auto Directed',
             priority: r.priority,
@@ -116,7 +101,7 @@ export default function PolicyTab({ agents, rules, setRules }: PolicyTabProps) {
         id: `rule-custom-${Date.now()}`,
         priority: rules.length + 1,
         ruleName: formName,
-        agentId: activeSubTab === 'global' ? 'all' : formAgentId,
+        agentId: 'all',
         conditions: formConditions,
         actions: 'Auto Directed',
         status: formStatus,
@@ -140,8 +125,8 @@ export default function PolicyTab({ agents, rules, setRules }: PolicyTabProps) {
           </h3>
           <p className="text-slate-400 leading-relaxed">
             默认基于 <strong>Agent Card技能描述</strong> (通过 A2A / JSON-RPC 反射自描述) 进行匹配自适应路由。
-            如果存在外部远程非驻留智能体 (Remote Agent) 或高优先安全级阻断拦截，
-            在此 <strong>手动配置技能描述规则 (Agent Rule)</strong> 或 <strong>全局过滤规则 (Global Policy)</strong>，由 Aegis 连接器抢占优先执行。
+            当需要补充跨智能体的统一分流、兜底拦截或默认处置策略时，
+            在此仅维护 <strong>Global Routing Rules (全局路由规则)</strong>，由 Aegis 连接器优先生效并覆盖默认自动路由。
           </p>
         </div>
         <div className="shrink-0 py-2 px-3 bg-[#03060C] border border-slate-800 rounded font-mono text-cyan-400 font-bold text-[10px]">
@@ -152,32 +137,14 @@ export default function PolicyTab({ agents, rules, setRules }: PolicyTabProps) {
       {/* Main Container */}
       <div className="bg-[#05080F] border border-slate-800 rounded-xl flex flex-col overflow-hidden">
         
-        {/* Toggle between tabs & Search Toolbar */}
+        {/* Search Toolbar */}
         <div className="p-4 bg-[#03060C] border-b border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-4">
-          
-          {/* Sub-Tabs Switches */}
-          <div className="flex gap-1 bg-[#020408] p-1 border border-slate-800 rounded-lg shrink-0">
-            <button
-              onClick={() => setActiveSubTab('agent')}
-              className={`px-3 py-1.5 rounded-md font-bold transition-all text-xs cursor-pointer ${
-                activeSubTab === 'agent' 
-                  ? 'bg-[#080C14] text-cyan-400 border border-slate-800' 
-                  : 'text-slate-500 hover:text-slate-300'
-              }`}
-            >
-              Agent Card Rules (智能体技能路由)
-            </button>
-            <button
-              onClick={() => setActiveSubTab('global')}
-              className={`px-3 py-1.5 rounded-md font-bold transition-all text-xs cursor-pointer ${
-                activeSubTab === 'global' 
-                  ? 'bg-[#080C14] text-cyan-400 border border-slate-800' 
-                  : 'text-slate-500 hover:text-slate-300'
-              }`}
-            >
-              Global Routing Rules (全局规则路由)
-            </button>
-          </div>
+          <button
+            type="button"
+            className="px-3 py-1.5 bg-[#020408] border border-slate-800 rounded-lg shrink-0 text-xs font-bold text-cyan-400 cursor-default"
+          >
+            Global Routing Rules (全局规则路由)
+          </button>
 
           {/* Sub-toolbar tools */}
           <div className="flex flex-wrap items-center gap-2">
@@ -187,7 +154,7 @@ export default function PolicyTab({ agents, rules, setRules }: PolicyTabProps) {
                 type="text"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
-                placeholder="Search rule, condition..."
+                placeholder="Search global rule, condition..."
                 className="bg-[#020408] border border-slate-800 rounded px-3 py-1.5 pl-8 text-xs text-white focus:outline-none focus:border-cyan-500 placeholder-slate-700 w-52 font-mono"
               />
             </div>
@@ -207,8 +174,8 @@ export default function PolicyTab({ agents, rules, setRules }: PolicyTabProps) {
             <thead>
               <tr className="bg-[#03060C] border-b border-slate-800 text-slate-500 font-mono text-[9px] uppercase tracking-wider">
                 <th className="p-3">Rule Name & Config</th>
-                <th className="p-3">Matched Agent Node</th>
-                <th className="p-3">Rule Content (规则内容)</th>
+                <th className="p-3">Routing Scope</th>
+                <th className="p-3">Global Rule Content (规则内容)</th>
                 <th className="p-3">Active State</th>
                 <th className="p-3">Last Change</th>
                 <th className="p-3 text-center">Actions</th>
@@ -222,8 +189,7 @@ export default function PolicyTab({ agents, rules, setRules }: PolicyTabProps) {
                   </td>
                 </tr>
               ) : (
-                filteredRules.map((rule, idx) => {
-                  const targetAgent = agents.find(a => a.id === rule.agentId);
+                filteredRules.map((rule) => {
                   return (
                     <tr key={rule.id} className="hover:bg-[#03060C]/60 transition-colors">
                       {/* Rule configuration name */}
@@ -234,22 +200,11 @@ export default function PolicyTab({ agents, rules, setRules }: PolicyTabProps) {
                         </div>
                       </td>
  
-                      {/* Matched Agent node details */}
+                      {/* Global routing scope */}
                       <td className="p-3 whitespace-nowrap">
-                        {rule.agentId === 'all' ? (
-                          <span className="text-slate-400 font-bold bg-[#080C14] border border-slate-800 px-1.5 py-0.5 rounded text-[10px] font-mono">
-                            All Work Agents
-                          </span>
-                        ) : targetAgent ? (
-                          <div className="flex items-center gap-1.5">
-                            <span className="h-1 w-1 rounded-full bg-emerald-500" />
-                            <div className="font-mono text-slate-300">{targetAgent.name}</div>
-                          </div>
-                        ) : (
-                          <span className="text-rose-400 font-bold bg-rose-950/10 border border-rose-900/40 px-1.5 py-0.5 rounded text-[10px]">
-                            Missing Node Mapping
-                          </span>
-                        )}
+                        <span className="text-slate-400 font-bold bg-[#080C14] border border-slate-800 px-1.5 py-0.5 rounded text-[10px] font-mono">
+                          All Work Agents
+                        </span>
                       </td>
  
                       {/* Rule Content */}
@@ -288,14 +243,14 @@ export default function PolicyTab({ agents, rules, setRules }: PolicyTabProps) {
                           <button
                             onClick={() => handleOpenEditModal(rule)}
                             className="p-1 bg-[#080C14] border border-slate-800 rounded text-cyan-400 hover:text-cyan-300 hover:bg-slate-850 transition-all cursor-pointer"
-                            title="Edit policy values"
+                            title="Edit global routing rule"
                           >
                             <Edit2 className="h-3 w-3" />
                           </button>
                           <button
                             onClick={() => handleDeleteRule(rule.id)}
                             className="p-1 bg-rose-950/10 border border-rose-900/40 rounded text-rose-400 hover:text-rose-300 hover:bg-rose-950/20 transition-all cursor-pointer"
-                            title="Purge policy"
+                            title="Delete global routing rule"
                           >
                             <Trash2 className="h-3 w-3" />
                           </button>
@@ -323,7 +278,7 @@ export default function PolicyTab({ agents, rules, setRules }: PolicyTabProps) {
               {/* Header */}
               <div className="bg-[#03060C] p-4 border-b border-slate-800/80 flex justify-between items-center">
                 <h4 className="text-xs font-bold text-white uppercase tracking-wider">
-                  {editingRule ? '编辑路由策略规则' : '创建自定义路由规则'}
+                  {editingRule ? '编辑全局路由规则' : '创建全局路由规则'}
                 </h4>
                 <button 
                   onClick={() => setIsModalOpen(false)}
@@ -350,32 +305,22 @@ export default function PolicyTab({ agents, rules, setRules }: PolicyTabProps) {
                     />
                   </div>
 
-                  {/* Mapping Agent Select */}
-                  {activeSubTab !== 'global' && (
-                    <div className="space-y-1">
-                      <label className="text-[9px] font-mono text-slate-500 uppercase tracking-wider font-bold">指向处理智能体 (Decisive Agent Node) *</label>
-                      <select
-                        value={formAgentId}
-                        onChange={(e) => setFormAgentId(e.target.value)}
-                        className="w-full bg-[#020408] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-cyan-400 focus:outline-none focus:border-cyan-500 font-mono"
-                      >
-                        <option value="all">-- Global: All Agents (全局应用) --</option>
-                        {agents.map(a => (
-                          <option key={a.id} value={a.id}>{a.name} ({a.type === 'agent' ? 'Agent' : 'VIP'})</option>
-                        ))}
-                      </select>
+                  <div className="space-y-1">
+                    <label className="text-[9px] font-mono text-slate-500 uppercase tracking-wider font-bold">作用范围 (Routing Scope)</label>
+                    <div className="w-full bg-[#020408] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-slate-300 font-mono">
+                      All Agents / Global Fallback
                     </div>
-                  )}
+                  </div>
 
                   {/* Rule Content Parameter */}
                   <div className="space-y-1">
-                    <label className="text-[9px] font-mono text-slate-500 uppercase tracking-wider font-bold">规则内容 (Rule Content) *</label>
+                    <label className="text-[9px] font-mono text-slate-500 uppercase tracking-wider font-bold">全局规则内容 (Rule Content) *</label>
                     <textarea
                       rows={4}
                       required
                       value={formConditions}
                       onChange={(e) => setFormConditions(e.target.value)}
-                      placeholder="e.g. 请输入具体路由执行或过滤触发的策略描述规则内容内容..."
+                      placeholder="e.g. 请输入统一分流、过滤、兜底处置的全局策略内容..."
                       className="w-full bg-[#020408] border border-slate-800 rounded px-2.5 py-1.5 text-xs text-white focus:outline-none focus:border-cyan-500 placeholder-slate-700 font-mono"
                     />
                   </div>
