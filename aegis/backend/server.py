@@ -14,6 +14,8 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from aegis.backend.auth import verify_bearer_token
+from aegis.backend.chat.routes import build_chat_router
+from aegis.backend.chat.service import ChatSessionManager
 from aegis.backend.config import AegisSettings, is_loopback_host, load_aegis_settings
 from aegis.backend.routes.agents import build_agents_router
 from aegis.backend.routes.auth import build_auth_router
@@ -80,6 +82,8 @@ def create_app(settings: AegisSettings | None = None) -> FastAPI:
     active_settings = settings or load_aegis_settings()
     app = FastAPI(title="Aegis Backend")
     app.state.aegis_settings = active_settings
+    chat_manager = ChatSessionManager()
+    app.state.chat_manager = chat_manager
 
     app.add_middleware(
         CORSMiddleware,
@@ -110,6 +114,7 @@ def create_app(settings: AegisSettings | None = None) -> FastAPI:
     app.include_router(build_agents_router())
     app.include_router(build_routing_router())
     app.include_router(build_system_router(active_settings))
+    app.include_router(build_chat_router(active_settings, manager=chat_manager))
     _install_docs_bearer_auth(app)
 
     dist_index = None

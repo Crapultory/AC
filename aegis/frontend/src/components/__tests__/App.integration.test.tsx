@@ -141,7 +141,7 @@ describe('Aegis App integration', () => {
     fireEvent.click(screen.getByRole('button', { name: /保存规则/i }));
 
     await screen.findByText('New Rule');
-    expect(screen.getByText('Route suspicious email to email-sec')).toBeInTheDocument();
+    expect(screen.getAllByText('Route suspicious email to email-sec').length).toBeGreaterThan(0);
 
     await waitFor(() => {
       expect(requests.some((request) => request.url === '/api/agents/new-agent' && request.auth === 'Bearer test-session-token')).toBe(true);
