@@ -202,7 +202,7 @@ class TestDelegateExt:
         hermes_home = tmp_path / "profile"
         hermes_home.mkdir()
         (hermes_home / "a2a.json").write_text(
-            '{"a2a":{"test":"http://127.0.0.1/a2a"}}',
+            '{"a2a":{"test":{"url":"http://127.0.0.1/a2a","status":"active"}}}',
             encoding="utf-8",
         )
         monkeypatch.setattr(a2a_delegate_tool_module, "get_hermes_home", lambda: hermes_home)
@@ -248,7 +248,7 @@ class TestDelegateExt:
         hermes_home = tmp_path / "profile"
         hermes_home.mkdir()
         (hermes_home / "a2a.json").write_text(
-            '{"a2a":{"broken":"http://127.0.0.1/a2a"}}',
+            '{"a2a":{"broken":{"url":"http://127.0.0.1/a2a","status":"active"}}}',
             encoding="utf-8",
         )
         monkeypatch.setattr(a2a_delegate_tool_module, "get_hermes_home", lambda: hermes_home)
@@ -265,7 +265,9 @@ class TestDelegateExt:
         assert result["agents"][0]["capabilities"] == []
         assert "connection refused" in result["agents"][0]["error"]
 
-    def test_a2a_list_skips_offline_agents_and_merges_extcapabilities(self, tmp_path, monkeypatch):
+    def test_a2a_list_keeps_only_active_agents_and_merges_extcapabilities(
+        self, tmp_path, monkeypatch
+    ):
         hermes_home = tmp_path / "profile"
         hermes_home.mkdir()
         (hermes_home / "a2a.json").write_text(
@@ -283,6 +285,11 @@ class TestDelegateExt:
                             "url": "http://127.0.0.1:9087/a2a",
                             "status": "offline",
                             "extcapabilities": ["should-not-appear"],
+                        },
+                        "paused-agent": {
+                            "url": "http://127.0.0.1:9088/a2a",
+                            "status": "paused",
+                            "extcapabilities": ["also-should-not-appear"],
                         },
                     }
                 }

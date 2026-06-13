@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from aisoc.backend.agent_runtime import build_profile_agent_kwargs
+from aisoc.backend.agent_runtime import build_profile_agent_kwargs, default_agent_factory
 
 
 def _fake_cfg_get(cfg, *keys, default=None):
@@ -105,3 +105,49 @@ def test_build_profile_agent_kwargs_respects_explicit_empty_platform_toolsets() 
     )
 
     assert agent_kwargs["enabled_toolsets"] == []
+
+
+def test_default_agent_factory_forwards_ephemeral_system_prompt(
+    monkeypatch,
+) -> None:
+    cfg = {
+        "model": {
+            "default": "deepseek-v4-flash",
+            "provider": "custom:chatai",
+        },
+    }
+    config_module = SimpleNamespace(
+        load_config_readonly=lambda: cfg,
+        cfg_get=_fake_cfg_get,
+    )
+    runtime_provider_module = SimpleNamespace(
+        resolve_runtime_provider=lambda **_: {
+            "provider": "custom",
+            "model": "gpt-5.4",
+            "source": "custom_provider:chatai",
+        }
+    )
+    created_kwargs: dict[str, object] = {}
+
+    class _FakeAgent:
+        def __init__(self, **kwargs):
+            created_kwargs.update(kwargs)
+
+    class _FakeSessionDB:
+        pass
+
+    monkeypatch.delenv("AISOC_A2A_TEST_MODE", raising=False)
+    monkeypatch.setattr("run_agent.AIAgent", _FakeAgent)
+
+    agent = default_agent_factory(
+        "context-123",
+        platform="aisoc-a2a",
+        config_module=config_module,
+        runtime_provider_module=runtime_provider_module,
+        session_db_cls=_FakeSessionDB,
+        ephemeral_system_prompt="Stay in incident-response mode.",
+    )
+
+    assert isinstance(agent, _FakeAgent)
+    assert created_kwargs["session_id"] == "context-123"
+    assert created_kwargs["ephemeral_system_prompt"] == "Stay in incident-response mode."

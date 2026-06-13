@@ -227,7 +227,7 @@ def _load_a2a_registry(force_refresh: bool = False) -> dict[str, dict[str, Any]]
             }
             continue
 
-        if entry.get("status") == "offline":
+        if entry.get("status") != "active":
             continue
 
         fetch_kwargs: dict[str, Any] = {}
