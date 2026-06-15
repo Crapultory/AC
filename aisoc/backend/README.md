@@ -72,6 +72,8 @@ python aisoc/backend/main.py -p myprofile --module extcli
 - 支持 `delegate_ext(is_loop=true)` 前台子会话；子会话激活时，终端输入会临时路由给子 agent
 - 子会话内 `/main` 与 `/exit` 等价，都会结束子会话并返回主会话；只有主会话前台时 `/exit` 才会退出整个 `extcli`
 - 支持 `/new` 重置当前主会话；当子会话前台时，`/new` 会作为普通输入传给子 agent
+- `a2a` / `extcli` 模块启动的 agent 会按 Hermes 原生语义加载 `config.yaml` 中启用的 `mcp_servers`
+- 可通过环境变量 `AISOC_MCP_ACTIVE` 覆盖该行为：未设置时自动加载，`true/1/yes/on` 强制启用，`false/0/no/off` 禁用
 
 ### 2.2 直接以 Python 启动（调试后端）
 
@@ -88,6 +90,7 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 ### 2.3 Token 配置
 - `AISOC_SESSION_TOKEN`：若设置，则使用静态 token（`token_source=env`）
 - 未设置时：进程启动自动生成随机 token（`token_source=generated`）
+- `AISOC_MCP_ACTIVE`：仅影响 `a2a` / `extcli` 的 MCP 装载；默认跟随配置自动加载，设置为 `false/0/no/off` 可在启动时关闭 MCP
 
 ---
 

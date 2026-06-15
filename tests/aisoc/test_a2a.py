@@ -13,6 +13,7 @@ from a2a.client import Client, ClientConfig, ClientFactory
 from a2a.types import CancelTaskRequest, GetTaskRequest, Message, Part, Role, SendMessageConfiguration, SendMessageRequest, Task, TaskState
 
 from aisoc.backend.a2a_server import create_a2a_app
+import aisoc.backend.a2a_server as a2a_server
 import aisoc.backend.a2a_service.executor as a2a_executor
 from aisoc.backend.config import load_aisoc_settings
 
@@ -283,7 +284,10 @@ async def test_a2a_message_send_task_lifecycle() -> None:
     try:
         card = await bundle.http_client.get("http://testserver/.well-known/agent-card.json")
         assert card.status_code == 200
-        assert card.json()["supportedInterfaces"][0]["url"] == "http://127.0.0.1:9086/test"
+        assert (
+            card.json()["supportedInterfaces"][0]["url"]
+            == f"http://127.0.0.1:9086{a2a_server.A2A_RPC_PATH}"
+        )
 
         task = await _send_text(bundle.client, "hello world")
         assert task.status.state == TaskState.TASK_STATE_SUBMITTED
@@ -349,7 +353,7 @@ def test_a2a_default_agent_factory_injects_current_profile_config(
     monkeypatch.setattr("run_agent.AIAgent", _FakeAgent)
     monkeypatch.setattr(a2a_executor, "SessionDB", _FakeSessionDB, raising=False)
 
-    caplog.set_level(logging.INFO, logger="aisoc.backend.a2a.executor")
+    caplog.set_level(logging.INFO, logger="aisoc.backend.a2a_service.executor")
 
     agent = a2a_executor._default_agent_factory("context-123")
 
@@ -370,6 +374,25 @@ def test_a2a_default_agent_factory_injects_current_profile_config(
     assert created_kwargs["session_db"] is created_session_dbs[0]
     assert "_a2a_runtime_source" not in created_kwargs
     assert "A2A profile injection" in caplog.text
+
+
+def test_start_a2a_server_bootstraps_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(a2a_server, "prepare_hermes_home", lambda: calls.append("prepare"))
+    monkeypatch.setattr(a2a_server, "start_aisoc_mcp_bootstrap", lambda logger=None: calls.append("bootstrap"))
+    monkeypatch.setattr(
+        a2a_server,
+        "load_aisoc_settings",
+        lambda **kwargs: SimpleNamespace(host=kwargs["host"], port=kwargs["port"]),
+    )
+    monkeypatch.setattr(a2a_server, "create_a2a_app", lambda *args, **kwargs: object())
+    monkeypatch.setattr(a2a_server, "is_loopback_host", lambda host: True)
+    monkeypatch.setattr(a2a_server.uvicorn, "run", lambda *args, **kwargs: calls.append("uvicorn"))
+
+    a2a_server.start_a2a_server(host="127.0.0.1", port=9086)
+
+    assert calls == ["prepare", "bootstrap", "uvicorn"]
 
 
 @pytest.mark.asyncio
@@ -488,12 +511,12 @@ async def test_a2a_agent_card_is_available_under_rpc_prefix() -> None:
     bundle = await _task_bundle(lambda session_id: _StreamingAgent(), streaming=True)
     try:
         card = await bundle.http_client.get(
-            "http://testserver/test/.well-known/agent-card.json"
+            f"http://testserver{a2a_server.A2A_RPC_PATH}/.well-known/agent-card.json"
         )
         assert card.status_code == 200
         payload = card.json()
         assert payload["capabilities"]["streaming"] is True
-        assert payload["supportedInterfaces"][0]["url"].endswith("/test")
+        assert payload["supportedInterfaces"][0]["url"].endswith(a2a_server.A2A_RPC_PATH)
     finally:
         await bundle.close()
 

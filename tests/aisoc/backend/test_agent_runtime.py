@@ -72,7 +72,7 @@ def test_build_profile_agent_kwargs_keeps_a2a_when_platform_toolsets_missing() -
         runtime_provider_module=runtime_provider_module,
     )
 
-    assert agent_kwargs["enabled_toolsets"] == ["a2a"]
+    assert agent_kwargs["enabled_toolsets"] == ["hermes-cli", "a2a"]
 
 
 def test_build_profile_agent_kwargs_respects_explicit_empty_platform_toolsets() -> None:
@@ -105,6 +105,147 @@ def test_build_profile_agent_kwargs_respects_explicit_empty_platform_toolsets() 
     )
 
     assert agent_kwargs["enabled_toolsets"] == []
+
+
+def test_build_profile_agent_kwargs_auto_appends_enabled_mcp_servers() -> None:
+    cfg = {
+        "model": {
+            "default": "deepseek-v4-flash",
+            "provider": "custom:chatai",
+        },
+        "mcp_servers": {
+            "filesystem": {"enabled": True},
+            "github": {"enabled": "yes"},
+            "disabled-one": {"enabled": False},
+        },
+    }
+    config_module = SimpleNamespace(
+        load_config_readonly=lambda: cfg,
+        cfg_get=_fake_cfg_get,
+    )
+    runtime_provider_module = SimpleNamespace(
+        resolve_runtime_provider=lambda **_: {
+            "provider": "custom",
+            "model": "gpt-5.4",
+            "source": "custom_provider:chatai",
+        }
+    )
+
+    agent_kwargs = build_profile_agent_kwargs(
+        "context-123",
+        platform="aisoc-a2a",
+        config_module=config_module,
+        runtime_provider_module=runtime_provider_module,
+    )
+
+    assert agent_kwargs["enabled_toolsets"] == ["hermes-cli", "a2a", "filesystem", "github"]
+
+
+def test_build_profile_agent_kwargs_disables_mcp_via_env(
+    monkeypatch,
+) -> None:
+    cfg = {
+        "model": {
+            "default": "deepseek-v4-flash",
+            "provider": "custom:chatai",
+        },
+        "mcp_servers": {
+            "filesystem": {"enabled": True},
+        },
+    }
+    config_module = SimpleNamespace(
+        load_config_readonly=lambda: cfg,
+        cfg_get=_fake_cfg_get,
+    )
+    runtime_provider_module = SimpleNamespace(
+        resolve_runtime_provider=lambda **_: {
+            "provider": "custom",
+            "model": "gpt-5.4",
+            "source": "custom_provider:chatai",
+        }
+    )
+
+    monkeypatch.setenv("AISOC_MCP_ACTIVE", "false")
+
+    agent_kwargs = build_profile_agent_kwargs(
+        "context-123",
+        platform="aisoc-a2a",
+        config_module=config_module,
+        runtime_provider_module=runtime_provider_module,
+    )
+
+    assert agent_kwargs["enabled_toolsets"] == ["hermes-cli", "a2a"]
+
+
+def test_build_profile_agent_kwargs_honors_no_mcp_sentinel() -> None:
+    cfg = {
+        "model": {
+            "default": "deepseek-v4-flash",
+            "provider": "custom:chatai",
+        },
+        "platform_toolsets": {
+            "aisoc-a2a": ["web", "no_mcp"],
+        },
+        "mcp_servers": {
+            "filesystem": {"enabled": True},
+        },
+    }
+    config_module = SimpleNamespace(
+        load_config_readonly=lambda: cfg,
+        cfg_get=_fake_cfg_get,
+    )
+    runtime_provider_module = SimpleNamespace(
+        resolve_runtime_provider=lambda **_: {
+            "provider": "custom",
+            "model": "gpt-5.4",
+            "source": "custom_provider:chatai",
+        }
+    )
+
+    agent_kwargs = build_profile_agent_kwargs(
+        "context-123",
+        platform="aisoc-a2a",
+        config_module=config_module,
+        runtime_provider_module=runtime_provider_module,
+    )
+
+    assert agent_kwargs["enabled_toolsets"] == ["web"]
+
+
+def test_build_profile_agent_kwargs_preserves_explicit_mcp_allowlist() -> None:
+    cfg = {
+        "model": {
+            "default": "deepseek-v4-flash",
+            "provider": "custom:chatai",
+        },
+        "platform_toolsets": {
+            "aisoc-a2a": ["web", "github"],
+        },
+        "mcp_servers": {
+            "filesystem": {"enabled": True},
+            "github": {"enabled": True},
+        },
+    }
+    config_module = SimpleNamespace(
+        load_config_readonly=lambda: cfg,
+        cfg_get=_fake_cfg_get,
+    )
+    runtime_provider_module = SimpleNamespace(
+        resolve_runtime_provider=lambda **_: {
+            "provider": "custom",
+            "model": "gpt-5.4",
+            "source": "custom_provider:chatai",
+        }
+    )
+
+    agent_kwargs = build_profile_agent_kwargs(
+        "context-123",
+        platform="aisoc-a2a",
+        config_module=config_module,
+        runtime_provider_module=runtime_provider_module,
+    )
+
+    assert agent_kwargs["enabled_toolsets"] == ["web", "github"]
 
 
 def test_default_agent_factory_forwards_ephemeral_system_prompt(
