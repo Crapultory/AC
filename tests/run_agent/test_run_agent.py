@@ -157,7 +157,7 @@ def test_dispatch_helper_injects_runtime_adapters():
     agent._delegate_ext_input_factory = lambda: "INPUT"
 
     with patch(
-        "tools.delegate_ext_tool.a2a_delegate",
+        "tools.a2a_delegate_tool.a2a_delegate",
         return_value='{"ok": true}',
     ) as mock_a2a_delegate:
         agent._dispatch_a2a_delegate(
@@ -186,12 +186,13 @@ def test_dispatch_helper_injects_runtime_adapters():
     )
 
 
-def test_dispatch_helper_omitted_loop_uses_runtime_input_adapter():
+def test_dispatch_helper_omitted_loop_defaults_to_one_shot_mode():
     agent = object.__new__(AIAgent)
-    agent._delegate_ext_input_factory = lambda: "INPUT"
+    factory = MagicMock(return_value="INPUT")
+    agent._delegate_ext_input_factory = factory
 
     with patch(
-        "tools.delegate_ext_tool.a2a_delegate",
+        "tools.a2a_delegate_tool.a2a_delegate",
         return_value='{"ok": true}',
     ) as mock_a2a_delegate:
         agent._dispatch_a2a_delegate(
@@ -201,6 +202,7 @@ def test_dispatch_helper_omitted_loop_uses_runtime_input_adapter():
             }
         )
 
+    factory.assert_not_called()
     mock_a2a_delegate.assert_called_once_with(
         goal="ship it",
         context="repo root",
@@ -211,8 +213,8 @@ def test_dispatch_helper_omitted_loop_uses_runtime_input_adapter():
         session_id=None,
         is_delegate_output=True,
         output=None,
-        is_loop=True,
-        input="INPUT",
+        is_loop=False,
+        input=None,
         parent_agent=agent,
     )
 
@@ -223,7 +225,7 @@ def test_dispatch_helper_skips_input_factory_when_loop_disabled():
     agent._delegate_ext_input_factory = factory
 
     with patch(
-        "tools.delegate_ext_tool.a2a_delegate",
+        "tools.a2a_delegate_tool.a2a_delegate",
         return_value='{"ok": true}',
     ) as mock_a2a_delegate:
         agent._dispatch_a2a_delegate(

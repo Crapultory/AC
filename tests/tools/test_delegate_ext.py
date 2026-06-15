@@ -202,7 +202,24 @@ class TestDelegateExt:
         hermes_home = tmp_path / "profile"
         hermes_home.mkdir()
         (hermes_home / "a2a.json").write_text(
-            '{"a2a":{"test":{"url":"http://127.0.0.1/a2a","status":"active"}}}',
+            json.dumps(
+                {
+                    "a2a": {
+                        "test": {
+                            "url": "http://127.0.0.1/a2a",
+                            "status": "active",
+                        }
+                    },
+                    "global": [
+                        {
+                            "id": "rule1234",
+                            "name": "SOC escalation",
+                            "policy": "route P1 alerts to test",
+                            "status": "active",
+                        }
+                    ],
+                }
+            ),
             encoding="utf-8",
         )
         monkeypatch.setattr(a2a_delegate_tool_module, "get_hermes_home", lambda: hermes_home)
@@ -224,7 +241,17 @@ class TestDelegateExt:
                             "protocol_version": "0.3.0",
                         }
                     ],
-                    "skills": [{"name": "research"}],
+                    "skills": [
+                        {
+                            "id": "research-skill",
+                            "name": "research",
+                            "description": "Find related evidence.",
+                            "tags": ["intel", "analysis"],
+                            "examples": ["Investigate domain abc.com"],
+                            "inputModes": ["text/plain"],
+                            "outputModes": ["text/plain"],
+                        }
+                    ],
                 },
                 None,
             ),
@@ -232,17 +259,12 @@ class TestDelegateExt:
 
         result = json.loads(a2a_list())
 
-        assert result["success"] is True
-        assert result["count"] == 1
-        assert result["agents"][0]["name"] == "test"
-        assert result["agents"][0]["capabilities"] == ["streaming", "skill:research"]
-        assert result["agents"][0]["agent_card"]["version"] == "1.0.0"
-        assert result["agents"][0]["agent_card"]["capabilities"] == {
-            "streaming": True,
-            "push_notifications": False,
-        }
-        assert result["agents"][0]["agent_card"]["skills"] == ["research"]
-        assert result["agents"][0]["agent_card_name"] == "Test Agent"
+        assert "<aegis_context>" in result
+        assert '<agent id="test" url="http://127.0.0.1/a2a" status="active">' in result
+        assert "<capability>id=research-skill | name=research | description=Find related evidence. | tags=intel,analysis | examples=Investigate domain abc.com | inputModes=text/plain | outputModes=text/plain</capability>" in result
+        assert '<rule id="rule1234" status="active">' in result
+        assert "<name>SOC escalation</name>" in result
+        assert "<policy>route P1 alerts to test</policy>" in result
 
     def test_a2a_list_keeps_broken_agent_entries(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / "profile"
@@ -260,10 +282,9 @@ class TestDelegateExt:
 
         result = json.loads(a2a_list())
 
-        assert result["success"] is True
-        assert result["agents"][0]["available"] is False
-        assert result["agents"][0]["capabilities"] == []
-        assert "connection refused" in result["agents"][0]["error"]
+        assert '<agent id="broken" url="http://127.0.0.1/a2a" status="active">' in result
+        assert "<capabilities>" in result
+        assert "connection refused" not in result
 
     def test_a2a_list_keeps_only_active_agents_and_merges_extcapabilities(
         self, tmp_path, monkeypatch
@@ -298,6 +319,7 @@ class TestDelegateExt:
         )
         monkeypatch.setattr(a2a_delegate_tool_module, "get_hermes_home", lambda: hermes_home)
         fetched = []
+        A2A_REGISTRY["cached"] = {"name": "cached", "url": "http://cached.local"}
 
         def _fake_fetch_agent_card(url, headers=None):
             fetched.append((url, headers))
@@ -307,7 +329,17 @@ class TestDelegateExt:
                     "description": "Test remote worker.",
                     "version": "1.0.0",
                     "capabilities": {"streaming": True},
-                    "skills": [{"name": "research"}],
+                    "skills": [
+                        {
+                            "id": "research-skill",
+                            "name": "research",
+                            "description": "Investigate indicators.",
+                            "tags": ["intel"],
+                            "examples": ["Review IOC package"],
+                            "inputModes": ["text/plain"],
+                            "outputModes": ["application/json"],
+                        }
+                    ],
                 },
                 None,
             )
@@ -316,22 +348,19 @@ class TestDelegateExt:
 
         result = json.loads(a2a_list())
 
-        assert result["success"] is True
-        assert result["count"] == 1
-        assert [agent["name"] for agent in result["agents"]] == ["test"]
-        assert result["agents"][0]["capabilities"] == [
-            "streaming",
-            "skill:research",
-            "xxx",
-            "bbb",
-        ]
-        assert "headers" not in result["agents"][0]
+        assert '<agent id="test" url="http://127.0.0.1:9086/a2a" status="active">' in result
+        assert "offline-agent" not in result
+        assert "paused-agent" not in result
+        assert "<capability>id=research-skill | name=research | description=Investigate indicators. | tags=intel | examples=Review IOC package | inputModes=text/plain | outputModes=application/json</capability>" in result
+        assert "<capability>xxx</capability>" in result
+        assert "<capability>bbb</capability>" in result
         assert fetched == [
             (
                 "http://127.0.0.1:9086/a2a",
                 {"Authorization": "Bearer secret-token"},
             )
         ]
+        assert A2A_REGISTRY == {"cached": {"name": "cached", "url": "http://cached.local"}}
 
     def test_a2a_list_fails_on_malformed_registry(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / "profile"
@@ -609,7 +638,6 @@ class TestDelegateExt:
         assert result["final_response"] == "remote:2"
         assert sink == [
             ("delegate", "status", "entered foreground loop", captured["session_id"]),
-            ("delegate", "user", "follow up", "ctx-remote"),
             ("delegate", "status", "return to main", "ctx-remote"),
         ]
 
@@ -625,7 +653,7 @@ class TestDelegateExt:
         }
         mock_agent_cls.return_value = child
 
-        result = json.loads(a2a_delegate(goal="finish task", parent_agent=parent))
+        result = json.loads(a2a_delegate(goal="finish task", agent="local", parent_agent=parent))
 
         assert result["agent"] == "local"
         assert result["toolsets"] == ["hermes-cli"]
@@ -654,6 +682,7 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="inspect code",
+                agent="local",
                 context="focus on tests",
                 toolsets=["terminal", "file"],
                 max_iterations=17,
@@ -682,6 +711,7 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="inspect code",
+                agent="local",
                 session_id="persisted-local-session",
                 parent_agent=parent,
             )
@@ -704,7 +734,9 @@ class TestDelegateExt:
         monkeypatch.setattr(a2a_delegate_tool_module, "get_active_profile_name", lambda: "worker_alpha")
         monkeypatch.setattr(a2a_delegate_tool_module.time, "strftime", lambda fmt: "20260605_123456")
 
-        result = json.loads(a2a_delegate(goal="inspect code", parent_agent=parent))
+        result = json.loads(
+            a2a_delegate(goal="inspect code", agent="local", parent_agent=parent)
+        )
 
         _, kwargs = mock_agent_cls.call_args
         assert kwargs["session_id"] == "delegate_worker_alpha_local_20260605_123456"
@@ -769,6 +801,7 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="bad tools",
+                agent="local",
                 toolsets=["nope-toolset"],
                 parent_agent=parent,
             )
@@ -804,6 +837,7 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="finish",
+                agent="local",
                 is_loop=False,
                 is_delegate_output=True,
                 output=_Output(),
@@ -833,6 +867,7 @@ class TestDelegateExt:
 
         a2a_delegate(
             goal="finish",
+            agent="local",
             is_loop=False,
             is_delegate_output=False,
             output=_Output(),
@@ -852,10 +887,38 @@ class TestDelegateExt:
         }
         mock_agent_cls.return_value = child
 
-        result = json.loads(a2a_delegate(goal="finish task", parent_agent=parent))
+        result = json.loads(
+            a2a_delegate(goal="finish task", agent="local", parent_agent=parent)
+        )
 
         assert result["final_response"] == "done"
         assert result["loop_exit_reason"] == "completed"
+
+    @patch("run_agent.AIAgent")
+    def test_omitted_loop_flag_ignores_input_adapter_by_default(self, mock_agent_cls):
+        parent = _make_mock_parent()
+        child = MagicMock()
+        child.run_conversation.return_value = {
+            "final_response": "done",
+            "completed": True,
+            "api_calls": 1,
+        }
+        mock_agent_cls.return_value = child
+        input_adapter = MagicMock()
+
+        result = json.loads(
+            a2a_delegate(
+                goal="finish task",
+                agent="local",
+                input=input_adapter,
+                parent_agent=parent,
+            )
+        )
+
+        assert result["final_response"] == "done"
+        assert result["loop_exit_reason"] == "completed"
+        input_adapter.enter_foreground.assert_not_called()
+        input_adapter.read_line.assert_not_called()
 
     def test_strip_recursive_delegate_tool_removes_a2a_delegate(self):
         child = MagicMock()
@@ -892,6 +955,7 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="start",
+                agent="local",
                 is_loop=True,
                 input=_Input(["follow up", "/main"]),
                 parent_agent=parent,
@@ -924,6 +988,7 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="start",
+                agent="local",
                 is_loop=True,
                 input=_Input(["/exit"]),
                 parent_agent=parent,
@@ -981,6 +1046,7 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="start",
+                agent="local",
                 is_loop=True,
                 input=_Input(["follow up", "/main"]),
                 parent_agent=parent,

@@ -11,6 +11,7 @@ import time
 import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
+from xml.sax.saxutils import escape
 
 import httpx
 from google.protobuf.json_format import MessageToDict
@@ -37,7 +38,7 @@ A2A_REGISTRY: Dict[str, Dict[str, Any]] = {}
 
 A2A_LIST_SCHEMA = {
     "name": "a2a_list",
-    "description": "List profile-configured A2A agents and summarize their capabilities.",
+    "description": "Build Aegis XML context from active A2A agents and global routing rules.",
     "parameters": {
         "type": "object",
         "properties": {},
@@ -127,21 +128,56 @@ def _public_a2a_entry(entry: dict[str, Any]) -> dict[str, Any]:
     return public_entry
 
 
+def _xml_text(value: Any) -> str:
+    return escape(str(value if value is not None else ""), {"'": "&apos;", '"': "&quot;"})
+
+
+def _extract_a2a_skill_strings(card_json: dict[str, Any] | None) -> list[str]:
+    if not isinstance(card_json, dict):
+        return []
+    extracted: list[str] = []
+    for skill in card_json.get("skills", []):
+        if not isinstance(skill, dict):
+            continue
+        parts: list[str] = []
+        skill_id = skill.get("id")
+        if isinstance(skill_id, str) and skill_id.strip():
+            parts.append(f"id={skill_id.strip()}")
+        name = skill.get("name")
+        if isinstance(name, str) and name.strip():
+            parts.append(f"name={name.strip()}")
+        description = skill.get("description")
+        if isinstance(description, str) and description.strip():
+            parts.append(f"description={description.strip()}")
+        tags = skill.get("tags")
+        if isinstance(tags, list):
+            cleaned_tags = [str(tag).strip() for tag in tags if str(tag).strip()]
+            if cleaned_tags:
+                parts.append(f"tags={','.join(cleaned_tags)}")
+        examples = skill.get("examples")
+        if isinstance(examples, list):
+            cleaned_examples = [str(example).strip() for example in examples if str(example).strip()]
+            if cleaned_examples:
+                parts.append(f"examples={'; '.join(cleaned_examples)}")
+        input_modes = skill.get("inputModes")
+        if isinstance(input_modes, list):
+            cleaned_input_modes = [str(mode).strip() for mode in input_modes if str(mode).strip()]
+            if cleaned_input_modes:
+                parts.append(f"inputModes={','.join(cleaned_input_modes)}")
+        output_modes = skill.get("outputModes")
+        if isinstance(output_modes, list):
+            cleaned_output_modes = [str(mode).strip() for mode in output_modes if str(mode).strip()]
+            if cleaned_output_modes:
+                parts.append(f"outputModes={','.join(cleaned_output_modes)}")
+        if parts:
+            extracted.append(" | ".join(parts))
+    return list(dict.fromkeys(extracted))
+
+
 def _extract_a2a_capabilities(card_json: dict[str, Any] | None) -> list[str]:
     if not isinstance(card_json, dict):
         return []
-    capabilities = card_json.get("capabilities")
-    extracted: list[str] = []
-    if isinstance(capabilities, dict):
-        extracted.extend(
-            str(name) for name, enabled in capabilities.items() if isinstance(name, str) and enabled
-        )
-
-    for skill in card_json.get("skills", []):
-        if isinstance(skill, dict):
-            skill_name = skill.get("name") or skill.get("id")
-            if isinstance(skill_name, str) and skill_name:
-                extracted.append(f"skill:{skill_name}")
+    extracted = list(_extract_a2a_skill_strings(card_json))
 
     # Preserve order while removing duplicates from overlapping fields.
     return list(dict.fromkeys(extracted))
@@ -255,6 +291,86 @@ def _load_a2a_registry(force_refresh: bool = False) -> dict[str, dict[str, Any]]
     return dict(A2A_REGISTRY)
 
 
+def _load_aegis_context_payload() -> dict[str, Any]:
+    path = _a2a_registry_path()
+    if not path.exists():
+        return {"a2a": {}, "global": []}
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if not isinstance(raw, dict):
+        raise ValueError("a2a.json must contain a top-level JSON object.")
+    entries = raw.get("a2a", {})
+    if not isinstance(entries, dict):
+        raise ValueError("a2a.json must contain an object-valued 'a2a' mapping.")
+    global_rules = raw.get("global", [])
+    if not isinstance(global_rules, list):
+        raise ValueError("a2a.json must contain an array-valued 'global' list.")
+    return {"a2a": entries, "global": global_rules}
+
+
+def _build_aegis_context_xml() -> str:
+    payload = _load_aegis_context_payload()
+    lines = [
+        "<aegis_context>",
+        "  <active_agents>",
+    ]
+
+    for name, raw_entry in payload["a2a"].items():
+        entry = _normalize_a2a_registry_entry(name, raw_entry)
+        if entry.get("status") != "active":
+            continue
+        fetch_kwargs: dict[str, Any] = {}
+        if entry.get("headers"):
+            fetch_kwargs["headers"] = dict(entry["headers"])
+        card_json, _error = _fetch_agent_card(entry["url"], **fetch_kwargs)
+        merged_capabilities = _merge_capabilities(
+            _extract_a2a_capabilities(card_json),
+            entry.get("extcapabilities", []),
+        )
+        description = entry.get("description")
+        if not description and isinstance(card_json, dict):
+            card_description = card_json.get("description")
+            if isinstance(card_description, str) and card_description.strip():
+                description = card_description.strip()
+
+        lines.append(
+            f'    <agent id="{_xml_text(name)}" url="{_xml_text(entry["url"])}" status="active">'
+        )
+        lines.append(f"      <description>{_xml_text(description or '')}</description>")
+        lines.append("      <capabilities>")
+        for capability in merged_capabilities:
+            lines.append(f"        <capability>{_xml_text(capability)}</capability>")
+        lines.append("      </capabilities>")
+        lines.append("    </agent>")
+
+    lines.extend(
+        [
+            "  </active_agents>",
+            "  <global_routing>",
+        ]
+    )
+
+    for rule in payload["global"]:
+        if not isinstance(rule, dict):
+            continue
+        if str(rule.get("status") or "").strip().lower() != "active":
+            continue
+        lines.append(
+            f'    <rule id="{_xml_text(rule.get("id") or "")}" status="active">'
+        )
+        lines.append(f"      <name>{_xml_text(rule.get('name') or '')}</name>")
+        lines.append(f"      <policy>{_xml_text(rule.get('policy') or '')}</policy>")
+        lines.append("    </rule>")
+
+    lines.extend(
+        [
+            "  </global_routing>",
+            "</aegis_context>",
+        ]
+    )
+    return "\n".join(lines)
+
+
 def _child_session_id(child) -> str | None:
     session_id = getattr(child, "session_id", None)
     return str(session_id) if isinstance(session_id, str) and session_id else None
@@ -361,20 +477,12 @@ def _normalize_max_iterations(value: Optional[int], parent_agent) -> tuple[int, 
 
 
 def a2a_list() -> str:
-    """Return the currently loaded A2A registry entries."""
+    """Return Aegis XML context built from active A2A agents and routing rules."""
     try:
-        loaded = _load_a2a_registry(force_refresh=True)
+        xml_payload = _build_aegis_context_xml()
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return tool_error(str(exc), success=False)
-    return json.dumps(
-        {
-            "success": True,
-            "count": len(loaded),
-            "registry_path": str(_a2a_registry_path()),
-            "agents": [_public_a2a_entry(entry) for entry in loaded.values()],
-        },
-        ensure_ascii=False,
-    )
+    return json.dumps(xml_payload, ensure_ascii=False)
 
 
 def _run_coro_sync(coro):
@@ -1267,7 +1375,7 @@ def a2a_delegate(
     session_id: Optional[str] = None,
     is_delegate_output: bool = True,
     output=None,
-    is_loop: Optional[bool] = None,
+    is_loop: Optional[bool] = False,
     input=None,
     parent_agent=None,
 ) -> str:
@@ -1276,7 +1384,7 @@ def a2a_delegate(
         return tool_error("a2a_delegate requires a parent agent context.")
     if not isinstance(goal, str) or not goal.strip():
         return tool_error("a2a_delegate requires a non-empty goal.")
-    effective_is_loop = is_loop if is_loop is not None else (input is not None)
+    effective_is_loop = is_loop if is_loop is not None else False
     if effective_is_loop and input is None:
         return tool_error("a2a_delegate loop mode requires an input adapter.")
 
@@ -1370,7 +1478,7 @@ A2A_DELEGATE_SCHEMA = {
             "is_loop": {
                 "type": "boolean",
                 "default": False,
-                "description": "Whether to run in interactive loop mode when a runtime input adapter is available",
+                "description": "Whether to run in interactive loop mode. Defaults to false unless explicitly enabled.",
             },
         },
         "required": ["goal","agent","a2a_name"],

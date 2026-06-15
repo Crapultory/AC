@@ -1,9 +1,41 @@
-{"a2a":{
-   "test":{"url":"http://127.0.0.1:9086/a2a",
-           "description":"A2A test endpoint",
-           "headers":{"Authorization":"Bearer <token>"},
-           "status":"active",
-           "extcapabilities":["支持情报调查，用于ip,domain等快速情报查询","支持网络隔离控制"]
-           }
-}}
-
+{
+  "a2a": {
+    "test": {
+      "url": "http://127.0.0.1:9086/a2a",
+      "description": "A2A test endpoint",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      },
+      "status": "active",
+      "extcapabilities": [
+        "支持情报调查，用于ip,domain等快速情报查询",
+        "支持网络隔离控制"
+      ]
+    },
+    "test3": {
+      "url": "http://127.0.0.1/a45",
+      "description": "asfsdf",
+      "headers": {
+        "Authorization": "123456"
+      },
+      "status": "idle",
+      "extcapabilities": [
+        "sadfsdfsdfsdf"
+      ]
+    }
+  },
+  "global": [
+    {
+      "id": "kz2kadlr",
+      "name": "test",
+      "policy": "this is a test",
+      "status": "active"
+    },
+    {
+      "id": "86kyc5b6",
+      "name": "test2",
+      "policy": "asdfasdf",
+      "status": "inactive"
+    }
+  ]
+}
