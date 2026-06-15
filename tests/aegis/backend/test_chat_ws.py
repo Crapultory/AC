@@ -504,6 +504,51 @@ def test_chat_ws_binds_and_streams_main_agent_events(
             assert completed["content"] == "hello world: hello aegis"
 
 
+def test_chat_ws_keeps_parallel_sessions_isolated(
+    load_backend,
+    monkeypatch,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    app.state.chat_manager.set_agent_factory(lambda session_id: _StreamingAgent(session_id))
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws_one:
+            with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws_two:
+                ws_one.send_json({"type": "session.bind", "title": "Parallel One"})
+                ws_two.send_json({"type": "session.bind", "title": "Parallel Two"})
+
+                session_one = _recv_until(ws_one, "session.bound")["session_id"]
+                session_two = _recv_until(ws_two, "session.bound")["session_id"]
+                assert session_one != session_two
+
+                ws_one.send_json(
+                    {
+                        "type": "message.send",
+                        "session_id": session_one,
+                        "text": "first parallel task",
+                        "client_msg_id": "parallel-1",
+                    }
+                )
+                ws_two.send_json(
+                    {
+                        "type": "message.send",
+                        "session_id": session_two,
+                        "text": "second parallel task",
+                        "client_msg_id": "parallel-2",
+                    }
+                )
+
+                completed_one = _recv_until(ws_one, "message.completed")
+                completed_two = _recv_until(ws_two, "message.completed")
+
+                assert completed_one["session_id"] == session_one
+                assert completed_one["content"] == "hello world: first parallel task"
+                assert completed_two["session_id"] == session_two
+                assert completed_two["content"] == "hello world: second parallel task"
+
+
 def test_chat_ws_a2a_slash_returns_cached_context_without_running_agent(
     load_backend,
     monkeypatch,

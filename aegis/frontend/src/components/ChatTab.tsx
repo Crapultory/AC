@@ -1,5 +1,5 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Agent, ChainStep, Conversation, DelegateToolCall, Message } from '../types';
+import React, { useEffect, useRef, useState } from 'react';
+import { Agent, Conversation, Message } from '../types';
 import {
   Check,
   CheckCircle,
@@ -20,92 +20,14 @@ import {
   ShieldAlert,
   Trash2,
 } from 'lucide-react';
-import { getStoredToken } from '../lib/auth';
+import {
+  AegisChatProvider,
+  useAegisChatRuntime,
+  useOptionalAegisChatRuntime,
+} from '../lib/chatRuntime';
 
 interface ChatTabProps {
   agents: Agent[];
-}
-
-type ChatSocketEvent = {
-  type: string;
-  session_id?: string;
-  title?: string;
-  resumed?: boolean;
-  turn_id?: string;
-  source?: 'main' | 'delegate';
-  srcagent?: string;
-  message_id?: string;
-  delta?: string;
-  content?: string;
-  completed?: boolean;
-  client_msg_id?: string;
-  tool_name?: string;
-  tool_call_id?: string;
-  args_preview?: string;
-  result_preview?: string;
-  child_session_id?: string;
-  reason?: string;
-  state?: string;
-  approval_id?: string;
-  clarify_id?: string;
-  command?: string;
-  description?: string;
-  question?: string;
-  choices?: string[];
-  code?: string;
-  message?: string;
-};
-
-type PendingBoundAction =
-  | { type: 'message.send'; text: string; clientMsgId: string }
-  | { type: 'approval.respond'; choice: 'once' | 'session' | 'always' | 'deny' }
-  | { type: 'clarify.respond'; answer: string }
-  | { type: 'session.resume' };
-
-const STORAGE_KEY = 'aegis_convs';
-
-function createLocalId(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `local-${crypto.randomUUID()}`;
-  }
-  return `local-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function createMessageId(prefix: string): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
-    return `${prefix}-${crypto.randomUUID()}`;
-  }
-  return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2)}`;
-}
-
-function formatClock(now: Date = new Date()): string {
-  return now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-}
-
-function loadCachedConversations(): Conversation[] {
-  const raw = window.localStorage.getItem(STORAGE_KEY);
-  if (!raw) {
-    return [];
-  }
-  try {
-    const parsed = JSON.parse(raw);
-    return Array.isArray(parsed) ? parsed : [];
-  } catch {
-    return [];
-  }
-}
-
-function saveCachedConversations(conversations: Conversation[]): void {
-  window.localStorage.setItem(STORAGE_KEY, JSON.stringify(conversations));
-}
-
-function buildSocketUrl(token: string): string {
-  const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${window.location.host}/api/chat/ws?token=${encodeURIComponent(token)}`;
-}
-
-function getOpenReadyState(): number {
-  return typeof WebSocket !== 'undefined' && typeof WebSocket.OPEN === 'number' ? WebSocket.OPEN : 1;
 }
 
 function isConversationBusy(conversation: Conversation | undefined): boolean {
@@ -119,159 +41,6 @@ function isConversationBusy(conversation: Conversation | undefined): boolean {
     return !conversation.pendingClarify?.awaitingText;
   }
   return false;
-}
-
-function upsertChainStep(steps: ChainStep[], nextStep: ChainStep & { id: string }): ChainStep[] {
-  const index = steps.findIndex((step) => step.id === nextStep.id);
-  if (index < 0) {
-    return [...steps, nextStep];
-  }
-  const updated = [...steps];
-  updated[index] = { ...updated[index], ...nextStep };
-  return updated;
-}
-
-function findMessageIndex(
-  messages: Message[],
-  {
-    messageId,
-    turnId,
-    source,
-    srcagent,
-  }: {
-    messageId: string;
-    turnId?: string;
-    source?: 'main' | 'delegate';
-    srcagent?: string;
-  },
-): number {
-  const exactIndex = messages.findIndex((message) => message.id === messageId);
-  if (exactIndex >= 0) {
-    return exactIndex;
-  }
-  for (let index = messages.length - 1; index >= 0; index -= 1) {
-    const candidate = messages[index];
-    if ((candidate.kind || 'chat') !== 'chat') {
-      continue;
-    }
-    if (candidate.turnId !== turnId) {
-      continue;
-    }
-    if (candidate.source !== source) {
-      continue;
-    }
-    if ((candidate.srcagent || '') !== (srcagent || '')) {
-      continue;
-    }
-    if (candidate.pending) {
-      return index;
-    }
-  }
-  return -1;
-}
-
-function upsertDelegateToolCall(calls: DelegateToolCall[], nextCall: DelegateToolCall): DelegateToolCall[] {
-  const index = calls.findIndex((call) => call.id === nextCall.id);
-  if (index < 0) {
-    return [...calls, nextCall];
-  }
-  const updated = [...calls];
-  updated[index] = { ...updated[index], ...nextCall };
-  return updated;
-}
-
-function buildDelegateToolSummaryId(turnId?: string, srcagent?: string): string {
-  return `delegate-tools:${turnId || 'unknown'}:${srcagent || 'delegate'}`;
-}
-
-function buildDelegateEventText(payload: ChatSocketEvent): string {
-  const agentLabel = payload.srcagent || 'Delegate Agent';
-  if (payload.type === 'delegate.entered') {
-    return `${agentLabel} entered foreground`;
-  }
-  const reason = payload.reason ? ` · ${payload.reason}` : '';
-  return `${agentLabel} returned control to main${reason}`;
-}
-
-function upsertDelegateToolMessage(conversation: Conversation, payload: ChatSocketEvent): Message[] {
-  const messageId = buildDelegateToolSummaryId(payload.turn_id, payload.srcagent);
-  const toolCallId = payload.tool_call_id || createMessageId('delegate-tool');
-  const nextCall: DelegateToolCall = {
-    id: toolCallId,
-    toolName: payload.tool_name || 'delegate_tool',
-    argsPreview: payload.args_preview || '',
-    resultPreview: payload.result_preview,
-    status: payload.type === 'tool.completed' ? 'completed' : 'running',
-  };
-  const existingIndex = conversation.messages.findIndex((message) => message.id === messageId);
-  if (existingIndex >= 0) {
-    const updatedMessages = [...conversation.messages];
-    const existingMessage = updatedMessages[existingIndex];
-    updatedMessages[existingIndex] = {
-      ...existingMessage,
-      timestamp: formatClock(),
-      text: `${payload.srcagent || 'Delegate Agent'} tool activity`,
-      delegateTools: upsertDelegateToolCall(existingMessage.delegateTools || [], nextCall),
-    };
-    return updatedMessages;
-  }
-  return [
-    ...conversation.messages,
-    {
-      id: messageId,
-      sender: 'aegis',
-      kind: 'delegate-tools',
-      text: `${payload.srcagent || 'Delegate Agent'} tool activity`,
-      timestamp: formatClock(),
-      source: 'delegate',
-      srcagent: payload.srcagent,
-      turnId: payload.turn_id,
-      delegateTools: [nextCall],
-    },
-  ];
-}
-
-function buildMainToolSummaryId(turnId?: string): string {
-  return `main-tools:${turnId || 'unknown'}`;
-}
-
-function upsertMainToolMessage(conversation: Conversation, payload: ChatSocketEvent): Message[] {
-  const messageId = buildMainToolSummaryId(payload.turn_id);
-  const nextStep: ChainStep & { id: string } = {
-    id: payload.tool_call_id || `tool:${payload.tool_name || 'tool'}`,
-    agentName: payload.tool_name || 'Tool',
-    type: 'vip_tool',
-    status: payload.type === 'tool.completed' ? 'Completed' : 'Processing',
-    message:
-      payload.type === 'tool.completed'
-        ? payload.result_preview || `${payload.tool_name || 'Tool'} completed`
-        : payload.args_preview || payload.tool_name || 'Tool started',
-    timestamp: formatClock(),
-  };
-  const existingIndex = conversation.messages.findIndex((message) => message.id === messageId);
-  if (existingIndex >= 0) {
-    const updatedMessages = [...conversation.messages];
-    const existingMessage = updatedMessages[existingIndex];
-    updatedMessages[existingIndex] = {
-      ...existingMessage,
-      timestamp: formatClock(),
-      chainSteps: upsertChainStep(existingMessage.chainSteps || [], nextStep),
-    };
-    return updatedMessages;
-  }
-  return [
-    ...conversation.messages,
-    {
-      id: messageId,
-      sender: 'aegis',
-      kind: 'main-tools',
-      text: 'Main orchestration activity',
-      timestamp: formatClock(),
-      source: 'main',
-      turnId: payload.turn_id,
-      chainSteps: [nextStep],
-    },
-  ];
 }
 
 function buildStateLabel(conversation?: Conversation): string {
@@ -319,34 +88,32 @@ function getMessageCopyText(message: Message): string {
   return message.text;
 }
 
-export default function ChatTab({ agents }: ChatTabProps) {
+function ChatTabContent({ agents }: ChatTabProps) {
   void agents;
-  const [conversations, setConversations] = useState<Conversation[]>(() => loadCachedConversations());
-  const [activeConvId, setActiveConvId] = useState<string>(() => loadCachedConversations()[0]?.id || '');
+  const {
+    conversations,
+    activeConvId,
+    activeConversation,
+    transportError,
+    setActiveConversation,
+    createConversation,
+    clearHistory,
+    deleteConversation,
+    submitInput,
+    respondApproval,
+    respondClarify,
+    markClarifyAwaitingText,
+    resumeActiveConversation,
+    setTransportError,
+  } = useAegisChatRuntime();
   const [inputVal, setInputVal] = useState('');
-  const [transportError, setTransportError] = useState('');
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState('');
   const [showDelegateTools, setShowDelegateTools] = useState(false);
   const [expandedMessageIds, setExpandedMessageIds] = useState<Record<string, boolean>>({});
   const bottomRef = useRef<HTMLDivElement>(null);
-  const socketRef = useRef<WebSocket | null>(null);
-  const socketConversationIdRef = useRef<string>('');
-  const socketSessionIdRef = useRef<string>('');
-  const pendingBoundActionsRef = useRef<Record<string, PendingBoundAction[]>>({});
-  const conversationsRef = useRef<Conversation[]>(conversations);
   const copyFeedbackTimeoutRef = useRef<number | null>(null);
-
-  const activeConversation = useMemo(
-    () => conversations.find((conversation) => conversation.id === activeConvId),
-    [activeConvId, conversations],
-  );
-
-  useEffect(() => {
-    saveCachedConversations(conversations);
-    conversationsRef.current = conversations;
-  }, [conversations]);
 
   useEffect(() => {
     return () => {
@@ -357,499 +124,49 @@ export default function ChatTab({ agents }: ChatTabProps) {
   }, []);
 
   useEffect(() => {
-    if (!activeConvId && conversations.length > 0) {
-      setActiveConvId(conversations[0].id);
-    }
-  }, [activeConvId, conversations]);
-
-  useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [conversations, activeConvId]);
 
-  useEffect(() => {
-    if (
-      socketRef.current &&
-      socketConversationIdRef.current &&
-      activeConvId &&
-      socketConversationIdRef.current !== activeConvId
-    ) {
-      socketRef.current.close();
-    }
-  }, [activeConvId]);
-
-  function closeSocket() {
-    if (socketRef.current) {
-      socketRef.current.close();
-    }
-    socketRef.current = null;
-    socketConversationIdRef.current = '';
-    socketSessionIdRef.current = '';
-  }
-
-  function queueBoundAction(localConversationId: string, action: PendingBoundAction) {
-    const queued = pendingBoundActionsRef.current[localConversationId] || [];
-    pendingBoundActionsRef.current[localConversationId] = [...queued, action];
-  }
-
-  function sendBoundAction(sessionId: string, action: PendingBoundAction) {
-    const socket = socketRef.current;
-    if (!socket || socket.readyState !== getOpenReadyState()) {
-      setTransportError('Chat transport is not connected.');
-      return;
-    }
-    if (action.type === 'message.send') {
-      socket.send(
-        JSON.stringify({
-          type: 'message.send',
-          session_id: sessionId,
-          text: action.text,
-          client_msg_id: action.clientMsgId,
-        }),
-      );
-      return;
-    }
-    if (action.type === 'approval.respond') {
-      socket.send(
-        JSON.stringify({
-          type: 'approval.respond',
-          session_id: sessionId,
-          choice: action.choice,
-        }),
-      );
-      return;
-    }
-    if (action.type === 'clarify.respond') {
-      socket.send(
-        JSON.stringify({
-          type: 'clarify.respond',
-          session_id: sessionId,
-          answer: action.answer,
-        }),
-      );
-      return;
-    }
-    socket.send(
-      JSON.stringify({
-        type: 'session.resume',
-        session_id: sessionId,
-      }),
-    );
-  }
-
-  function flushBoundActions(localConversationId: string, sessionId: string) {
-    const queued = pendingBoundActionsRef.current[localConversationId] || [];
-    delete pendingBoundActionsRef.current[localConversationId];
-    queued.forEach((action) => sendBoundAction(sessionId, action));
-  }
-
-  function handleSocketEvent(localConversationId: string, payload: ChatSocketEvent) {
-    const payloadSessionId = payload.session_id;
-
-    if (payload.type === 'error') {
-      setTransportError(payload.message || 'Chat transport error.');
-      return;
-    }
-
-    if (payload.type === 'session.bound' && payload.session_id) {
-      socketSessionIdRef.current = payload.session_id;
-    }
-
-    setConversations((current) => {
-      const next = current.map((conversation) => {
-        const matched =
-          conversation.id === localConversationId ||
-          (!!payloadSessionId && conversation.sessionId === payloadSessionId);
-        if (!matched) {
-          return conversation;
-        }
-
-        const nextConversation: Conversation = {
-          ...conversation,
-          lastUpdatedAt: new Date().toISOString(),
-          timestamp: formatClock(),
-        };
-
-        if (payload.type === 'session.bound') {
-          nextConversation.sessionId = payload.session_id || nextConversation.sessionId;
-          nextConversation.title = payload.title || nextConversation.title;
-          return nextConversation;
-        }
-
-        if (payload.type === 'message.accepted') {
-          if ((payload.source || 'main') === 'main') {
-            nextConversation.liveChainTurnId = payload.turn_id || nextConversation.liveChainTurnId;
-            nextConversation.liveChainSteps = [];
-          }
-          return nextConversation;
-        }
-
-        if (payload.type === 'message.delta' || payload.type === 'message.completed') {
-          const source = payload.source || 'main';
-          const messageId =
-            payload.message_id || `${source}:${payload.turn_id || 'unknown'}:${payload.srcagent || 'main'}`;
-          const existingIndex = findMessageIndex(nextConversation.messages, {
-            messageId,
-            turnId: payload.turn_id,
-            source,
-            srcagent: payload.srcagent,
-          });
-          const existingMessage = existingIndex >= 0 ? nextConversation.messages[existingIndex] : null;
-          const nextText =
-            payload.type === 'message.delta'
-              ? `${existingMessage?.text || ''}${payload.delta || ''}`
-              : payload.content || '';
-          const nextMessage: Message = {
-            id: messageId,
-            sender: 'aegis',
-            kind: 'chat',
-            text: nextText,
-            timestamp: formatClock(),
-            source,
-            srcagent: payload.srcagent,
-            turnId: payload.turn_id,
-            pending: payload.type === 'message.delta',
-          };
-
-          if (existingIndex >= 0) {
-            const updatedMessages = [...nextConversation.messages];
-            updatedMessages[existingIndex] = {
-              ...updatedMessages[existingIndex],
-              ...nextMessage,
-            };
-            nextConversation.messages = updatedMessages;
-          } else {
-            nextConversation.messages = [...nextConversation.messages, nextMessage];
-          }
-          return nextConversation;
-        }
-
-        if (payload.type === 'run.state') {
-          nextConversation.lastKnownRunState = payload.state || nextConversation.lastKnownRunState;
-          nextConversation.foregroundSource = payload.source || nextConversation.foregroundSource;
-          nextConversation.foregroundAgentName = payload.srcagent || '';
-          return nextConversation;
-        }
-
-        if (payload.type === 'delegate.entered' || payload.type === 'delegate.exited') {
-          nextConversation.messages = [
-            ...nextConversation.messages,
-            {
-              id: createMessageId('delegate-event'),
-              sender: 'aegis',
-              kind: 'delegate-event',
-              text: buildDelegateEventText(payload),
-              timestamp: formatClock(),
-              source: 'delegate',
-              srcagent: payload.srcagent,
-              turnId: payload.turn_id,
-            },
-          ];
-          return nextConversation;
-        }
-
-        if (payload.type === 'tool.started' || payload.type === 'tool.completed') {
-          if ((payload.source || 'main') === 'delegate') {
-            nextConversation.messages = upsertDelegateToolMessage(nextConversation, payload);
-            return nextConversation;
-          }
-          nextConversation.messages = upsertMainToolMessage(nextConversation, payload);
-          return nextConversation;
-        }
-
-        if (payload.type === 'approval.request') {
-          nextConversation.pendingApproval = {
-            approvalId: payload.approval_id || '',
-            command: payload.command || '',
-            description: payload.description || '',
-            choices: payload.choices || ['once', 'session', 'always', 'deny'],
-          };
-          nextConversation.lastKnownRunState = 'waiting_for_approval';
-          return nextConversation;
-        }
-
-        if (payload.type === 'approval.resolved') {
-          nextConversation.pendingApproval = null;
-          return nextConversation;
-        }
-
-        if (payload.type === 'clarify.request') {
-          const nextChoices = payload.choices || [];
-          nextConversation.pendingClarify = {
-            clarifyId: payload.clarify_id || '',
-            question: payload.question || '',
-            choices: nextChoices,
-            awaitingText: nextChoices.length === 0,
-          };
-          nextConversation.lastKnownRunState = 'waiting_for_clarify';
-          return nextConversation;
-        }
-
-        if (payload.type === 'clarify.resolved') {
-          nextConversation.pendingClarify = null;
-          return nextConversation;
-        }
-
-        return nextConversation;
-      });
-      conversationsRef.current = next;
-      return next;
-    });
-  }
-
-  function connectSocketForConversation(
-    targetConversation: Conversation,
-    action?: PendingBoundAction,
-  ): boolean {
-    const token = getStoredToken();
-    if (!token) {
-      setTransportError('Missing session token for chat transport.');
-      return false;
-    }
-
-    if (action) {
-      queueBoundAction(targetConversation.id, action);
-    }
-
-    const currentSocket = socketRef.current;
-    if (
-      currentSocket &&
-      currentSocket.readyState === getOpenReadyState() &&
-      socketConversationIdRef.current === targetConversation.id
-    ) {
-      const sessionId = targetConversation.sessionId || socketSessionIdRef.current;
-      if (sessionId) {
-        flushBoundActions(targetConversation.id, sessionId);
-      }
-      return true;
-    }
-
-    if (currentSocket && socketConversationIdRef.current !== targetConversation.id) {
-      closeSocket();
-    }
-
-    if (socketRef.current) {
-      return true;
-    }
-
-    const socket = new WebSocket(buildSocketUrl(token));
-    socketConversationIdRef.current = targetConversation.id;
-    socketSessionIdRef.current = targetConversation.sessionId || '';
-    socketRef.current = socket;
-
-    socket.onopen = () => {
-      setTransportError('');
-      socket.send(
-        JSON.stringify({
-          type: 'session.bind',
-          session_id: targetConversation.sessionId,
-          title: targetConversation.title,
-        }),
-      );
-    };
-
-    socket.onmessage = (event) => {
-      let payload: ChatSocketEvent;
-      try {
-        payload = JSON.parse(String(event.data));
-      } catch {
-        return;
-      }
-      handleSocketEvent(targetConversation.id, payload);
-      if (payload.type === 'session.bound' && payload.session_id) {
-        socketSessionIdRef.current = payload.session_id;
-        flushBoundActions(targetConversation.id, payload.session_id);
-      }
-    };
-
-    socket.onerror = () => {
-      setTransportError('Chat transport degraded. Reconnect or open a new conversation.');
-    };
-
-    socket.onclose = () => {
-      if (socketRef.current === socket) {
-        socketRef.current = null;
-        socketConversationIdRef.current = '';
-        socketSessionIdRef.current = '';
-      }
-    };
-
-    return true;
-  }
-
-  function ensureConversation(): Conversation {
-    const existing = activeConversation;
-    if (existing) {
-      return existing;
-    }
-    const created: Conversation = {
-      id: createLocalId(),
-      title: 'New Investigation',
-      messages: [],
-      timestamp: 'Just now',
-      lastUpdatedAt: new Date().toISOString(),
-      lastKnownRunState: 'idle',
-      foregroundSource: 'main',
-      foregroundAgentName: '',
-      liveChainTurnId: undefined,
-      liveChainSteps: [],
-      pendingApproval: null,
-      pendingClarify: null,
-    };
-    setConversations((current) => [created, ...current]);
-    setActiveConvId(created.id);
-    return created;
-  }
-
   function handleCreateNewConversation() {
-    const created: Conversation = {
-      id: createLocalId(),
-      title: 'New Investigation',
-      messages: [],
-      timestamp: 'Just now',
-      lastUpdatedAt: new Date().toISOString(),
-      lastKnownRunState: 'idle',
-      foregroundSource: 'main',
-      foregroundAgentName: '',
-      liveChainTurnId: undefined,
-      liveChainSteps: [],
-      pendingApproval: null,
-      pendingClarify: null,
-    };
-    setConversations((current) => [created, ...current]);
-    setActiveConvId(created.id);
+    createConversation();
     setInputVal('');
     setTransportError('');
   }
 
   function handleClearHistory() {
-    if (!window.confirm('确定要清除所有对话和本地缓存吗？')) {
-      return;
+    if (clearHistory()) {
+      setInputVal('');
+      setTransportError('');
     }
-    window.localStorage.removeItem(STORAGE_KEY);
-    pendingBoundActionsRef.current = {};
-    setConversations([]);
-    setActiveConvId('');
-    setInputVal('');
-    setTransportError('');
-    closeSocket();
   }
 
   function handleDeleteConversation(id: string, event: React.MouseEvent) {
     event.stopPropagation();
-    const updated = conversations.filter((conversation) => conversation.id !== id);
-    delete pendingBoundActionsRef.current[id];
-    if (socketConversationIdRef.current === id) {
-      closeSocket();
-    }
-    if (activeConvId === id) {
-      setActiveConvId(updated[0]?.id || '');
-    }
-    setConversations(updated);
+    deleteConversation(id);
   }
 
   function handleSubmit() {
-    const text = inputVal.trim();
-    if (!text) {
+    if (!inputVal.trim()) {
       return;
     }
-    const conversation = conversationsRef.current.find((item) => item.id === activeConvId) || ensureConversation();
-    const isClarifyReply = Boolean(conversation.pendingClarify?.awaitingText && conversation.sessionId);
-    const title =
-      !isClarifyReply && conversation.messages.length === 0
-        ? (text.length > 24 ? `${text.slice(0, 24)}...` : text)
-        : conversation.title;
-    const clientMsgId = createMessageId('client');
-    const userMessage: Message = {
-      id: createMessageId('user'),
-      sender: 'user',
-      kind: 'chat',
-      text,
-      timestamp: formatClock(),
-      clientMsgId,
-    };
-    const targetConversation = {
-      ...conversation,
-      title,
-    };
-    setConversations((current) =>
-      current.map((item) =>
-        item.id === conversation.id
-          ? {
-              ...item,
-              title,
-              timestamp: formatClock(),
-              lastUpdatedAt: new Date().toISOString(),
-              liveChainTurnId: undefined,
-              liveChainSteps: [],
-              messages: [...item.messages, userMessage],
-            }
-          : item,
-      ),
-    );
+    submitInput(inputVal);
     setInputVal('');
-
-    connectSocketForConversation(targetConversation, {
-      ...(isClarifyReply
-        ? {
-            type: 'clarify.respond' as const,
-            answer: text,
-          }
-        : {
-            type: 'message.send' as const,
-            text,
-            clientMsgId,
-          }),
-    });
   }
 
   function handleApproval(choice: 'once' | 'session' | 'always' | 'deny') {
-    if (!activeConversation?.sessionId) {
-      return;
-    }
-    connectSocketForConversation(activeConversation, {
-      type: 'approval.respond',
-      choice,
-    });
+    respondApproval(choice);
   }
 
   function handleClarifyChoice(answer: string) {
-    if (!activeConversation?.sessionId) {
-      return;
-    }
-    connectSocketForConversation(activeConversation, {
-      type: 'clarify.respond',
-      answer,
-    });
+    respondClarify(answer);
   }
 
   function handleClarifyOther() {
-    if (!activeConversation) {
-      return;
-    }
-    setConversations((current) =>
-      current.map((conversation) =>
-        conversation.id === activeConversation.id
-          ? {
-              ...conversation,
-              pendingClarify: conversation.pendingClarify
-                ? {
-                    ...conversation.pendingClarify,
-                    awaitingText: true,
-                  }
-                : conversation.pendingClarify,
-            }
-          : conversation,
-      ),
-    );
+    markClarifyAwaitingText();
   }
 
   function handleResume() {
-    if (!activeConversation?.sessionId) {
-      return;
-    }
-    connectSocketForConversation(activeConversation, {
-      type: 'session.resume',
-    });
+    resumeActiveConversation();
   }
 
   async function handleCopyMessage(message: Message) {
@@ -950,7 +267,7 @@ export default function ChatTab({ agents }: ChatTabProps) {
                 return (
                   <div
                     key={conversation.id}
-                    onClick={() => setActiveConvId(conversation.id)}
+                    onClick={() => setActiveConversation(conversation.id)}
                     className={`group p-3 rounded-lg cursor-pointer transition-all ${
                       isActive
                         ? 'bg-[#080C14] border border-slate-800 text-white shadow-md'
@@ -962,8 +279,30 @@ export default function ChatTab({ agents }: ChatTabProps) {
                         <div className={`font-semibold text-xs ${isActive ? 'text-cyan-400' : 'text-slate-300 group-hover:text-white'} truncate`}>
                           {conversation.title}
                         </div>
-                        <div className="text-[10px] text-slate-500 font-mono mt-1 flex items-center gap-1.5">
+                        <div className="mt-1 flex flex-wrap items-center gap-1.5 text-[10px] text-slate-500 font-mono">
                           <Clock className="h-3 w-3 text-slate-600" /> {conversation.timestamp}
+                          {conversation.pendingApproval ? (
+                            <span className="rounded border border-amber-900/40 bg-amber-950/20 px-1.5 py-0.5 text-[9px] font-bold uppercase text-amber-300">
+                              approval
+                            </span>
+                          ) : null}
+                          {conversation.pendingClarify ? (
+                            <span className="rounded border border-cyan-900/40 bg-cyan-950/20 px-1.5 py-0.5 text-[9px] font-bold uppercase text-cyan-300">
+                              clarify
+                            </span>
+                          ) : null}
+                          {!conversation.pendingApproval &&
+                          !conversation.pendingClarify &&
+                          conversation.lastKnownRunState === 'running' ? (
+                            <span className="rounded border border-emerald-900/40 bg-emerald-950/20 px-1.5 py-0.5 text-[9px] font-bold uppercase text-emerald-300">
+                              running
+                            </span>
+                          ) : null}
+                          {conversation.hasUnread ? (
+                            <span className="rounded border border-cyan-900/40 bg-cyan-950/20 px-1.5 py-0.5 text-[9px] font-bold uppercase text-cyan-300">
+                              new
+                            </span>
+                          ) : null}
                         </div>
                       </div>
                       <button
@@ -1065,7 +404,7 @@ export default function ChatTab({ agents }: ChatTabProps) {
               <div className="space-y-1">
                 <h4 className="text-sm font-bold text-white uppercase italic tracking-wider">Aegis 协同中枢智能对话</h4>
                 <p className="text-[11px] text-slate-400 leading-relaxed max-w-md">
-                  向 Aegis 提交任何风险分析请求。当前页面会通过单一 WebSocket 会话持续接收主 Agent、Delegate Agent 与授权批准事件。
+                  向 Aegis 提交任何风险分析请求。Aegis 会为活跃会话保持独立实时通道，持续接收主 Agent、Delegate Agent 与授权批准事件。
                 </p>
               </div>
             </div>
@@ -1338,5 +677,17 @@ export default function ChatTab({ agents }: ChatTabProps) {
         </div>
       </div>
     </div>
+  );
+}
+
+export default function ChatTab(props: ChatTabProps) {
+  const runtime = useOptionalAegisChatRuntime();
+  if (runtime) {
+    return <ChatTabContent {...props} />;
+  }
+  return (
+    <AegisChatProvider isChatVisible={true}>
+      <ChatTabContent {...props} />
+    </AegisChatProvider>
   );
 }

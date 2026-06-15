@@ -6,6 +6,7 @@ import ChatTab from './components/ChatTab';
 import AgentTab from './components/AgentTab';
 import PolicyTab from './components/PolicyTab';
 import LoginScreen from './components/LoginScreen';
+import { AegisChatProvider, useAegisChatRuntime } from './lib/chatRuntime';
 import { clearStoredToken, hasStoredToken, setStoredToken } from './lib/auth';
 import { fetchJSON, ApiError } from './lib/api';
 import {
@@ -55,6 +56,134 @@ function sortRules(rules: RoutingRule[]): RoutingRule[] {
   return [...rules]
     .sort((left, right) => left.id.localeCompare(right.id))
     .map((rule, index) => ({ ...rule, priority: index + 1 }));
+}
+
+function AuthenticatedAppShell({
+  activeTab,
+  agents,
+  currentUtcTime,
+  isSyncing,
+  navigateTo,
+  rules,
+  syncError,
+  onCreateAgent,
+  onDeleteAgent,
+  onRefresh,
+  onUpdateAgent,
+  onCreateRule,
+  onDeleteRule,
+  onUpdateRule,
+}: {
+  activeTab: AppTab;
+  agents: Agent[];
+  currentUtcTime: string;
+  isSyncing: boolean;
+  navigateTo: (tab: AppTab) => void;
+  rules: RoutingRule[];
+  syncError: string;
+  onCreateAgent: (draft: AgentDraft) => Promise<void>;
+  onDeleteAgent: (agentId: string) => Promise<void>;
+  onRefresh: () => Promise<void>;
+  onUpdateAgent: (agentId: string, draft: AgentDraft) => Promise<void>;
+  onCreateRule: (draft: RoutingRuleDraft) => Promise<void>;
+  onDeleteRule: (ruleId: string) => Promise<void>;
+  onUpdateRule: (ruleId: string, draft: RoutingRuleDraft) => Promise<void>;
+}) {
+  const { chatAttentionCount } = useAegisChatRuntime();
+
+  return (
+    <div className="flex h-screen w-screen overflow-hidden border border-slate-800 bg-[#020408] font-sans text-slate-300 antialiased select-none">
+      <Sidebar
+        activeTab={activeTab}
+        setActiveTab={navigateTo}
+        chatAttentionCount={chatAttentionCount}
+      />
+
+      <div className="relative flex h-screen min-w-0 flex-1 flex-col overflow-hidden bg-[#020408]">
+        <header className="z-20 flex h-16 shrink-0 items-center justify-between border-b border-slate-800 bg-[#03060C] px-6">
+          <div className="flex items-center space-x-4">
+            <span className="text-xs font-mono text-slate-500">PATH: ROOT/{activeTab.toUpperCase()}</span>
+            <span className="h-4 w-px bg-slate-800" />
+            <span className={`flex items-center gap-1.5 rounded border px-2 py-0.5 text-[10px] font-mono font-bold ${
+              syncError
+                ? 'border-amber-900/30 bg-amber-950/30 text-amber-400'
+                : 'border-emerald-900/30 bg-emerald-950/30 text-emerald-400'
+            }`}>
+              <span className={`h-1.5 w-1.5 rounded-full ${syncError ? 'bg-amber-400' : 'bg-emerald-500 animate-pulse'}`} />
+              {isSyncing ? 'LIVE_SYNC: SYNCING' : syncError ? 'LIVE_SYNC: DEGRADED' : 'LIVE_SYNC: CONNECTED'}
+            </span>
+          </div>
+
+          <div className="flex items-center gap-4">
+            <div className="hidden items-center gap-1.5 rounded border border-slate-800 bg-[#05080F] px-2.5 py-1 font-mono text-[11px] text-slate-400 shadow-inner md:flex">
+              <span className="font-bold text-cyan-400">UTC:</span>
+              <span className="text-white">{currentUtcTime}</span>
+            </div>
+
+            <div className="flex items-center gap-2.5">
+              <button
+                title="Notifications panel"
+                className="relative shrink-0 rounded border border-slate-800 bg-[#05080F] p-1.5 text-slate-400 transition-all hover:bg-[#080C14] hover:text-cyan-400"
+              >
+                <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-rose-500 shadow-[0_0_6px_#f43f5e]" />
+                <Bell className="h-4 w-4" />
+              </button>
+              <button
+                title="Configure platform settings"
+                className="shrink-0 rounded border border-slate-800 bg-[#05080F] p-1.5 text-slate-400 transition-all hover:bg-[#080C14] hover:text-cyan-400"
+              >
+                <Settings className="h-4 w-4" />
+              </button>
+
+              <div className="flex items-center gap-2.5 border-l border-slate-800 pl-3">
+                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-600 bg-gradient-to-tr from-slate-700 to-slate-900 p-[1px] font-mono text-[10px] font-bold text-white">
+                  AD
+                </div>
+                <div className="hidden text-left text-[11px] leading-tight sm:block">
+                  <div className="font-bold text-white">Amber SOC Security</div>
+                  <div className="mt-0.5 text-[9px] font-mono text-[#22d3ee]">Super Admin</div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </header>
+
+        <main className="relative flex flex-1 flex-col overflow-hidden bg-[#020408]" id="main-content-viewport">
+          {syncError ? (
+            <div className="border-b border-amber-900/30 bg-amber-950/20 px-6 py-3 text-sm text-amber-300">
+              {syncError}
+            </div>
+          ) : null}
+          {activeTab === 'overview' && (
+            <OverviewTab agents={agents} currentUtcTime={currentUtcTime} setTab={navigateTo} />
+          )}
+          {activeTab === 'chat' && (
+            <ChatTab agents={agents} />
+          )}
+          {activeTab === 'orchestration' && (
+            <AgentTab
+              agents={agents}
+              busy={isSyncing}
+              onCreate={onCreateAgent}
+              onDelete={onDeleteAgent}
+              onRefresh={onRefresh}
+              onUpdate={onUpdateAgent}
+            />
+          )}
+          {activeTab === 'policy' && (
+            <PolicyTab
+              busy={isSyncing}
+              onCreate={onCreateRule}
+              onDelete={onDeleteRule}
+              onRefresh={onRefresh}
+              onUpdate={onUpdateRule}
+              rules={rules}
+            />
+          )}
+        </main>
+      </div>
+    </div>
+  );
 }
 
 export default function App() {
@@ -345,92 +474,23 @@ export default function App() {
   }
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden border border-slate-800 bg-[#020408] font-sans text-slate-300 antialiased select-none">
-      <Sidebar activeTab={activeTab} setActiveTab={navigateTo} />
-
-      <div className="relative flex h-screen min-w-0 flex-1 flex-col overflow-hidden bg-[#020408]">
-        <header className="z-20 flex h-16 shrink-0 items-center justify-between border-b border-slate-800 bg-[#03060C] px-6">
-          <div className="flex items-center space-x-4">
-            <span className="text-xs font-mono text-slate-500">PATH: ROOT/{activeTab.toUpperCase()}</span>
-            <span className="h-4 w-px bg-slate-800" />
-            <span className={`flex items-center gap-1.5 rounded border px-2 py-0.5 text-[10px] font-mono font-bold ${
-              syncError
-                ? 'border-amber-900/30 bg-amber-950/30 text-amber-400'
-                : 'border-emerald-900/30 bg-emerald-950/30 text-emerald-400'
-            }`}>
-              <span className={`h-1.5 w-1.5 rounded-full ${syncError ? 'bg-amber-400' : 'bg-emerald-500 animate-pulse'}`} />
-              {isSyncing ? 'LIVE_SYNC: SYNCING' : syncError ? 'LIVE_SYNC: DEGRADED' : 'LIVE_SYNC: CONNECTED'}
-            </span>
-          </div>
-
-          <div className="flex items-center gap-4">
-            <div className="hidden items-center gap-1.5 rounded border border-slate-800 bg-[#05080F] px-2.5 py-1 font-mono text-[11px] text-slate-400 shadow-inner md:flex">
-              <span className="font-bold text-cyan-400">UTC:</span>
-              <span className="text-white">{currentUtcTime}</span>
-            </div>
-
-            <div className="flex items-center gap-2.5">
-              <button
-                title="Notifications panel"
-                className="relative shrink-0 rounded border border-slate-800 bg-[#05080F] p-1.5 text-slate-400 transition-all hover:bg-[#080C14] hover:text-cyan-400"
-              >
-                <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-rose-500 shadow-[0_0_6px_#f43f5e]" />
-                <Bell className="h-4 w-4" />
-              </button>
-              <button
-                title="Configure platform settings"
-                className="shrink-0 rounded border border-slate-800 bg-[#05080F] p-1.5 text-slate-400 transition-all hover:bg-[#080C14] hover:text-cyan-400"
-              >
-                <Settings className="h-4 w-4" />
-              </button>
-
-              <div className="flex items-center gap-2.5 border-l border-slate-800 pl-3">
-                <div className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full border border-slate-600 bg-gradient-to-tr from-slate-700 to-slate-900 p-[1px] font-mono text-[10px] font-bold text-white">
-                  AD
-                </div>
-                <div className="hidden text-left text-[11px] leading-tight sm:block">
-                  <div className="font-bold text-white">Amber SOC Security</div>
-                  <div className="mt-0.5 text-[9px] font-mono text-[#22d3ee]">Super Admin</div>
-                </div>
-              </div>
-            </div>
-          </div>
-        </header>
-
-        <main className="relative flex flex-1 flex-col overflow-hidden bg-[#020408]" id="main-content-viewport">
-          {syncError ? (
-            <div className="border-b border-amber-900/30 bg-amber-950/20 px-6 py-3 text-sm text-amber-300">
-              {syncError}
-            </div>
-          ) : null}
-          {activeTab === 'overview' && (
-            <OverviewTab agents={agents} currentUtcTime={currentUtcTime} setTab={navigateTo} />
-          )}
-          {activeTab === 'chat' && (
-            <ChatTab agents={agents} />
-          )}
-          {activeTab === 'orchestration' && (
-            <AgentTab
-              agents={agents}
-              busy={isSyncing}
-              onCreate={handleCreateAgent}
-              onDelete={handleDeleteAgent}
-              onRefresh={loadConsoleData}
-              onUpdate={handleUpdateAgent}
-            />
-          )}
-          {activeTab === 'policy' && (
-            <PolicyTab
-              busy={isSyncing}
-              onCreate={handleCreateRule}
-              onDelete={handleDeleteRule}
-              onRefresh={loadConsoleData}
-              onUpdate={handleUpdateRule}
-              rules={rules}
-            />
-          )}
-        </main>
-      </div>
-    </div>
+    <AegisChatProvider isChatVisible={activeTab === 'chat'}>
+      <AuthenticatedAppShell
+        activeTab={activeTab}
+        agents={agents}
+        currentUtcTime={currentUtcTime}
+        isSyncing={isSyncing}
+        navigateTo={navigateTo}
+        onCreateAgent={handleCreateAgent}
+        onCreateRule={handleCreateRule}
+        onDeleteAgent={handleDeleteAgent}
+        onDeleteRule={handleDeleteRule}
+        onRefresh={loadConsoleData}
+        onUpdateAgent={handleUpdateAgent}
+        onUpdateRule={handleUpdateRule}
+        rules={rules}
+        syncError={syncError}
+      />
+    </AegisChatProvider>
   );
 }

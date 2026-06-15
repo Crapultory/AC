@@ -99,4 +99,6 @@ export interface Conversation {
     choices: string[];
     awaitingText: boolean;
   } | null;
+  hasUnread?: boolean;
+  transportState?: 'idle' | 'connecting' | 'connected' | 'error' | 'closed';
 }

@@ -11,9 +11,10 @@ import aegisLogo from '../../logo/aegis-icon-brand-tile-color.svg';
 interface SidebarProps {
   activeTab: string;
   setActiveTab: (tab: string) => void;
+  chatAttentionCount?: number;
 }
 
-export default function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
+export default function Sidebar({ activeTab, setActiveTab, chatAttentionCount = 0 }: SidebarProps) {
   // Navigation item helper
   const navItems = [
     { id: 'overview', label: 'Overview', desc: '中控概览', icon: LayoutDashboard },
@@ -69,6 +70,14 @@ export default function Sidebar({ activeTab, setActiveTab }: SidebarProps) {
                   <div className={`text-xs font-semibold tracking-wide ${isActive ? 'text-cyan-400' : 'text-slate-400 group-hover:text-white'}`}>{item.label}</div>
                   <div className="text-[10px] text-slate-500 font-normal leading-tight mt-0.5">{item.desc}</div>
                 </div>
+                {item.id === 'chat' && chatAttentionCount > 0 ? (
+                  <span
+                    aria-label={`Chat attention count: ${chatAttentionCount}`}
+                    className="min-w-5 h-5 rounded-full border border-amber-900/40 bg-amber-950/30 px-1.5 text-[10px] font-bold text-amber-300 flex items-center justify-center"
+                  >
+                    {chatAttentionCount}
+                  </span>
+                ) : null}
                 {isActive && (
                   <span className="absolute right-3 top-1/2 -translate-y-1/2 h-1.5 w-1.5 rounded-full bg-cyan-400 shadow-[0_0_6px_rgba(6,182,212,0.8)]" />
                 )}
