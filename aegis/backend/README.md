@@ -85,6 +85,26 @@ The standalone backend currently supports these API areas:
 - Agents: `/api/agents`, `/api/agents/{agent_id}`
 - Global routing: `/api/routing/global`, `/api/routing/global/{rule_id}`
 
+## Recent Chat Updates
+
+The Aegis chat websocket endpoint at `/api/chat/ws` now includes a small set of
+Aegis-native slash commands that are handled directly in the backend and return
+through the normal `message.completed` event flow:
+
+- `/help` — list the Aegis-native slash commands currently supported by the
+  backend.
+- `/model <model_name>` — switch the current live session agent to a new model
+  without recreating the session. The override is in-memory only. If the target
+  provider matches the current one and the resolved switch result omits runtime
+  credentials, Aegis preserves the live agent's existing `api_key`,
+  `base_url`, and `api_mode` so the session does not lose authentication.
+- `/a2a` — return the current `A2A_CONTEXT` XML. If the cache is empty, the
+  backend refreshes it by calling `a2a_list()` first.
+
+Agent creation in Aegis also now uses the `tools.a2a_delegate_tool.A2A_CONTEXT`
+module global directly for the ephemeral system prompt. When the cache is
+empty, Aegis refreshes it with `a2a_list()` and then injects the refreshed XML.
+
 Interactive docs are available at:
 
 ```text

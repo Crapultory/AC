@@ -48,6 +48,137 @@ class _StreamingAgent:
         return {"final_response": f"hello world: {user_message}", "completed": True}
 
 
+class _SwitchableAgent(_StreamingAgent):
+    def __init__(self, session_id: str):
+        super().__init__(session_id)
+        self.provider = "openai"
+        self.model = "gpt-4.1-mini"
+        self.base_url = "https://api.openai.com/v1"
+        self.api_key = "test-key"
+        self.api_mode = "responses"
+        self.switch_calls: list[dict[str, str]] = []
+
+    def switch_model(
+        self,
+        new_model: str,
+        new_provider: str,
+        api_key: str = "",
+        base_url: str = "",
+        api_mode: str = "",
+    ) -> None:
+        self.switch_calls.append(
+            {
+                "new_model": new_model,
+                "new_provider": new_provider,
+                "api_key": api_key,
+                "base_url": base_url,
+                "api_mode": api_mode,
+            }
+        )
+        self.model = new_model
+        self.provider = new_provider
+        self.api_key = api_key
+        self.base_url = base_url
+        self.api_mode = api_mode
+
+
+class _SlowSwitchableAgent(_SwitchableAgent):
+    def run_conversation(
+        self,
+        user_message: str,
+        system_message: str | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
+        task_id: str | None = None,
+        stream_callback=None,
+        persist_user_message: bool = True,
+    ) -> dict[str, Any]:
+        del system_message, conversation_history, task_id, stream_callback, persist_user_message
+        if callable(self.stream_delta_callback):
+            self.stream_delta_callback("hello ")
+        time.sleep(0.2)
+        if callable(self.stream_delta_callback):
+            self.stream_delta_callback("world")
+        return {"final_response": f"hello world: {user_message}", "completed": True}
+
+
+class _HeaderAwareSwitchableAgent(_StreamingAgent):
+    def __init__(self, session_id: str):
+        super().__init__(session_id)
+        self.provider = "qwen"
+        self.model = "qwen3-coder-plus"
+        self.base_url = "https://portal.qwen.ai/v1"
+        self.api_key = "test-key"
+        self.api_mode = "chat_completions"
+        self._client_kwargs = {
+            "api_key": self.api_key,
+            "base_url": self.base_url,
+        }
+        self.client = {"kwargs": dict(self._client_kwargs)}
+        self.switch_calls: list[dict[str, Any]] = []
+        self.rebuilt_clients: list[dict[str, Any]] = []
+        self.header_refresh_calls: list[str] = []
+        self._primary_runtime = {
+            "model": self.model,
+            "provider": self.provider,
+            "base_url": self.base_url,
+            "api_mode": self.api_mode,
+            "api_key": self.api_key,
+            "client_kwargs": dict(self._client_kwargs),
+        }
+
+    def switch_model(
+        self,
+        new_model: str,
+        new_provider: str,
+        api_key: str = "",
+        base_url: str = "",
+        api_mode: str = "",
+    ) -> None:
+        self.switch_calls.append(
+            {
+                "new_model": new_model,
+                "new_provider": new_provider,
+                "api_key": api_key,
+                "base_url": base_url,
+                "api_mode": api_mode,
+            }
+        )
+        self.model = new_model
+        self.provider = new_provider
+        self.api_key = api_key
+        self.base_url = base_url
+        self.api_mode = api_mode
+        self._client_kwargs = {
+            "api_key": api_key,
+            "base_url": base_url,
+        }
+        self.client = {"kwargs": dict(self._client_kwargs)}
+        self._primary_runtime = {
+            "model": self.model,
+            "provider": self.provider,
+            "base_url": self.base_url,
+            "api_mode": self.api_mode,
+            "api_key": self.api_key,
+            "client_kwargs": dict(self._client_kwargs),
+        }
+
+    def _apply_client_headers_for_base_url(self, base_url: str) -> None:
+        self.header_refresh_calls.append(base_url)
+        if base_url == "https://portal.qwen.ai/v1":
+            self._client_kwargs["default_headers"] = {
+                "X-DashScope-AuthType": "qwen-oauth",
+            }
+
+    def _create_openai_client(self, client_kwargs: dict[str, Any], *, reason: str, shared: bool):
+        rebuilt = {
+            "kwargs": dict(client_kwargs),
+            "reason": reason,
+            "shared": shared,
+        }
+        self.rebuilt_clients.append(rebuilt)
+        return rebuilt
+
+
 class _DelegateAgent:
     def __init__(self, session_id: str):
         self.session_id = session_id
@@ -164,6 +295,9 @@ class _ClarifyOpenEndedAgent:
 
 def test_chat_session_manager_uses_aegis_platform_name(load_backend) -> None:
     service = load_backend("aegis.backend.chat.service")
+    from tools import a2a_delegate_tool
+
+    a2a_delegate_tool.A2A_CONTEXT = ""
     captured: dict[str, str] = {}
 
     def _fake_default_agent_factory(
@@ -189,7 +323,62 @@ def test_chat_session_manager_uses_aegis_platform_name(load_backend) -> None:
     assert actor.session_id.startswith("aegis-")
     assert captured["session_id"] == actor.session_id
     assert captured["platform"] == "aegis"
-    assert captured["ephemeral_system_prompt"] == ""
+    assert captured["ephemeral_system_prompt"] == (
+        "<aegis_context>\n"
+        "  <active_agents>\n"
+        "  </active_agents>\n"
+        "  <global_routing>\n"
+        "  </global_routing>\n"
+        "</aegis_context>"
+    )
+
+
+def test_build_aegis_ephemeral_system_prompt_uses_cached_a2a_context(
+    load_backend,
+    monkeypatch,
+) -> None:
+    service = load_backend("aegis.backend.chat.service")
+    from tools import a2a_delegate_tool
+
+    monkeypatch.setattr(
+        a2a_delegate_tool,
+        "A2A_CONTEXT",
+        "<aegis_context><active_agents /></aegis_context>",
+    )
+
+    def _unexpected_refresh() -> str:
+        raise AssertionError("a2a_list should not run when A2A_CONTEXT is already populated")
+
+    monkeypatch.setattr(a2a_delegate_tool, "a2a_list", _unexpected_refresh)
+
+    assert (
+        service.build_aegis_ephemeral_system_prompt()
+        == "<aegis_context><active_agents /></aegis_context>"
+    )
+
+
+def test_build_aegis_ephemeral_system_prompt_refreshes_empty_a2a_context(
+    load_backend,
+    monkeypatch,
+) -> None:
+    service = load_backend("aegis.backend.chat.service")
+    from tools import a2a_delegate_tool
+
+    monkeypatch.setattr(a2a_delegate_tool, "A2A_CONTEXT", "")
+    refresh_calls = {"count": 0}
+
+    def _refresh() -> str:
+        refresh_calls["count"] += 1
+        a2a_delegate_tool.A2A_CONTEXT = "<aegis_context><global_routing /></aegis_context>"
+        return json.dumps(a2a_delegate_tool.A2A_CONTEXT, ensure_ascii=False)
+
+    monkeypatch.setattr(a2a_delegate_tool, "a2a_list", _refresh)
+
+    assert (
+        service.build_aegis_ephemeral_system_prompt()
+        == "<aegis_context><global_routing /></aegis_context>"
+    )
+    assert refresh_calls["count"] == 1
 
 
 def test_chat_session_manager_injects_active_aegis_context_as_xml(
@@ -197,6 +386,9 @@ def test_chat_session_manager_injects_active_aegis_context_as_xml(
     hermes_home,
 ) -> None:
     service = load_backend("aegis.backend.chat.service")
+    from tools import a2a_delegate_tool
+
+    a2a_delegate_tool.A2A_CONTEXT = ""
     (hermes_home / "a2a.json").write_text(
         json.dumps(
             {
@@ -262,8 +454,7 @@ def test_chat_session_manager_injects_active_aegis_context_as_xml(
     assert captured["platform"] == "aegis"
     prompt = captured["ephemeral_system_prompt"]
     assert "<aegis_context>" in prompt
-    assert '<agent id="alpha" status="active">' in prompt
-    assert "<url>http://127.0.0.1:9001/a2a</url>" in prompt
+    assert '<agent id="alpha" url="http://127.0.0.1:9001/a2a" status="active">' in prompt
     assert "<capability>triage alerts</capability>" in prompt
     assert "<capability>summarize incidents</capability>" in prompt
     assert '<rule id="rule1234" status="active">' in prompt
@@ -311,6 +502,418 @@ def test_chat_ws_binds_and_streams_main_agent_events(
             completed = _recv_until(ws, "message.completed")
             assert completed["source"] == "main"
             assert completed["content"] == "hello world: hello aegis"
+
+
+def test_chat_ws_a2a_slash_returns_cached_context_without_running_agent(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    from tools import a2a_delegate_tool
+
+    a2a_delegate_tool.A2A_CONTEXT = "<aegis_context><active_agents /></aegis_context>"
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    app.state.chat_manager.set_agent_factory(lambda session_id: _StreamingAgent(session_id))
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws:
+            ws.send_json({"type": "session.bind", "title": "A2A Cached"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "/a2a",
+                    "client_msg_id": "msg-a2a",
+                }
+            )
+            accepted = _recv_until(ws, "message.accepted")
+            completed = _recv_until(ws, "message.completed")
+            assert completed["turn_id"] == accepted["turn_id"]
+            assert completed["content"] == "<aegis_context><active_agents /></aegis_context>"
+
+
+def test_chat_ws_a2a_slash_refreshes_empty_context(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    from tools import a2a_delegate_tool
+
+    a2a_delegate_tool.A2A_CONTEXT = ""
+    refresh_calls = {"count": 0}
+
+    def _refresh() -> str:
+        refresh_calls["count"] += 1
+        a2a_delegate_tool.A2A_CONTEXT = "<aegis_context><global_routing /></aegis_context>"
+        return json.dumps(a2a_delegate_tool.A2A_CONTEXT, ensure_ascii=False)
+
+    monkeypatch.setattr(a2a_delegate_tool, "a2a_list", _refresh)
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    app.state.chat_manager.set_agent_factory(lambda session_id: _StreamingAgent(session_id))
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws:
+            ws.send_json({"type": "session.bind", "title": "A2A Refresh"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "/a2a",
+                    "client_msg_id": "msg-a2a-refresh",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            completed = _recv_until(ws, "message.completed")
+            assert completed["content"] == "<aegis_context><global_routing /></aegis_context>"
+            assert refresh_calls["count"] == 1
+
+
+def test_chat_ws_a2a_slash_reports_refresh_failure(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    from tools import a2a_delegate_tool
+
+    a2a_delegate_tool.A2A_CONTEXT = ""
+
+    def _broken_refresh() -> str:
+        raise RuntimeError("refresh failed")
+
+    monkeypatch.setattr(a2a_delegate_tool, "a2a_list", _broken_refresh)
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    app.state.chat_manager.set_agent_factory(lambda session_id: _StreamingAgent(session_id))
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws:
+            ws.send_json({"type": "session.bind", "title": "A2A Error"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "/a2a",
+                    "client_msg_id": "msg-a2a-error",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            completed = _recv_until(ws, "message.completed")
+            assert completed["content"] == "A2A context refresh failed: refresh failed"
+
+
+def test_chat_ws_help_slash_lists_supported_aegis_commands(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    app.state.chat_manager.set_agent_factory(lambda session_id: _StreamingAgent(session_id))
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws:
+            ws.send_json({"type": "session.bind", "title": "Help Slash"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "/help",
+                    "client_msg_id": "msg-help",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            completed = _recv_until(ws, "message.completed")
+            assert completed["content"] == (
+                "Aegis slash commands:\n"
+                "/help - show available Aegis-native slash commands\n"
+                "/model <model_name> - switch the current live session model\n"
+                "/a2a - show the current A2A context XML"
+            )
+
+
+def test_chat_ws_model_slash_without_args_returns_usage(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    agent = _SwitchableAgent("switchable")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    app.state.chat_manager.set_agent_factory(lambda session_id: agent)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws:
+            ws.send_json({"type": "session.bind", "title": "Model Usage"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "/model",
+                    "client_msg_id": "msg-model-usage",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            completed = _recv_until(ws, "message.completed")
+            assert completed["content"] == "Usage: /model <model_name>"
+            assert agent.switch_calls == []
+
+
+def test_chat_ws_model_slash_switches_live_agent(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    agent = _SwitchableAgent("switchable")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    app.state.chat_manager.set_agent_factory(lambda session_id: agent)
+
+    from hermes_cli import model_switch as model_switch_module
+
+    def _fake_switch_model(**kwargs):
+        assert kwargs["raw_input"] == "gpt-4.1"
+        assert kwargs["current_provider"] == "openai"
+        assert kwargs["current_model"] == "gpt-4.1-mini"
+        assert kwargs["is_global"] is False
+        return model_switch_module.ModelSwitchResult(
+            success=True,
+            new_model="gpt-4.1",
+            target_provider="openai",
+            api_key="resolved-key",
+            base_url="https://api.openai.com/v1",
+            api_mode="responses",
+            warning_message="",
+        )
+
+    monkeypatch.setattr(model_switch_module, "switch_model", _fake_switch_model)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws:
+            ws.send_json({"type": "session.bind", "title": "Model Switch"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "/model gpt-4.1",
+                    "client_msg_id": "msg-model-switch",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            completed = _recv_until(ws, "message.completed")
+            assert completed["content"] == "model -> gpt-4.1"
+            assert agent.switch_calls == [
+                {
+                    "new_model": "gpt-4.1",
+                    "new_provider": "openai",
+                    "api_key": "resolved-key",
+                    "base_url": "https://api.openai.com/v1",
+                    "api_mode": "responses",
+                }
+            ]
+
+
+def test_chat_ws_model_slash_preserves_live_credentials_when_same_provider_result_is_empty(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    agent = _SwitchableAgent("switchable")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    app.state.chat_manager.set_agent_factory(lambda session_id: agent)
+
+    from hermes_cli import model_switch as model_switch_module
+
+    def _fake_switch_model(**kwargs):
+        assert kwargs["raw_input"] == "gpt-4.1"
+        return model_switch_module.ModelSwitchResult(
+            success=True,
+            new_model="gpt-4.1",
+            target_provider="openai",
+            api_key="",
+            base_url="",
+            api_mode="",
+            warning_message="",
+        )
+
+    monkeypatch.setattr(model_switch_module, "switch_model", _fake_switch_model)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws:
+            ws.send_json({"type": "session.bind", "title": "Model Switch Preserve Creds"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "/model gpt-4.1",
+                    "client_msg_id": "msg-model-preserve-creds",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            completed = _recv_until(ws, "message.completed")
+            assert completed["content"] == "model -> gpt-4.1"
+            assert agent.switch_calls == [
+                {
+                    "new_model": "gpt-4.1",
+                    "new_provider": "openai",
+                    "api_key": "test-key",
+                    "base_url": "https://api.openai.com/v1",
+                    "api_mode": "responses",
+                }
+            ]
+
+
+def test_chat_ws_model_slash_rebuilds_live_client_headers_for_provider_specific_runtime(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    agent = _HeaderAwareSwitchableAgent("switchable")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    app.state.chat_manager.set_agent_factory(lambda session_id: agent)
+
+    from hermes_cli import model_switch as model_switch_module
+
+    def _fake_switch_model(**kwargs):
+        assert kwargs["raw_input"] == "qwen3-coder-plus"
+        return model_switch_module.ModelSwitchResult(
+            success=True,
+            new_model="qwen3-coder-plus",
+            target_provider="qwen",
+            api_key="test-key",
+            base_url="https://portal.qwen.ai/v1",
+            api_mode="chat_completions",
+            warning_message="",
+        )
+
+    monkeypatch.setattr(model_switch_module, "switch_model", _fake_switch_model)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws:
+            ws.send_json({"type": "session.bind", "title": "Model Switch Rebuild Headers"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "/model qwen3-coder-plus",
+                    "client_msg_id": "msg-model-rebuild-headers",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            completed = _recv_until(ws, "message.completed")
+            assert completed["content"] == "model -> qwen3-coder-plus"
+            assert agent.header_refresh_calls == ["https://portal.qwen.ai/v1"]
+            assert agent.rebuilt_clients[-1]["kwargs"]["default_headers"] == {
+                "X-DashScope-AuthType": "qwen-oauth",
+            }
+            assert agent.client == agent.rebuilt_clients[-1]
+            assert agent._primary_runtime["client_kwargs"]["default_headers"] == {
+                "X-DashScope-AuthType": "qwen-oauth",
+            }
+
+
+def test_chat_ws_model_slash_reports_busy_session(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    app.state.chat_manager.set_agent_factory(lambda session_id: _SlowSwitchableAgent(session_id))
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws:
+            ws.send_json({"type": "session.bind", "title": "Busy Model Switch"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "hello aegis",
+                    "client_msg_id": "msg-running",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            _recv_until(ws, "message.delta")
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "/model gpt-4.1",
+                    "client_msg_id": "msg-model-busy",
+                }
+            )
+            accepted = _recv_until(ws, "message.accepted")
+            error = _recv_until(ws, "message.completed")
+            assert error["turn_id"] == accepted["turn_id"]
+            assert error["content"] == "session busy — interrupt the current turn before switching models"
+
+
+def test_chat_ws_model_slash_reports_switch_failure(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    agent = _SwitchableAgent("switchable")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    app.state.chat_manager.set_agent_factory(lambda session_id: agent)
+
+    from hermes_cli import model_switch as model_switch_module
+
+    def _broken_switch_model(**kwargs):
+        raise ValueError("unknown model")
+
+    monkeypatch.setattr(model_switch_module, "switch_model", _broken_switch_model)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws:
+            ws.send_json({"type": "session.bind", "title": "Model Failure"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "/model bad-model",
+                    "client_msg_id": "msg-model-fail",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            completed = _recv_until(ws, "message.completed")
+            assert completed["content"] == "Model switch failed: unknown model"
+            assert agent.switch_calls == []
 
 
 def test_chat_ws_routes_follow_up_into_delegate_foreground_with_srcagent(

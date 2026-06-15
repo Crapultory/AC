@@ -10,7 +10,6 @@ import threading
 import time
 from typing import Any
 from uuid import uuid4
-from xml.sax.saxutils import escape
 
 from fastapi import WebSocket
 
@@ -21,8 +20,6 @@ from aegis.backend.chat.models import (
     DelegateForegroundState,
 )
 from aegis.backend.chat.runtime import AegisChatInputAdapter, AegisChatOutputAdapter
-from aegis.backend.services.agent_service import AgentService
-from aegis.backend.services.routing_service import RoutingService
 from aisoc.backend.agent_runtime import default_agent_factory
 from aisoc.backend.agent_runtime import load_conversation_history
 from gateway.session_context import clear_session_vars, set_session_vars
@@ -60,72 +57,68 @@ def _clarify_timeout_seconds() -> float:
     return timeout if timeout > 0 else 600.0
 
 
-def _xml_text(value: object) -> str:
-    return escape(str(value if value is not None else ""), {"'": "&apos;", '"': "&quot;"})
-
-
 def build_aegis_ephemeral_system_prompt(
     *,
-    agent_service: AgentService | None = None,
-    routing_service: RoutingService | None = None,
+    agent_service=None,
+    routing_service=None,
 ) -> str | None:
-    active_agents = [
-        agent
-        for agent in (agent_service or AgentService()).list_agents()
-        if agent.status == "active"
-    ]
-    active_rules = [
-        rule
-        for rule in (routing_service or RoutingService()).list_global_rules()
-        if rule.status == "active"
-    ]
+    del agent_service, routing_service
 
-    if not active_agents and not active_rules:
+    from tools import a2a_delegate_tool
+
+    cached_context = str(getattr(a2a_delegate_tool, "A2A_CONTEXT", "") or "").strip()
+    if cached_context:
+        return cached_context
+
+    try:
+        a2a_delegate_tool.a2a_list()
+    except Exception:
         return None
 
-    lines = [
-        "<aegis_context>",
-        "  <active_agents>",
-    ]
-    for agent in active_agents:
-        lines.extend(
-            [
-                f'    <agent id="{_xml_text(agent.agent_id)}" status="{_xml_text(agent.status)}">',
-                f"      <url>{_xml_text(agent.url)}</url>",
-                f"      <description>{_xml_text(agent.description)}</description>",
-                "      <capabilities>",
-            ]
-        )
-        for capability in agent.extcapabilities:
-            lines.append(f"        <capability>{_xml_text(capability)}</capability>")
-        lines.extend(
-            [
-                "      </capabilities>",
-                "    </agent>",
-            ]
-        )
-    lines.extend(
-        [
-            "  </active_agents>",
-            "  <global_routing>",
-        ]
+    refreshed_context = str(getattr(a2a_delegate_tool, "A2A_CONTEXT", "") or "").strip()
+    return refreshed_context or None
+
+
+def _aegis_help_text() -> str:
+    return (
+        "Aegis slash commands:\n"
+        "/help - show available Aegis-native slash commands\n"
+        "/model <model_name> - switch the current live session model\n"
+        "/a2a - show the current A2A context XML"
     )
-    for rule in active_rules:
-        lines.extend(
-            [
-                f'    <rule id="{_xml_text(rule.id)}" status="{_xml_text(rule.status)}">',
-                f"      <name>{_xml_text(rule.name)}</name>",
-                f"      <policy>{_xml_text(rule.policy)}</policy>",
-                "    </rule>",
-            ]
+
+
+def _refresh_live_agent_runtime_after_model_switch(agent: object) -> None:
+    client_kwargs = getattr(agent, "_client_kwargs", None)
+    if not isinstance(client_kwargs, dict):
+        return
+
+    base_url = str(getattr(agent, "base_url", "") or "")
+    refresh_headers = getattr(agent, "_apply_client_headers_for_base_url", None)
+    if callable(refresh_headers) and base_url:
+        refresh_headers(base_url)
+
+    api_mode = str(getattr(agent, "api_mode", "") or "")
+    rebuild_client = getattr(agent, "_create_openai_client", None)
+    if callable(rebuild_client) and api_mode not in {"anthropic_messages", "bedrock_converse"}:
+        agent.client = rebuild_client(
+            dict(client_kwargs),
+            reason="aegis_slash_model_switch",
+            shared=True,
         )
-    lines.extend(
-        [
-            "  </global_routing>",
-            "</aegis_context>",
-        ]
-    )
-    return "\n".join(lines)
+
+    primary_runtime = getattr(agent, "_primary_runtime", None)
+    if isinstance(primary_runtime, dict):
+        primary_runtime.update(
+            {
+                "model": getattr(agent, "model", ""),
+                "provider": getattr(agent, "provider", ""),
+                "base_url": getattr(agent, "base_url", ""),
+                "api_mode": getattr(agent, "api_mode", ""),
+                "api_key": getattr(agent, "api_key", ""),
+                "client_kwargs": dict(client_kwargs),
+            }
+        )
 
 
 def _build_default_aegis_agent(session_id: str) -> object:
@@ -250,6 +243,125 @@ class ChatSessionActor:
         if title:
             self.title = _conversation_title(title, fallback=self.title)
 
+    @staticmethod
+    def _native_slash_parts(text: str) -> tuple[str, str] | None:
+        stripped = str(text or "").strip()
+        if not stripped.startswith("/"):
+            return None
+        first_word, _, remainder = stripped.partition(" ")
+        command = first_word.lower()
+        if command not in {"/a2a", "/help", "/model"}:
+            return None
+        return command, remainder.strip()
+
+    def _emit_main_text_reply(self, content: str, turn_id: str) -> None:
+        self._send_event(
+            "message.completed",
+            {
+                "message_id": f"assistant_{uuid4().hex[:10]}",
+                "content": str(content or ""),
+                "completed": True,
+            },
+            source="main",
+            turn_id=turn_id,
+        )
+
+    def _handle_a2a_slash(self, turn_id: str) -> None:
+        from tools import a2a_delegate_tool
+
+        cached_context = str(getattr(a2a_delegate_tool, "A2A_CONTEXT", "") or "").strip()
+        if cached_context:
+            self._emit_main_text_reply(cached_context, turn_id)
+            return
+
+        try:
+            a2a_delegate_tool.a2a_list()
+        except Exception as exc:
+            self._emit_main_text_reply(f"A2A context refresh failed: {exc}", turn_id)
+            return
+
+        refreshed_context = str(getattr(a2a_delegate_tool, "A2A_CONTEXT", "") or "").strip()
+        self._emit_main_text_reply(refreshed_context or "A2A context is empty.", turn_id)
+
+    def _handle_help_slash(self, turn_id: str) -> None:
+        self._emit_main_text_reply(_aegis_help_text(), turn_id)
+
+    def _handle_model_slash(self, arg: str, turn_id: str) -> None:
+        model_input = str(arg or "").strip()
+        if not model_input:
+            self._emit_main_text_reply("Usage: /model <model_name>", turn_id)
+            return
+
+        running_thread = self._running_thread
+        if running_thread is not None and running_thread.is_alive():
+            self._emit_main_text_reply(
+                "session busy — interrupt the current turn before switching models",
+                turn_id,
+            )
+            return
+
+        agent = self._agent
+        switch_live_model = getattr(agent, "switch_model", None)
+        if not callable(switch_live_model):
+            self._emit_main_text_reply("Model switching is unavailable for this session.", turn_id)
+            return
+
+        current_provider = str(getattr(agent, "provider", "") or "")
+        current_model = str(getattr(agent, "model", "") or "")
+        current_base_url = str(getattr(agent, "base_url", "") or "")
+        current_api_key = getattr(agent, "api_key", "")
+
+        try:
+            from hermes_cli.config import get_compatible_custom_providers, load_config
+            from hermes_cli.model_switch import switch_model
+
+            cfg = load_config()
+            user_providers = cfg.get("providers")
+            custom_providers = get_compatible_custom_providers(cfg)
+            result = switch_model(
+                raw_input=model_input,
+                current_provider=current_provider,
+                current_model=current_model,
+                current_base_url=current_base_url,
+                current_api_key=current_api_key,
+                is_global=False,
+                explicit_provider="",
+                user_providers=user_providers,
+                custom_providers=custom_providers,
+            )
+            if not result.success:
+                raise ValueError(result.error_message or "model switch failed")
+
+            target_provider = str(result.target_provider or "")
+            target_api_key = result.api_key
+            target_base_url = result.base_url
+            target_api_mode = result.api_mode
+
+            if target_provider == current_provider:
+                if not target_api_key:
+                    target_api_key = current_api_key
+                if not target_base_url:
+                    target_base_url = current_base_url
+                if not target_api_mode:
+                    target_api_mode = str(getattr(agent, "api_mode", "") or "")
+
+            switch_live_model(
+                result.new_model,
+                target_provider,
+                api_key=target_api_key,
+                base_url=target_base_url,
+                api_mode=target_api_mode,
+            )
+            _refresh_live_agent_runtime_after_model_switch(agent)
+        except Exception as exc:
+            self._emit_main_text_reply(f"Model switch failed: {exc}", turn_id)
+            return
+
+        response = f"model -> {result.new_model}"
+        if result.warning_message:
+            response = f"{response}\nwarning: {result.warning_message}"
+        self._emit_main_text_reply(response, turn_id)
+
     def handle_message(self, text: str, *, client_msg_id: str | None = None) -> None:
         stripped = str(text or "")
         with self._lock:
@@ -284,6 +396,19 @@ class ChatSessionActor:
                 source=self._foreground_source,
                 turn_id=turn_id,
             )
+            slash_parts = self._native_slash_parts(stripped)
+            if slash_parts is not None:
+                command, arg = slash_parts
+                self._turn_id = turn_id
+                if command == "/a2a":
+                    self._handle_a2a_slash(turn_id)
+                    return
+                if command == "/help":
+                    self._handle_help_slash(turn_id)
+                    return
+                if command == "/model":
+                    self._handle_model_slash(arg, turn_id)
+                    return
             if self._foreground_source == "delegate" and self._delegate_input is not None:
                 self._turn_id = turn_id
                 self._set_run_state("running", source="delegate")
