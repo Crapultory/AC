@@ -345,6 +345,7 @@ class TestDelegateExt:
             )
 
         monkeypatch.setattr(a2a_delegate_tool_module, "_fetch_agent_card", _fake_fetch_agent_card)
+        monkeypatch.setattr(a2a_delegate_tool_module, "A2A_CONTEXT", "stale context")
 
         result = json.loads(a2a_list())
 
@@ -360,6 +361,7 @@ class TestDelegateExt:
                 {"Authorization": "Bearer secret-token"},
             )
         ]
+        assert a2a_delegate_tool_module.A2A_CONTEXT == result
         assert A2A_REGISTRY == {"cached": {"name": "cached", "url": "http://cached.local"}}
 
     def test_a2a_list_fails_on_malformed_registry(self, tmp_path, monkeypatch):
@@ -367,11 +369,13 @@ class TestDelegateExt:
         hermes_home.mkdir()
         (hermes_home / "a2a.json").write_text('{"a2a":[1,2,3]}', encoding="utf-8")
         monkeypatch.setattr(a2a_delegate_tool_module, "get_hermes_home", lambda: hermes_home)
+        monkeypatch.setattr(a2a_delegate_tool_module, "A2A_CONTEXT", "previous good context")
 
         result = json.loads(a2a_list())
 
         assert result["success"] is False
         assert "a2a" in result["error"].lower()
+        assert a2a_delegate_tool_module.A2A_CONTEXT == "previous good context"
 
     def test_a2a_mode_runs_single_turn_and_ignores_local_only_params(self, monkeypatch):
         parent = _make_mock_parent()

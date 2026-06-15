@@ -34,6 +34,7 @@ DEFAULT_AGENT_MODE = "a2a"
 DEFAULT_TOOLSETS = ["hermes-cli"]
 DEFAULT_MAX_ITERATIONS = 90
 A2A_REGISTRY: Dict[str, Dict[str, Any]] = {}
+A2A_CONTEXT = ""
 
 
 A2A_LIST_SCHEMA = {
@@ -478,10 +479,12 @@ def _normalize_max_iterations(value: Optional[int], parent_agent) -> tuple[int, 
 
 def a2a_list() -> str:
     """Return Aegis XML context built from active A2A agents and routing rules."""
+    global A2A_CONTEXT
     try:
         xml_payload = _build_aegis_context_xml()
     except (OSError, ValueError, json.JSONDecodeError) as exc:
         return tool_error(str(exc), success=False)
+    A2A_CONTEXT = xml_payload
     return json.dumps(xml_payload, ensure_ascii=False)
 
 
