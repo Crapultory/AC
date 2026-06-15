@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import threading
 from typing import Any
 
 
@@ -15,6 +16,16 @@ class ApprovalRequestState:
     command: str
     description: str
     choices: list[str] = field(default_factory=lambda: ["once", "session", "always", "deny"])
+
+
+@dataclass(slots=True)
+class ClarifyRequestState:
+    clarify_id: str
+    question: str
+    choices: list[str] | None = None
+    awaiting_text: bool = False
+    answer: str | None = None
+    event: threading.Event = field(default_factory=threading.Event)
 
 
 @dataclass(slots=True)

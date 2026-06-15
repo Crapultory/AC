@@ -10,11 +10,19 @@ import threading
 import time
 from typing import Any
 from uuid import uuid4
+from xml.sax.saxutils import escape
 
 from fastapi import WebSocket
 
-from aegis.backend.chat.models import ApprovalRequestState, ChatEventEnvelope, DelegateForegroundState
+from aegis.backend.chat.models import (
+    ApprovalRequestState,
+    ChatEventEnvelope,
+    ClarifyRequestState,
+    DelegateForegroundState,
+)
 from aegis.backend.chat.runtime import AegisChatInputAdapter, AegisChatOutputAdapter
+from aegis.backend.services.agent_service import AgentService
+from aegis.backend.services.routing_service import RoutingService
 from aisoc.backend.agent_runtime import default_agent_factory
 from aisoc.backend.agent_runtime import load_conversation_history
 from gateway.session_context import clear_session_vars, set_session_vars
@@ -43,6 +51,91 @@ def _message_delta_enabled() -> bool:
     return value not in {"0", "false", "no", "off"}
 
 
+def _clarify_timeout_seconds() -> float:
+    raw = str(os.getenv("AEGIS_CLARIFY_TIMEOUT_SECONDS", "600")).strip()
+    try:
+        timeout = float(raw)
+    except ValueError:
+        return 600.0
+    return timeout if timeout > 0 else 600.0
+
+
+def _xml_text(value: object) -> str:
+    return escape(str(value if value is not None else ""), {"'": "&apos;", '"': "&quot;"})
+
+
+def build_aegis_ephemeral_system_prompt(
+    *,
+    agent_service: AgentService | None = None,
+    routing_service: RoutingService | None = None,
+) -> str | None:
+    active_agents = [
+        agent
+        for agent in (agent_service or AgentService()).list_agents()
+        if agent.status == "active"
+    ]
+    active_rules = [
+        rule
+        for rule in (routing_service or RoutingService()).list_global_rules()
+        if rule.status == "active"
+    ]
+
+    if not active_agents and not active_rules:
+        return None
+
+    lines = [
+        "<aegis_context>",
+        "  <active_agents>",
+    ]
+    for agent in active_agents:
+        lines.extend(
+            [
+                f'    <agent id="{_xml_text(agent.agent_id)}" status="{_xml_text(agent.status)}">',
+                f"      <url>{_xml_text(agent.url)}</url>",
+                f"      <description>{_xml_text(agent.description)}</description>",
+                "      <capabilities>",
+            ]
+        )
+        for capability in agent.extcapabilities:
+            lines.append(f"        <capability>{_xml_text(capability)}</capability>")
+        lines.extend(
+            [
+                "      </capabilities>",
+                "    </agent>",
+            ]
+        )
+    lines.extend(
+        [
+            "  </active_agents>",
+            "  <global_routing>",
+        ]
+    )
+    for rule in active_rules:
+        lines.extend(
+            [
+                f'    <rule id="{_xml_text(rule.id)}" status="{_xml_text(rule.status)}">',
+                f"      <name>{_xml_text(rule.name)}</name>",
+                f"      <policy>{_xml_text(rule.policy)}</policy>",
+                "    </rule>",
+            ]
+        )
+    lines.extend(
+        [
+            "  </global_routing>",
+            "</aegis_context>",
+        ]
+    )
+    return "\n".join(lines)
+
+
+def _build_default_aegis_agent(session_id: str) -> object:
+    return default_agent_factory(
+        session_id,
+        platform="aegis",
+        ephemeral_system_prompt=build_aegis_ephemeral_system_prompt(),
+    )
+
+
 class ChatSessionActor:
     def __init__(
         self,
@@ -66,6 +159,7 @@ class ChatSessionActor:
         self._delegate_input: AegisChatInputAdapter | None = None
         self._pending_delegate_agent_name = ""
         self._pending_approval: ApprovalRequestState | None = None
+        self._pending_clarify: ClarifyRequestState | None = None
         self._last_run_state = "idle"
         self._last_state_source = "main"
         self._latest_delegate_message_id: str | None = None
@@ -137,6 +231,19 @@ class ChatSessionActor:
                         turn_id=self._turn_id,
                     )
                 )
+            if self._pending_clarify is not None:
+                events.append(
+                    self._make_event(
+                        "clarify.request",
+                        payload={
+                            "clarify_id": self._pending_clarify.clarify_id,
+                            "question": self._pending_clarify.question,
+                            "choices": list(self._pending_clarify.choices or []) or None,
+                        },
+                        source=self._foreground_source,
+                        turn_id=self._turn_id,
+                    )
+                )
         return events
 
     def set_title(self, title: str | None) -> None:
@@ -152,6 +259,16 @@ class ChatSessionActor:
                     {
                         "code": "waiting_for_approval",
                         "message": "Session is waiting for approval.",
+                    },
+                    source=self._foreground_source,
+                )
+                return
+            if self._pending_clarify is not None:
+                self._send_event(
+                    "error",
+                    {
+                        "code": "waiting_for_clarify",
+                        "message": "Session is waiting for clarify input.",
                     },
                     source=self._foreground_source,
                 )
@@ -226,6 +343,43 @@ class ChatSessionActor:
             {
                 "approval_id": pending.approval_id if pending else None,
                 "choice": normalized,
+            },
+            source=self._foreground_source,
+            turn_id=self._turn_id,
+        )
+        self._set_run_state("running", source=self._foreground_source)
+
+    def handle_clarify_response(self, answer: str) -> None:
+        normalized = str(answer or "").strip()
+        if not normalized:
+            self._send_event(
+                "error",
+                {"code": "invalid_clarify_answer", "message": "Clarify answer must not be empty."},
+                source=self._foreground_source,
+                turn_id=self._turn_id,
+            )
+            return
+        with self._lock:
+            pending = self._pending_clarify
+            if pending is None:
+                pending = None
+            else:
+                self._pending_clarify = None
+                pending.answer = normalized
+                pending.event.set()
+        if pending is None:
+            self._send_event(
+                "error",
+                {"code": "clarify_not_pending", "message": "No pending clarify request for this session."},
+                source=self._foreground_source,
+                turn_id=self._turn_id,
+            )
+            return
+        self._send_event(
+            "clarify.resolved",
+            {
+                "clarify_id": pending.clarify_id,
+                "answer": normalized,
             },
             source=self._foreground_source,
             turn_id=self._turn_id,
@@ -389,11 +543,51 @@ class ChatSessionActor:
             turn_id=self._turn_id,
         )
 
+    def _clarify_callback_sync(self, question: str, choices: list[str] | None) -> str:
+        normalized_question = str(question or "").strip()
+        normalized_choices = [str(choice).strip() for choice in (choices or []) if str(choice).strip()]
+        pending = ClarifyRequestState(
+            clarify_id=f"clarify_{uuid4().hex[:10]}",
+            question=normalized_question,
+            choices=normalized_choices or None,
+            awaiting_text=not bool(normalized_choices),
+        )
+        with self._lock:
+            self._pending_clarify = pending
+        self._set_run_state("waiting_for_clarify", source=self._foreground_source)
+        self._send_event(
+            "clarify.request",
+            {
+                "clarify_id": pending.clarify_id,
+                "question": pending.question,
+                "choices": list(pending.choices or []) or None,
+            },
+            source=self._foreground_source,
+            turn_id=self._turn_id,
+        )
+        if pending.event.wait(timeout=_clarify_timeout_seconds()):
+            return str(pending.answer or "")
+        with self._lock:
+            if self._pending_clarify is pending:
+                self._pending_clarify = None
+        self._send_event(
+            "clarify.resolved",
+            {
+                "clarify_id": pending.clarify_id,
+            },
+            source=self._foreground_source,
+            turn_id=self._turn_id,
+        )
+        self._set_run_state("running", source=self._foreground_source)
+        timeout_minutes = max(1, int(_clarify_timeout_seconds() / 60))
+        return f"[user did not respond within {timeout_minutes}m]"
+
     def _run_turn(self, user_message: str, turn_id: str) -> None:
         agent = self._agent
         old_stream = getattr(agent, "stream_delta_callback", None)
         old_tool_start = getattr(agent, "tool_start_callback", None)
         old_tool_complete = getattr(agent, "tool_complete_callback", None)
+        old_clarify_callback = getattr(agent, "clarify_callback", None)
         old_delegate_output = getattr(agent, "_delegate_ext_output_adapter", None)
         old_delegate_input_factory = getattr(agent, "_delegate_ext_input_factory", None)
         approval_token = None
@@ -454,6 +648,7 @@ class ChatSessionActor:
             setattr(agent, "stream_delta_callback", _on_delta)
             setattr(agent, "tool_start_callback", _on_tool_start)
             setattr(agent, "tool_complete_callback", _on_tool_complete)
+            setattr(agent, "clarify_callback", self._clarify_callback_sync)
             setattr(agent, "_delegate_ext_output_adapter", self._output_adapter)
             setattr(
                 agent,
@@ -525,6 +720,13 @@ class ChatSessionActor:
                 setattr(agent, "tool_start_callback", old_tool_start)
             if old_tool_complete is not None:
                 setattr(agent, "tool_complete_callback", old_tool_complete)
+            if old_clarify_callback is not None:
+                setattr(agent, "clarify_callback", old_clarify_callback)
+            else:
+                try:
+                    delattr(agent, "clarify_callback")
+                except Exception:
+                    pass
             if old_delegate_output is not None:
                 setattr(agent, "_delegate_ext_output_adapter", old_delegate_output)
             else:
@@ -613,9 +815,7 @@ class ChatSessionActor:
 
 class ChatSessionManager:
     def __init__(self, agent_factory: Callable[[str], object] | None = None) -> None:
-        self._agent_factory = agent_factory or (
-            lambda session_id: default_agent_factory(session_id, platform="aegis")
-        )
+        self._agent_factory = agent_factory or _build_default_aegis_agent
         self._lock = threading.Lock()
         self._sessions: dict[str, ChatSessionActor] = {}
 

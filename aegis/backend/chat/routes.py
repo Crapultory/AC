@@ -79,6 +79,10 @@ def build_chat_router(
                     actor.handle_approval_response(str(payload.get("choice") or ""))
                     continue
 
+                if event_type == "clarify.respond":
+                    actor.handle_clarify_response(str(payload.get("answer") or ""))
+                    continue
+
                 if event_type == "session.interrupt":
                     actor.interrupt()
                     continue

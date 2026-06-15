@@ -93,4 +93,10 @@ export interface Conversation {
     description: string;
     choices: string[];
   } | null;
+  pendingClarify?: {
+    clarifyId: string;
+    question: string;
+    choices: string[];
+    awaitingText: boolean;
+  } | null;
 }

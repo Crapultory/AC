@@ -47,8 +47,10 @@ type ChatSocketEvent = {
   reason?: string;
   state?: string;
   approval_id?: string;
+  clarify_id?: string;
   command?: string;
   description?: string;
+  question?: string;
   choices?: string[];
   code?: string;
   message?: string;
@@ -57,6 +59,7 @@ type ChatSocketEvent = {
 type PendingBoundAction =
   | { type: 'message.send'; text: string; clientMsgId: string }
   | { type: 'approval.respond'; choice: 'once' | 'session' | 'always' | 'deny' }
+  | { type: 'clarify.respond'; answer: string }
   | { type: 'session.resume' };
 
 const STORAGE_KEY = 'aegis_convs';
@@ -109,7 +112,13 @@ function isConversationBusy(conversation: Conversation | undefined): boolean {
   if (!conversation) {
     return false;
   }
-  return conversation.lastKnownRunState === 'waiting_for_approval';
+  if (conversation.lastKnownRunState === 'waiting_for_approval') {
+    return true;
+  }
+  if (conversation.lastKnownRunState === 'waiting_for_clarify') {
+    return !conversation.pendingClarify?.awaitingText;
+  }
+  return false;
 }
 
 function upsertChainStep(steps: ChainStep[], nextStep: ChainStep & { id: string }): ChainStep[] {
@@ -409,6 +418,16 @@ export default function ChatTab({ agents }: ChatTabProps) {
       );
       return;
     }
+    if (action.type === 'clarify.respond') {
+      socket.send(
+        JSON.stringify({
+          type: 'clarify.respond',
+          session_id: sessionId,
+          answer: action.answer,
+        }),
+      );
+      return;
+    }
     socket.send(
       JSON.stringify({
         type: 'session.resume',
@@ -553,6 +572,23 @@ export default function ChatTab({ agents }: ChatTabProps) {
           return nextConversation;
         }
 
+        if (payload.type === 'clarify.request') {
+          const nextChoices = payload.choices || [];
+          nextConversation.pendingClarify = {
+            clarifyId: payload.clarify_id || '',
+            question: payload.question || '',
+            choices: nextChoices,
+            awaitingText: nextChoices.length === 0,
+          };
+          nextConversation.lastKnownRunState = 'waiting_for_clarify';
+          return nextConversation;
+        }
+
+        if (payload.type === 'clarify.resolved') {
+          nextConversation.pendingClarify = null;
+          return nextConversation;
+        }
+
         return nextConversation;
       });
       conversationsRef.current = next;
@@ -657,6 +693,7 @@ export default function ChatTab({ agents }: ChatTabProps) {
       liveChainTurnId: undefined,
       liveChainSteps: [],
       pendingApproval: null,
+      pendingClarify: null,
     };
     setConversations((current) => [created, ...current]);
     setActiveConvId(created.id);
@@ -676,6 +713,7 @@ export default function ChatTab({ agents }: ChatTabProps) {
       liveChainTurnId: undefined,
       liveChainSteps: [],
       pendingApproval: null,
+      pendingClarify: null,
     };
     setConversations((current) => [created, ...current]);
     setActiveConvId(created.id);
@@ -715,8 +753,9 @@ export default function ChatTab({ agents }: ChatTabProps) {
       return;
     }
     const conversation = conversationsRef.current.find((item) => item.id === activeConvId) || ensureConversation();
+    const isClarifyReply = Boolean(conversation.pendingClarify?.awaitingText && conversation.sessionId);
     const title =
-      conversation.messages.length === 0
+      !isClarifyReply && conversation.messages.length === 0
         ? (text.length > 24 ? `${text.slice(0, 24)}...` : text)
         : conversation.title;
     const clientMsgId = createMessageId('client');
@@ -750,9 +789,16 @@ export default function ChatTab({ agents }: ChatTabProps) {
     setInputVal('');
 
     connectSocketForConversation(targetConversation, {
-      type: 'message.send',
-      text,
-      clientMsgId,
+      ...(isClarifyReply
+        ? {
+            type: 'clarify.respond' as const,
+            answer: text,
+          }
+        : {
+            type: 'message.send' as const,
+            text,
+            clientMsgId,
+          }),
     });
   }
 
@@ -764,6 +810,37 @@ export default function ChatTab({ agents }: ChatTabProps) {
       type: 'approval.respond',
       choice,
     });
+  }
+
+  function handleClarifyChoice(answer: string) {
+    if (!activeConversation?.sessionId) {
+      return;
+    }
+    connectSocketForConversation(activeConversation, {
+      type: 'clarify.respond',
+      answer,
+    });
+  }
+
+  function handleClarifyOther() {
+    if (!activeConversation) {
+      return;
+    }
+    setConversations((current) =>
+      current.map((conversation) =>
+        conversation.id === activeConversation.id
+          ? {
+              ...conversation,
+              pendingClarify: conversation.pendingClarify
+                ? {
+                    ...conversation.pendingClarify,
+                    awaitingText: true,
+                  }
+                : conversation.pendingClarify,
+            }
+          : conversation,
+      ),
+    );
   }
 
   function handleResume() {
@@ -815,6 +892,9 @@ export default function ChatTab({ agents }: ChatTabProps) {
     (message) => showDelegateTools || message.kind !== 'delegate-tools',
   );
   const stateLabel = buildStateLabel(activeConversation);
+  const composerPlaceholder = activeConversation?.pendingClarify?.awaitingText
+    ? 'Answer clarify prompt... 输入你的补充说明'
+    : "Ask Aegis anything... 触发关键词：'钓鱼邮件', '勒索病毒', '敏感泄露'...";
 
   return (
     <div className="flex h-full w-full bg-[#020408] items-stretch select-none overflow-hidden text-xs">
@@ -1170,6 +1250,41 @@ export default function ChatTab({ agents }: ChatTabProps) {
           </div>
         ) : null}
 
+        {activeConversation?.pendingClarify ? (
+          <div className="mx-4 mb-3 rounded-xl border border-cyan-900/30 bg-cyan-950/20 p-4 text-cyan-100">
+            <div className="flex items-start gap-3">
+              <Clock className="h-5 w-5 text-cyan-400 shrink-0 mt-0.5" />
+              <div className="flex-1">
+                <div className="text-sm font-bold text-cyan-200">Clarify Required</div>
+                <div className="mt-1 text-xs text-cyan-100/90">{activeConversation.pendingClarify.question}</div>
+                {activeConversation.pendingClarify.awaitingText ? (
+                  <div className="mt-3 rounded border border-cyan-900/20 bg-[#080C14] px-3 py-2 text-[11px] text-cyan-200">
+                    Type your answer below. Your next message will be sent as the clarify response.
+                  </div>
+                ) : (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    {activeConversation.pendingClarify.choices.map((choice) => (
+                      <button
+                        key={choice}
+                        onClick={() => handleClarifyChoice(choice)}
+                        className="px-3 py-1.5 rounded border border-slate-700 text-slate-200 font-bold text-xs"
+                      >
+                        {choice}
+                      </button>
+                    ))}
+                    <button
+                      onClick={handleClarifyOther}
+                      className="px-3 py-1.5 rounded bg-cyan-500 text-white font-bold text-xs"
+                    >
+                      Other
+                    </button>
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         <div className="absolute bottom-0 left-0 right-0 p-3 border-t border-slate-800 bg-[#03060C] flex items-end gap-2 select-none z-10">
           <button
             type="button"
@@ -1186,7 +1301,7 @@ export default function ChatTab({ agents }: ChatTabProps) {
                 onChange={(event) => setInputVal(event.target.value)}
                 onKeyDown={handleComposerKeyDown}
                 disabled={isConversationBusy(activeConversation)}
-                placeholder="Ask Aegis anything... 触发关键词：'钓鱼邮件', '勒索病毒', '敏感泄露'..."
+                placeholder={composerPlaceholder}
                 rows={4}
                 className="w-full resize-none bg-[#020408] border border-slate-800 rounded px-3 py-2 pr-10 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500"
               />
@@ -1197,7 +1312,7 @@ export default function ChatTab({ agents }: ChatTabProps) {
                 onChange={(event) => setInputVal(event.target.value)}
                 onKeyDown={handleComposerKeyDown}
                 disabled={isConversationBusy(activeConversation)}
-                placeholder="Ask Aegis anything... 触发关键词：'钓鱼邮件', '勒索病毒', '敏感泄露'..."
+                placeholder={composerPlaceholder}
                 className="w-full bg-[#020408] border border-slate-800 rounded px-3 py-2 pr-10 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500"
               />
             )}

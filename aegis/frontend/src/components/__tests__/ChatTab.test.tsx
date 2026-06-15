@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatTab from '../ChatTab';
 
@@ -54,6 +54,7 @@ describe('ChatTab', () => {
   });
 
   afterEach(() => {
+    cleanup();
     vi.unstubAllGlobals();
     globalThis.WebSocket = OriginalWebSocket;
     clipboardWriteText.mockReset();
@@ -352,5 +353,88 @@ describe('ChatTab', () => {
         expect.objectContaining({ text: 'main agent resumed after /main', sender: 'aegis' }),
       ]),
     });
+  });
+
+  it('sends clarify choices and routes Other into freeform clarify responses', async () => {
+    render(<ChatTab agents={[]} />);
+
+    fireEvent.click(screen.getAllByRole('button', { name: /新建/i })[0]);
+    fireEvent.change(screen.getByPlaceholderText(/ask aegis anything/i), {
+      target: { value: 'start clarify flow' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1);
+    });
+    const socket = MockWebSocket.instances[0];
+    await waitFor(() => {
+      expect(socket.sent.length).toBeGreaterThan(0);
+    });
+
+    socket.emit({
+      type: 'session.bound',
+      session_id: 'sess-clarify',
+      title: 'Clarify Investigation',
+      resumed: false,
+    });
+
+    await waitFor(() => {
+      expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true);
+    });
+
+    socket.emit({
+      type: 'clarify.request',
+      session_id: 'sess-clarify',
+      clarify_id: 'clarify-1',
+      question: 'Which route should I take?',
+      choices: ['alpha', 'beta'],
+      source: 'main',
+    });
+
+    expect(await screen.findByText(/clarify required/i)).toBeInTheDocument();
+    expect(screen.getByText('Which route should I take?')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'alpha' }));
+
+    await waitFor(() => {
+      expect(
+        socket.sent.some((item) => {
+          const payload = JSON.parse(item);
+          return payload.type === 'clarify.respond' && payload.answer === 'alpha';
+        }),
+      ).toBe(true);
+    });
+
+    socket.emit({
+      type: 'clarify.request',
+      session_id: 'sess-clarify',
+      clarify_id: 'clarify-2',
+      question: 'Add more details',
+      choices: ['quick answer'],
+      source: 'main',
+    });
+
+    expect(await screen.findByRole('button', { name: /other/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /other/i }));
+
+    const composer = screen.getByPlaceholderText(/answer clarify prompt/i);
+    fireEvent.change(composer, { target: { value: 'Need all Linux endpoints.' } });
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+
+    await waitFor(() => {
+      expect(
+        socket.sent.some((item) => {
+          const payload = JSON.parse(item);
+          return payload.type === 'clarify.respond' && payload.answer === 'Need all Linux endpoints.';
+        }),
+      ).toBe(true);
+    });
+
+    expect(
+      socket.sent.some((item) => {
+        const payload = JSON.parse(item);
+        return payload.type === 'message.send' && payload.text === 'Need all Linux endpoints.';
+      }),
+    ).toBe(false);
   });
 });
