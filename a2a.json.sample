@@ -1,47 +1,40 @@
 {
   "a2a": {
-    "agent-active": {
+    "test": {
       "url": "http://127.0.0.1:9086/a2a",
-      "description": "Primary A2A test endpoint",
+      "description": "A2A test endpoint",
       "headers": {
         "Authorization": "Bearer <token>"
       },
       "status": "active",
       "extcapabilities": [
-        "query-ip",
-        "query-domain"
+        "支持情报调查，用于ip,domain等快速情报查询",
+        "支持网络隔离控制"
       ]
     },
-    "agent-idle": {
-      "url": "http://127.0.0.1:9087/a2a",
-      "description": "Secondary endpoint waiting for work",
-      "headers": {},
+    "test3": {
+      "url": "http://127.0.0.1/a45",
+      "description": "asfsdf",
+      "headers": {
+        "Authorization": "123456"
+      },
       "status": "idle",
       "extcapabilities": [
-        "query-url"
+        "sadfsdfsdfsdf"
       ]
-    },
-    "agent-offline": {
-      "url": "http://127.0.0.1:9088/a2a",
-      "description": "Endpoint temporarily unavailable",
-      "headers": {
-        "X-Token": "<token>"
-      },
-      "status": "offline",
-      "extcapabilities": []
     }
   },
   "global": [
     {
-      "id": "deadbeef",
-      "name": "Prioritize phishing incidents",
-      "policy": "Route phishing investigations to the email response queue first.",
+      "id": "kz2kadlr",
+      "name": "test",
+      "policy": "this is a test",
       "status": "active"
     },
     {
-      "id": "facecafe",
-      "name": "Fallback unmatched cases",
-      "policy": "Keep this rule disabled until the fallback queue is ready.",
+      "id": "86kyc5b6",
+      "name": "test2",
+      "policy": "asdfasdf",
       "status": "inactive"
     }
   ]
