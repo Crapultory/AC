@@ -63,8 +63,6 @@ def prepare_hermes_home() -> None:
 
 
 def _default_toolsets_for_platform(platform: str) -> list[str]:
-    if platform == "aisoc-a2a":
-        return ["hermes-cli", "a2a"]
     return ["hermes-cli"]
 
 
