@@ -15,13 +15,10 @@ def _ns(**kwargs) -> argparse.Namespace:
         insecure=False,
         tui=False,
         skip_build=False,
-        stop=False,
-        status=False,
         module="server",
         name=None,
         description=None,
         card=None,
-        db=None,
         streaming=False,
         workers=4,
     )
@@ -49,7 +46,6 @@ def test_cmd_aisoc_dispatches_a2a_module(monkeypatch: pytest.MonkeyPatch) -> Non
             name="Hermes A2A",
             description="A2A server",
             card="/tmp/card.json",
-            db="/tmp/a2a.db",
             streaming=True,
             workers=8,
         )
@@ -62,7 +58,6 @@ def test_cmd_aisoc_dispatches_a2a_module(monkeypatch: pytest.MonkeyPatch) -> Non
         "name": "Hermes A2A",
         "description": "A2A server",
         "card_path": "/tmp/card.json",
-        "db_path": "/tmp/a2a.db",
         "streaming": True,
         "workers": 8,
     }

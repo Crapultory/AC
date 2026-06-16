@@ -62,23 +62,12 @@ def configure_aisoc_parser(parser: argparse.ArgumentParser) -> argparse.Argument
             "Pre-build with: cd aisoc/frontend && npm run build"
         ),
     )
-    parser.add_argument(
-        "--stop",
-        action="store_true",
-        help="Stop all running hermes aisoc processes and exit",
-    )
-    parser.add_argument(
-        "--status",
-        action="store_true",
-        help="List running hermes aisoc processes and exit",
-    )
     parser.add_argument("--name", help="A2A module: override AgentCard name")
     parser.add_argument(
         "--description",
         help="A2A module: override AgentCard description",
     )
     parser.add_argument("--card", help="A2A module: load AgentCard JSON from a file")
-    parser.add_argument("--db", help="A2A module: persistent task database path")
     parser.add_argument(
         "--streaming",
         action="store_true",
@@ -137,139 +126,6 @@ def _apply_direct_profile_override(argv: list[str] | None = None) -> list[str]:
     if consume <= 0 or consume_at < 0:
         return effective_argv
     return effective_argv[:consume_at] + effective_argv[consume_at + consume :]
-
-
-def _find_stale_aisoc_pids() -> list[int]:
-    """Return running AISOC service PIDs other than ourselves."""
-    patterns = [
-        "hermes aisoc",
-        "hermes_cli.main aisoc",
-        "hermes_cli/main.py aisoc",
-        "aisoc/backend/main.py",
-        "aisoc.backend.main",
-    ]
-    self_pid = os.getpid()
-    aisoc_pids: list[int] = []
-
-    try:
-        if sys.platform == "win32":
-            result = subprocess.run(
-                ["wmic", "process", "get", "ProcessId,CommandLine", "/FORMAT:LIST"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                encoding="utf-8",
-                errors="ignore",
-                check=False,
-            )
-            if result.returncode != 0 or result.stdout is None:
-                return []
-            current_cmd = ""
-            for line in result.stdout.split("\n"):
-                line = line.strip()
-                if line.startswith("CommandLine="):
-                    current_cmd = line[len("CommandLine=") :]
-                elif line.startswith("ProcessId="):
-                    pid_str = line[len("ProcessId=") :]
-                    if any(p in current_cmd for p in patterns) and int(pid_str) != self_pid:
-                        try:
-                            aisoc_pids.append(int(pid_str))
-                        except ValueError:
-                            pass
-        else:
-            result = subprocess.run(
-                ["ps", "-A", "-o", "pid=,command="],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-            if result.returncode == 0:
-                for line in getattr(result, "stdout", "").split("\n"):
-                    stripped = line.strip()
-                    if not stripped or "grep" in stripped:
-                        continue
-                    parts = stripped.split(None, 1)
-                    if len(parts) != 2:
-                        continue
-                    try:
-                        pid = int(parts[0])
-                    except ValueError:
-                        continue
-                    command = parts[1]
-                    if any(p in command for p in patterns) and pid != self_pid:
-                        aisoc_pids.append(pid)
-    except (FileNotFoundError, subprocess.TimeoutExpired, OSError):
-        return []
-
-    return aisoc_pids
-
-
-def _pid_exists(pid: int) -> bool:
-    """Return True when a process still exists."""
-    if pid <= 0:
-        return False
-    if sys.platform == "win32":
-        result = subprocess.run(
-            ["tasklist", "/FI", f"PID eq {pid}"],
-            capture_output=True,
-            text=True,
-            timeout=10,
-            check=False,
-        )
-        return result.returncode == 0 and str(pid) in (result.stdout or "")
-    try:
-        os.kill(pid, 0)
-    except ProcessLookupError:
-        return False
-    except PermissionError:
-        return True
-    except OSError:
-        return False
-    return True
-
-
-def _kill_stale_aisoc_processes() -> None:
-    """Kill running AISOC processes launched through Hermes or backend main."""
-    pids = _find_stale_aisoc_pids()
-    if not pids:
-        return
-
-    print(f"⟲ Stopping {len(pids)} aisoc process(es)")
-    if sys.platform == "win32":
-        for pid in pids:
-            subprocess.run(
-                ["taskkill", "/PID", str(pid), "/F"],
-                capture_output=True,
-                text=True,
-                timeout=10,
-                check=False,
-            )
-        return
-
-    import signal
-    import time
-
-    for pid in pids:
-        try:
-            os.kill(pid, signal.SIGTERM)
-        except ProcessLookupError:
-            pass
-        except OSError:
-            pass
-
-    deadline = time.monotonic() + 3.0
-    while time.monotonic() < deadline:
-        if not any(_pid_exists(pid) for pid in pids):
-            return
-        time.sleep(0.1)
-
-    for pid in pids:
-        try:
-            if _pid_exists(pid):
-                os.kill(pid, signal.SIGKILL)
-        except OSError:
-            pass
 
 
 def _collect_latest_mtime(root: Path) -> float:
@@ -395,8 +251,6 @@ def _validate_module_args(args: argparse.Namespace) -> None:
             invalid_flags.append("--description")
         if getattr(args, "card", None):
             invalid_flags.append("--card")
-        if getattr(args, "db", None):
-            invalid_flags.append("--db")
         if getattr(args, "streaming", False):
             invalid_flags.append("--streaming")
         if getattr(args, "workers", 4) != 4:
@@ -416,8 +270,6 @@ def _validate_module_args(args: argparse.Namespace) -> None:
         invalid_flags.append("--description")
     if getattr(args, "card", None):
         invalid_flags.append("--card")
-    if getattr(args, "db", None):
-        invalid_flags.append("--db")
     if getattr(args, "streaming", False):
         invalid_flags.append("--streaming")
     if getattr(args, "workers", 4) != 4:
@@ -431,25 +283,7 @@ def _validate_module_args(args: argparse.Namespace) -> None:
 
 
 def cmd_aisoc(args: argparse.Namespace) -> None:
-    """Start the AISOC service, or manage running AISOC processes."""
-    if getattr(args, "status", False):
-        pids = _find_stale_aisoc_pids()
-        if not pids:
-            print("No hermes aisoc processes running.")
-            raise SystemExit(0)
-        print(f"{len(pids)} hermes aisoc process(es) running:")
-        for pid in pids:
-            print(f"    PID {pid}")
-        raise SystemExit(0)
-
-    if getattr(args, "stop", False):
-        pids = _find_stale_aisoc_pids()
-        if not pids:
-            print("No hermes aisoc processes running.")
-            raise SystemExit(0)
-        _kill_stale_aisoc_processes()
-        raise SystemExit(0 if not _find_stale_aisoc_pids() else 1)
-
+    """Start the AISOC service."""
     _validate_module_args(args)
 
     try:
@@ -476,7 +310,6 @@ def cmd_aisoc(args: argparse.Namespace) -> None:
             name=getattr(args, "name", None),
             description=getattr(args, "description", None),
             card_path=getattr(args, "card", None),
-            db_path=getattr(args, "db", None),
             streaming=getattr(args, "streaming", False),
             workers=getattr(args, "workers", 4),
         )

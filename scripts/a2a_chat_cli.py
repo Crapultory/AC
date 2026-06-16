@@ -42,6 +42,13 @@ FINAL_TASK_STATES = frozenset(
 )
 
 
+def _auth_headers(auth_token: str | None) -> dict[str, str] | None:
+    token = (auth_token or "").strip()
+    if not token:
+        return None
+    return {"Authorization": f"Bearer {token}"}
+
+
 def _field(value, name: str, default=None):
     if isinstance(value, dict):
         return value.get(name, default)
@@ -453,9 +460,13 @@ async def interactive_chat_loop(
         await session.send_and_stream(command)
 
 
-async def _probe_agent_card(base_url: str) -> tuple[str, dict]:
+async def _probe_agent_card(
+    base_url: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> tuple[str, dict]:
     async with httpx.AsyncClient() as client:
-        response = await client.get(_agent_card_url(base_url))
+        response = await client.get(_agent_card_url(base_url), headers=headers)
         response.raise_for_status()
         card = response.json()
 
@@ -464,14 +475,19 @@ async def _probe_agent_card(base_url: str) -> tuple[str, dict]:
     return _normalize_base_url(rpc_url), card
 
 
-async def _create_client(base_url: str) -> tuple[httpx.AsyncClient, Client]:
+async def _create_client(
+    base_url: str,
+    *,
+    headers: dict[str, str] | None = None,
+) -> tuple[httpx.AsyncClient, Client]:
     http_client = httpx.AsyncClient(
         timeout=httpx.Timeout(
             connect=10.0,
             read=None,
             write=60.0,
             pool=60.0,
-        )
+        ),
+        headers=headers,
     )
     factory = ClientFactory(
         ClientConfig(
@@ -490,6 +506,7 @@ async def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument("base_url", nargs="?", help="A2A agent base URL or agent-card URL.")
     parser.add_argument("--base-url", dest="base_url_flag")
+    parser.add_argument("--auth-token", help="Bearer token for protected A2A HTTP routes.")
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument("--poll-interval", type=float, default=0.05)
     args = parser.parse_args(argv)
@@ -498,13 +515,14 @@ async def main(argv: list[str] | None = None) -> int:
     if not raw_url:
         raw_url = input("A2A agent URL: ")
     base_url = _normalize_base_url(raw_url)
-    rpc_url, card = await _probe_agent_card(base_url)
+    headers = _auth_headers(args.auth_token)
+    rpc_url, card = await _probe_agent_card(base_url, headers=headers)
 
     print(f"Connected to: {card.get('name') or 'A2A agent'}")
     print(f"RPC URL: {rpc_url}")
     print("Commands: /reset, /quit")
 
-    http_client, sdk_client = await _create_client(rpc_url)
+    http_client, sdk_client = await _create_client(rpc_url, headers=headers)
     try:
         session = A2AChatSession(
             sdk_client,

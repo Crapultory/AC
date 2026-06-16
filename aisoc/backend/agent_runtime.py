@@ -22,6 +22,7 @@ class EchoAgent:
 
     def __init__(self):
         self._interrupt_requested = False
+        self._turn_count = 0
 
     def run_conversation(
         self,
@@ -35,7 +36,8 @@ class EchoAgent:
         if self._interrupt_requested:
             raise RuntimeError("Canceled by user.")
         history = list(conversation_history or [])
-        response = f"echo(turn={(len(history) // 2) + 1}): {user_message}"
+        self._turn_count += 1
+        response = f"echo(turn={self._turn_count}): {user_message}"
         if stream_callback is not None:
             midpoint = max(1, len(response) // 2)
             stream_callback(response[:midpoint])
