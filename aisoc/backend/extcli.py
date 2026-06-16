@@ -15,6 +15,7 @@ from aisoc.backend.agent_runtime import (
     default_agent_factory,
     load_conversation_history,
     prepare_hermes_home,
+    start_aisoc_mcp_bootstrap,
 )
 
 
@@ -487,4 +488,5 @@ def run_extcli_loop(
 def start_extcli(*, agent_factory: Callable[[str], object] | None = None) -> None:
     """Start AISOC extcli after configuring the active Hermes profile directory."""
     prepare_hermes_home()
+    start_aisoc_mcp_bootstrap()
     run_extcli_loop(agent_factory=agent_factory)

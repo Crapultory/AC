@@ -43,7 +43,7 @@ hermes aisoc --module server --port 9120 --tui
 hermes aisoc --module a2a --host 127.0.0.1 --port 9086
 ```
 
-A2A 模块默认允许直接连接，不再要求 `Authorization` 头或 `token` 查询参数。
+A2A 模块默认允许直接连接；设置 `AISOC_A2A_AUTH=true` 后，会在 HTTP 中间件层对 A2A RPC 请求启用 Bearer Token 认证。
 
 `extcli` 模块启动形态：
 
@@ -72,6 +72,8 @@ python aisoc/backend/main.py -p myprofile --module extcli
 - 支持 `delegate_ext(is_loop=true)` 前台子会话；子会话激活时，终端输入会临时路由给子 agent
 - 子会话内 `/main` 与 `/exit` 等价，都会结束子会话并返回主会话；只有主会话前台时 `/exit` 才会退出整个 `extcli`
 - 支持 `/new` 重置当前主会话；当子会话前台时，`/new` 会作为普通输入传给子 agent
+- `a2a` / `extcli` 模块启动的 agent 会按 Hermes 原生语义加载 `config.yaml` 中启用的 `mcp_servers`
+- 可通过环境变量 `AISOC_MCP_ACTIVE` 覆盖该行为：未设置时自动加载，`true/1/yes/on` 强制启用，`false/0/no/off` 禁用
 
 ### 2.2 直接以 Python 启动（调试后端）
 
@@ -88,6 +90,10 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 ### 2.3 Token 配置
 - `AISOC_SESSION_TOKEN`：若设置，则使用静态 token（`token_source=env`）
 - 未设置时：进程启动自动生成随机 token（`token_source=generated`）
+- `AISOC_A2A_AUTH`：A2A 模块认证开关；`true/1/yes/on` 启用，未设置或 `false/0/no/off` 关闭
+- `A2A_SESSION_TOKEN`：仅 `a2a` 模块使用；启用 A2A 认证时若设置，则使用静态 token（`a2a_token_source=env`）
+- 启用 A2A 认证且未设置 `A2A_SESSION_TOKEN` 时：进程启动自动生成随机 A2A token（`a2a_token_source=generated`）
+- `AISOC_MCP_ACTIVE`：仅影响 `a2a` / `extcli` 的 MCP 装载；默认跟随配置自动加载，设置为 `false/0/no/off` 可在启动时关闭 MCP
 
 ---
 
@@ -119,7 +125,17 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 - HTTP：`Authorization: Bearer <token>`
 - WebSocket：`?token=<token>`（浏览器 WS 升级不便带自定义 Authorization）
 
-### 3.3 Chat（`--tui`）链路设计
+### 3.3 A2A 认证机制
+- 默认关闭；通过 `AISOC_A2A_AUTH=true` 启用
+- 启用后使用 `Authorization: Bearer <A2A_SESSION_TOKEN>` 保护 A2A HTTP 路由
+- 公开白名单：
+  - `/health`
+  - `/.well-known/agent-card.json`
+  - `/a2a/.well-known/agent-card.json`（或 `A2A_BASE_PATH` 对应前缀）
+- 仅在 HTTP 中间件层认证，不改变 A2A executor、消息流或任务状态机
+- `AISOC_SESSION_TOKEN` 仍仅用于 `server` 模块；`A2A_SESSION_TOKEN` 仅用于 `a2a` 模块
+
+### 3.4 Chat（`--tui`）链路设计
 当 `embedded_chat=True`（CLI `--tui`）时启用：
 - `/api/chat/pty`：浏览器 <-> PTY 双向字节流
 - `/api/chat/ws`：JSON-RPC sidecar（tui_gateway）

@@ -8,7 +8,8 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from aisoc.backend.extcli import ExtCliInputAdapter, ExtCliOutputAdapter, run_extcli_loop
+import aisoc.backend.extcli as extcli_mod
+from aisoc.backend.extcli import ExtCliInputAdapter, ExtCliOutputAdapter, run_extcli_loop, start_extcli
 from tools.a2a_delegate_tool import a2a_delegate
 
 
@@ -75,6 +76,18 @@ class _FakeAgent:
             stream_callback(response)
             stream_callback(None)
         return {"final_response": response}
+
+
+def test_start_extcli_bootstraps_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(extcli_mod, "prepare_hermes_home", lambda: calls.append("prepare"))
+    monkeypatch.setattr(extcli_mod, "start_aisoc_mcp_bootstrap", lambda logger=None: calls.append("bootstrap"))
+    monkeypatch.setattr(extcli_mod, "run_extcli_loop", lambda **kwargs: calls.append("run"))
+
+    start_extcli()
+
+    assert calls == ["prepare", "bootstrap", "run"]
 
 
 class _StreamingFailureAgent:

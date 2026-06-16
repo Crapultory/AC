@@ -15,16 +15,25 @@ from a2a.server.routes import (
 from a2a.server.tasks import InMemoryTaskStore
 from a2a.types import AgentCapabilities, AgentCard, AgentInterface
 from a2a.utils.constants import PROTOCOL_VERSION_CURRENT, TransportProtocol
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 import uvicorn
 
 from aisoc.backend.a2a_service import HermesA2AExecutor
-from aisoc.backend.agent_runtime import prepare_hermes_home
+from aisoc.backend.agent_runtime import prepare_hermes_home, start_aisoc_mcp_bootstrap
+from aisoc.backend.auth import verify_bearer_token_value
 from aisoc.backend.config import AisocSettings, is_loopback_host, load_aisoc_settings
 
 A2A_RPC_PATH = os.getenv("A2A_BASE_PATH", "/a2a")
 A2A_AGENT_CARD_PATH = f"{A2A_RPC_PATH}/.well-known/agent-card.json"
+A2A_PUBLIC_PATHS = frozenset(
+    {
+        "/health",
+        "/.well-known/agent-card.json",
+        A2A_AGENT_CARD_PATH,
+    }
+)
 print(f"A2A RPC path: {A2A_RPC_PATH}")
 
 
@@ -83,6 +92,16 @@ def create_a2a_app(
         allow_headers=["*"],
     )
 
+    @app.middleware("http")
+    async def auth_middleware(request: Request, call_next):
+        if active_settings.a2a_auth_enabled and request.url.path not in A2A_PUBLIC_PATHS:
+            try:
+                verify_bearer_token_value(request, active_settings.a2a_session_token)
+            except Exception as exc:
+                detail = getattr(exc, "detail", "Unauthorized")
+                return JSONResponse(status_code=401, content={"detail": detail})
+        return await call_next(request)
+
     @app.get("/health")
     async def health() -> dict[str, str]:
         return {"status": "ok", "module": "a2a"}
@@ -122,13 +141,12 @@ def start_a2a_server(
     name: str | None = None,
     description: str | None = None,
     card_path: str | None = None,
-    db_path: str | None = None,
     streaming: bool = False,
     workers: int = 4,
 ) -> None:
     """Start the AISOC A2A server."""
-    del db_path
     prepare_hermes_home()
+    start_aisoc_mcp_bootstrap()
 
     if not is_loopback_host(host) and not allow_public:
         raise SystemExit(
@@ -144,6 +162,12 @@ def start_a2a_server(
         embedded_chat=False,
         dist_dir=None,
     )
+    if getattr(settings, "a2a_auth_enabled", False):
+        if getattr(settings, "a2a_token_source", "disabled") == "generated":
+            print("A2A session token (generated for this process):")
+            print(getattr(settings, "a2a_session_token", ""))
+        elif getattr(settings, "a2a_token_source", "disabled") == "env":
+            print("A2A session token source: A2A_SESSION_TOKEN")
     app = create_a2a_app(
         settings,
         name=name,

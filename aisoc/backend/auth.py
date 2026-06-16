@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import hmac
+
 from fastapi import HTTPException, Request, WebSocketException
 
 from aisoc.backend.config import AisocSettings
@@ -21,7 +23,14 @@ def extract_bearer_token(request: Request) -> str | None:
 
 def token_matches(token: str | None, settings: AisocSettings) -> bool:
     """Return True when a candidate token matches the configured session token."""
-    return bool(token) and token == settings.session_token
+    return token_matches_value(token, settings.session_token)
+
+
+def token_matches_value(token: str | None, expected_token: str | None) -> bool:
+    """Return True when a candidate token matches the expected token."""
+    if not token or not expected_token:
+        return False
+    return hmac.compare_digest(token.encode(), expected_token.encode())
 
 
 def verify_bearer_token(request: Request, settings: AisocSettings) -> None:
@@ -30,8 +39,13 @@ def verify_bearer_token(request: Request, settings: AisocSettings) -> None:
         raise HTTPException(status_code=401, detail="Unauthorized")
 
 
+def verify_bearer_token_value(request: Request, expected_token: str | None) -> None:
+    """Validate request bearer token against an explicit token or raise 401."""
+    if not token_matches_value(extract_bearer_token(request), expected_token):
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 def verify_ws_token(token: str | None, settings: AisocSettings) -> None:
     """Validate websocket token or raise websocket unauthorized."""
     if not token_matches(token, settings):
         raise WebSocketException(code=4401, reason="Unauthorized")
-

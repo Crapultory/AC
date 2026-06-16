@@ -10,9 +10,11 @@ from uuid import uuid4
 import httpx
 import pytest
 from a2a.client import Client, ClientConfig, ClientFactory
+from a2a.client.errors import A2AClientError
 from a2a.types import CancelTaskRequest, GetTaskRequest, Message, Part, Role, SendMessageConfiguration, SendMessageRequest, Task, TaskState
 
 from aisoc.backend.a2a_server import create_a2a_app
+import aisoc.backend.a2a_server as a2a_server
 import aisoc.backend.a2a_service.executor as a2a_executor
 from aisoc.backend.config import load_aisoc_settings
 
@@ -260,11 +262,25 @@ async def _wait_for_state(
     raise TimeoutError(f"Timed out waiting for states {sorted(expected_states)}; last={last_task}")
 
 
-async def _task_bundle(agent_factory, *, streaming: bool = False) -> _A2AClientBundle:
-    settings = load_aisoc_settings(host="127.0.0.1", port=9086, open_browser=False)
+def _auth_headers(token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {token}"}
+
+
+async def _task_bundle(
+    agent_factory,
+    *,
+    streaming: bool = False,
+    settings=None,
+    auth_headers: dict[str, str] | None = None,
+) -> _A2AClientBundle:
+    settings = settings or load_aisoc_settings(host="127.0.0.1", port=9086, open_browser=False)
     app = create_a2a_app(settings, agent_factory=agent_factory, streaming=streaming)
     transport = httpx.ASGITransport(app=app)
-    http_client = httpx.AsyncClient(transport=transport, base_url="http://testserver")
+    http_client = httpx.AsyncClient(
+        transport=transport,
+        base_url="http://testserver",
+        headers=auth_headers,
+    )
     factory = ClientFactory(
         ClientConfig(
             httpx_client=http_client,
@@ -276,6 +292,45 @@ async def _task_bundle(agent_factory, *, streaming: bool = False) -> _A2AClientB
     return _A2AClientBundle(http_client=http_client, client=client)
 
 
+def test_load_aisoc_settings_defaults_a2a_auth_disabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("AISOC_A2A_AUTH", raising=False)
+    monkeypatch.delenv("A2A_SESSION_TOKEN", raising=False)
+
+    settings = load_aisoc_settings(host="127.0.0.1", port=9086, open_browser=False)
+
+    assert settings.a2a_auth_enabled is False
+    assert settings.a2a_session_token == ""
+    assert settings.a2a_token_source == "disabled"
+
+
+def test_load_aisoc_settings_prefers_env_a2a_token_when_auth_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AISOC_A2A_AUTH", "true")
+    monkeypatch.setenv("A2A_SESSION_TOKEN", "secret-a2a-token")
+
+    settings = load_aisoc_settings(host="127.0.0.1", port=9086, open_browser=False)
+
+    assert settings.a2a_auth_enabled is True
+    assert settings.a2a_session_token == "secret-a2a-token"
+    assert settings.a2a_token_source == "env"
+
+
+def test_load_aisoc_settings_generates_a2a_token_when_auth_enabled_without_env(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AISOC_A2A_AUTH", "true")
+    monkeypatch.delenv("A2A_SESSION_TOKEN", raising=False)
+
+    settings = load_aisoc_settings(host="127.0.0.1", port=9086, open_browser=False)
+
+    assert settings.a2a_auth_enabled is True
+    assert settings.a2a_session_token
+    assert settings.a2a_token_source == "generated"
+
+
 @pytest.mark.asyncio
 async def test_a2a_message_send_task_lifecycle() -> None:
     release_event = asyncio.Event()
@@ -283,7 +338,10 @@ async def test_a2a_message_send_task_lifecycle() -> None:
     try:
         card = await bundle.http_client.get("http://testserver/.well-known/agent-card.json")
         assert card.status_code == 200
-        assert card.json()["supportedInterfaces"][0]["url"] == "http://127.0.0.1:9086/test"
+        assert (
+            card.json()["supportedInterfaces"][0]["url"]
+            == f"http://127.0.0.1:9086{a2a_server.A2A_RPC_PATH}"
+        )
 
         task = await _send_text(bundle.client, "hello world")
         assert task.status.state == TaskState.TASK_STATE_SUBMITTED
@@ -295,6 +353,92 @@ async def test_a2a_message_send_task_lifecycle() -> None:
         completed = await _wait_for_state(bundle.client, task.id, {TaskState.TASK_STATE_COMPLETED})
         assert completed.status.state == TaskState.TASK_STATE_COMPLETED
         assert completed.status.message.parts[0].text == "done:hello world"
+    finally:
+        await bundle.close()
+
+
+@pytest.mark.asyncio
+async def test_a2a_auth_keeps_health_and_agent_cards_public(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AISOC_A2A_AUTH", "true")
+    monkeypatch.setenv("A2A_SESSION_TOKEN", "public-routes-token")
+    settings = load_aisoc_settings(host="127.0.0.1", port=9086, open_browser=False)
+    app = create_a2a_app(settings, agent_factory=lambda session_id: _StreamingAgent())
+    transport = httpx.ASGITransport(app=app)
+
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        health = await client.get("/health")
+        root_card = await client.get("http://testserver/.well-known/agent-card.json")
+        prefixed_card = await client.get(
+            f"http://testserver{a2a_server.A2A_RPC_PATH}/.well-known/agent-card.json"
+        )
+        unauthorized = await client.post(
+            a2a_server.A2A_RPC_PATH,
+            json={"jsonrpc": "2.0", "id": "1", "method": "GetTask", "params": {"id": "task-1"}},
+        )
+
+    assert health.status_code == 200
+    assert root_card.status_code == 200
+    assert prefixed_card.status_code == 200
+    assert unauthorized.status_code == 401
+
+
+@pytest.mark.asyncio
+async def test_a2a_auth_rejects_send_get_and_cancel_without_valid_bearer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AISOC_A2A_AUTH", "true")
+    monkeypatch.setenv("A2A_SESSION_TOKEN", "correct-a2a-token")
+    settings = load_aisoc_settings(host="127.0.0.1", port=9086, open_browser=False)
+    no_auth_bundle = await _task_bundle(lambda session_id: _StreamingAgent(), settings=settings)
+    wrong_auth_bundle = await _task_bundle(
+        lambda session_id: _StreamingAgent(),
+        settings=settings,
+        auth_headers=_auth_headers("wrong-a2a-token"),
+    )
+    send_request = SendMessageRequest(
+        message=Message(
+            message_id=str(uuid4()),
+            role=Role.ROLE_USER,
+            context_id="",
+            task_id="",
+            parts=[Part(text="hello")],
+        ),
+        configuration=SendMessageConfiguration(return_immediately=True),
+    )
+    try:
+        with pytest.raises(A2AClientError, match="HTTP Error 401"):
+            [event async for event in no_auth_bundle.client.send_message(send_request)]
+        with pytest.raises(A2AClientError, match="HTTP Error 401"):
+            await no_auth_bundle.client.get_task(GetTaskRequest(id="task-1"))
+        with pytest.raises(A2AClientError, match="HTTP Error 401"):
+            await no_auth_bundle.client.cancel_task(CancelTaskRequest(id="task-1"))
+        with pytest.raises(A2AClientError, match="HTTP Error 401"):
+            [event async for event in wrong_auth_bundle.client.send_message(send_request)]
+    finally:
+        await wrong_auth_bundle.close()
+        await no_auth_bundle.close()
+
+
+@pytest.mark.asyncio
+async def test_a2a_auth_allows_send_with_valid_bearer(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setenv("AISOC_A2A_AUTH", "true")
+    monkeypatch.setenv("A2A_SESSION_TOKEN", "correct-a2a-token")
+    settings = load_aisoc_settings(host="127.0.0.1", port=9086, open_browser=False)
+    bundle = await _task_bundle(
+        lambda session_id: _StreamingAgent(),
+        settings=settings,
+        auth_headers=_auth_headers("correct-a2a-token"),
+        streaming=True,
+    )
+    try:
+        task = await _send_text(bundle.client, "hello")
+        completed = await _wait_for_state(bundle.client, task.id, {TaskState.TASK_STATE_COMPLETED})
+        assert completed.status.state == TaskState.TASK_STATE_COMPLETED
+        assert completed.status.message.parts[0].text == "Hello"
     finally:
         await bundle.close()
 
@@ -349,7 +493,7 @@ def test_a2a_default_agent_factory_injects_current_profile_config(
     monkeypatch.setattr("run_agent.AIAgent", _FakeAgent)
     monkeypatch.setattr(a2a_executor, "SessionDB", _FakeSessionDB, raising=False)
 
-    caplog.set_level(logging.INFO, logger="aisoc.backend.a2a.executor")
+    caplog.set_level(logging.INFO, logger="aisoc.backend.a2a_service.executor")
 
     agent = a2a_executor._default_agent_factory("context-123")
 
@@ -370,6 +514,80 @@ def test_a2a_default_agent_factory_injects_current_profile_config(
     assert created_kwargs["session_db"] is created_session_dbs[0]
     assert "_a2a_runtime_source" not in created_kwargs
     assert "A2A profile injection" in caplog.text
+
+
+def test_start_a2a_server_bootstraps_mcp(monkeypatch: pytest.MonkeyPatch) -> None:
+    calls: list[str] = []
+
+    monkeypatch.setattr(a2a_server, "prepare_hermes_home", lambda: calls.append("prepare"))
+    monkeypatch.setattr(a2a_server, "start_aisoc_mcp_bootstrap", lambda logger=None: calls.append("bootstrap"))
+    monkeypatch.setattr(
+        a2a_server,
+        "load_aisoc_settings",
+        lambda **kwargs: SimpleNamespace(host=kwargs["host"], port=kwargs["port"]),
+    )
+    monkeypatch.setattr(a2a_server, "create_a2a_app", lambda *args, **kwargs: object())
+    monkeypatch.setattr(a2a_server, "is_loopback_host", lambda host: True)
+    monkeypatch.setattr(a2a_server.uvicorn, "run", lambda *args, **kwargs: calls.append("uvicorn"))
+
+    a2a_server.start_a2a_server(host="127.0.0.1", port=9086)
+
+    assert calls == ["prepare", "bootstrap", "uvicorn"]
+
+
+def test_start_a2a_server_prints_generated_auth_token_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(a2a_server, "prepare_hermes_home", lambda: None)
+    monkeypatch.setattr(a2a_server, "start_aisoc_mcp_bootstrap", lambda logger=None: None)
+    monkeypatch.setattr(a2a_server, "is_loopback_host", lambda host: True)
+    monkeypatch.setattr(
+        a2a_server,
+        "load_aisoc_settings",
+        lambda **kwargs: SimpleNamespace(
+            host=kwargs["host"],
+            port=kwargs["port"],
+            a2a_auth_enabled=True,
+            a2a_session_token="generated-a2a-token",
+            a2a_token_source="generated",
+        ),
+    )
+    monkeypatch.setattr(a2a_server, "create_a2a_app", lambda *args, **kwargs: object())
+    monkeypatch.setattr(a2a_server.uvicorn, "run", lambda *args, **kwargs: None)
+
+    a2a_server.start_a2a_server(host="127.0.0.1", port=9086)
+
+    captured = capsys.readouterr()
+    assert "A2A session token (generated for this process):" in captured.out
+    assert "generated-a2a-token" in captured.out
+
+
+def test_start_a2a_server_prints_env_auth_token_source_when_enabled(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(a2a_server, "prepare_hermes_home", lambda: None)
+    monkeypatch.setattr(a2a_server, "start_aisoc_mcp_bootstrap", lambda logger=None: None)
+    monkeypatch.setattr(a2a_server, "is_loopback_host", lambda host: True)
+    monkeypatch.setattr(
+        a2a_server,
+        "load_aisoc_settings",
+        lambda **kwargs: SimpleNamespace(
+            host=kwargs["host"],
+            port=kwargs["port"],
+            a2a_auth_enabled=True,
+            a2a_session_token="env-a2a-token",
+            a2a_token_source="env",
+        ),
+    )
+    monkeypatch.setattr(a2a_server, "create_a2a_app", lambda *args, **kwargs: object())
+    monkeypatch.setattr(a2a_server.uvicorn, "run", lambda *args, **kwargs: None)
+
+    a2a_server.start_a2a_server(host="127.0.0.1", port=9086)
+
+    captured = capsys.readouterr()
+    assert "A2A session token source: A2A_SESSION_TOKEN" in captured.out
 
 
 @pytest.mark.asyncio
@@ -488,12 +706,12 @@ async def test_a2a_agent_card_is_available_under_rpc_prefix() -> None:
     bundle = await _task_bundle(lambda session_id: _StreamingAgent(), streaming=True)
     try:
         card = await bundle.http_client.get(
-            "http://testserver/test/.well-known/agent-card.json"
+            f"http://testserver{a2a_server.A2A_RPC_PATH}/.well-known/agent-card.json"
         )
         assert card.status_code == 200
         payload = card.json()
         assert payload["capabilities"]["streaming"] is True
-        assert payload["supportedInterfaces"][0]["url"].endswith("/test")
+        assert payload["supportedInterfaces"][0]["url"].endswith(a2a_server.A2A_RPC_PATH)
     finally:
         await bundle.close()
 

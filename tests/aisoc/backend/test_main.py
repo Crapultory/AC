@@ -22,13 +22,10 @@ def _ns(**kwargs) -> argparse.Namespace:
         insecure=False,
         tui=False,
         skip_build=False,
-        stop=False,
-        status=False,
         module="server",
         name=None,
         description=None,
         card=None,
-        db=None,
         streaming=False,
         workers=4,
     )
@@ -61,7 +58,6 @@ def test_cmd_aisoc_dispatches_a2a_module(monkeypatch: pytest.MonkeyPatch) -> Non
             name="Hermes A2A",
             description="A2A server",
             card="/tmp/card.json",
-            db="/tmp/a2a.db",
             streaming=True,
             workers=8,
         )
@@ -74,7 +70,6 @@ def test_cmd_aisoc_dispatches_a2a_module(monkeypatch: pytest.MonkeyPatch) -> Non
         "name": "Hermes A2A",
         "description": "A2A server",
         "card_path": "/tmp/card.json",
-        "db_path": "/tmp/a2a.db",
         "streaming": True,
         "workers": 8,
     }
@@ -108,6 +103,15 @@ def test_cmd_aisoc_rejects_a2a_only_flags_for_extcli() -> None:
     backend_main = _load_backend_main()
     with pytest.raises(SystemExit) as exc:
         backend_main.cmd_aisoc(_ns(module="extcli", streaming=True))
+    assert exc.value.code == 2
+
+
+@pytest.mark.parametrize("flag", ["--stop", "--status", "--db", "--db=/tmp/a2a.db"])
+def test_build_parser_rejects_removed_flags(flag: str) -> None:
+    backend_main = _load_backend_main()
+    parser = backend_main.build_parser()
+    with pytest.raises(SystemExit) as exc:
+        parser.parse_args([flag])
     assert exc.value.code == 2
 
 

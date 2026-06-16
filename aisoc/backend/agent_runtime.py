@@ -14,12 +14,15 @@ from hermes_cli import runtime_provider
 
 logger = logging.getLogger(__name__)
 
+_AISOC_MCP_WAIT_TIMEOUT_SECONDS = 0.75
+
 
 class EchoAgent:
     """Deterministic agent for smoke and e2e tests."""
 
     def __init__(self):
         self._interrupt_requested = False
+        self._turn_count = 0
 
     def run_conversation(
         self,
@@ -33,7 +36,8 @@ class EchoAgent:
         if self._interrupt_requested:
             raise RuntimeError("Canceled by user.")
         history = list(conversation_history or [])
-        response = f"echo(turn={(len(history) // 2) + 1}): {user_message}"
+        self._turn_count += 1
+        response = f"echo(turn={self._turn_count}): {user_message}"
         if stream_callback is not None:
             midpoint = max(1, len(response) // 2)
             stream_callback(response[:midpoint])
@@ -60,6 +64,108 @@ def prepare_hermes_home() -> None:
         print(f"Warning: Failed to set TERMINAL_CWD from Hermes profile: {exc}")
 
 
+def _default_toolsets_for_platform(platform: str) -> list[str]:
+    return ["hermes-cli"]
+
+
+def _parse_enabled_flag(value, default: bool = True) -> bool:
+    """Parse bool-like config values used by AISOC MCP settings."""
+    if value is None:
+        return default
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int):
+        return value != 0
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1", "yes", "on"}:
+            return True
+        if lowered in {"false", "0", "no", "off"}:
+            return False
+    return default
+
+
+def _parse_aisoc_mcp_active() -> bool | None:
+    """Return the AISOC MCP env override: True / False / None (auto)."""
+    raw = os.environ.get("AISOC_MCP_ACTIVE")
+    if raw is None or not str(raw).strip():
+        return None
+    return _parse_enabled_flag(raw, default=True)
+
+
+def _get_enabled_mcp_servers(cfg: dict[str, object]) -> list[str]:
+    mcp_servers = cfg.get("mcp_servers") or {}
+    if not isinstance(mcp_servers, dict):
+        return []
+
+    enabled_servers: list[str] = []
+    for raw_name, server_cfg in mcp_servers.items():
+        name = str(raw_name).strip()
+        if not name:
+            continue
+        if isinstance(server_cfg, dict):
+            enabled = _parse_enabled_flag(server_cfg.get("enabled", True), default=True)
+        else:
+            enabled = True
+        if enabled:
+            enabled_servers.append(name)
+    return enabled_servers
+
+
+def _merge_aisoc_mcp_toolsets(
+    configured_toolsets: list[str],
+    cfg: dict[str, object],
+) -> list[str]:
+    """Merge configured toolsets with AISOC MCP server toolsets."""
+    normalized_toolsets = [toolset for toolset in configured_toolsets if toolset != "no_mcp"]
+
+    mcp_active = _parse_aisoc_mcp_active()
+    if mcp_active is False:
+        return normalized_toolsets
+
+    enabled_mcp_servers = _get_enabled_mcp_servers(cfg)
+    if not enabled_mcp_servers:
+        return normalized_toolsets
+
+    if "no_mcp" in configured_toolsets:
+        return normalized_toolsets
+
+    explicit_mcp_servers = [
+        toolset for toolset in normalized_toolsets if toolset in enabled_mcp_servers
+    ]
+    if explicit_mcp_servers:
+        return normalized_toolsets
+
+    merged_toolsets = list(normalized_toolsets)
+    for server_name in enabled_mcp_servers:
+        if server_name not in merged_toolsets:
+            merged_toolsets.append(server_name)
+    return merged_toolsets
+
+
+def start_aisoc_mcp_bootstrap(*, logger: logging.Logger | None = None) -> None:
+    """Start Hermes-style background MCP discovery for AISOC agent entrypoints."""
+    if _parse_aisoc_mcp_active() is False:
+        return
+
+    from hermes_cli.mcp_startup import start_background_mcp_discovery
+
+    start_background_mcp_discovery(
+        logger=logger or globals()["logger"],
+        thread_name="aisoc-mcp-discovery",
+    )
+
+
+def wait_for_aisoc_mcp_bootstrap(timeout: float = _AISOC_MCP_WAIT_TIMEOUT_SECONDS) -> None:
+    """Bounded wait for AISOC MCP discovery before first agent construction."""
+    if _parse_aisoc_mcp_active() is False:
+        return
+
+    from hermes_cli.mcp_startup import wait_for_mcp_discovery
+
+    wait_for_mcp_discovery(timeout=timeout)
+
+
 def _resolve_profile_enabled_toolsets(
     cfg: dict[str, object],
     *,
@@ -69,9 +175,11 @@ def _resolve_profile_enabled_toolsets(
     """Read per-platform toolsets from the already-loaded profile config."""
     configured_toolsets = config_module.cfg_get(cfg, "platform_toolsets", platform, default=None)
     if configured_toolsets is None:
-        return ["hermes-cli"]
+        normalized_toolsets = _default_toolsets_for_platform(platform)
+        return _merge_aisoc_mcp_toolsets(normalized_toolsets, cfg)
     if not isinstance(configured_toolsets, list):
-        return ["hermes-cli"]
+        normalized_toolsets = _default_toolsets_for_platform(platform)
+        return _merge_aisoc_mcp_toolsets(normalized_toolsets, cfg)
 
     normalized_toolsets: list[str] = []
     seen_toolsets: set[str] = set()
@@ -81,7 +189,7 @@ def _resolve_profile_enabled_toolsets(
             continue
         normalized_toolsets.append(toolset_name)
         seen_toolsets.add(toolset_name)
-    return normalized_toolsets
+    return _merge_aisoc_mcp_toolsets(normalized_toolsets, cfg)
 
 
 def build_profile_agent_kwargs(
@@ -153,9 +261,12 @@ def default_agent_factory(
     if os.environ.get("AISOC_A2A_TEST_MODE") == "echo":
         return EchoAgent()
 
+    active_logger = log or logger
+    start_aisoc_mcp_bootstrap(logger=active_logger)
+    wait_for_aisoc_mcp_bootstrap()
+
     from run_agent import AIAgent
 
-    active_logger = log or logger
     agent_kwargs = build_profile_agent_kwargs(
         session_id,
         platform=platform,

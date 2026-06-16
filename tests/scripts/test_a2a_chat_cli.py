@@ -583,7 +583,10 @@ async def test_create_client_disables_stream_read_timeout(monkeypatch) -> None:
 
     monkeypatch.setattr(mod, "ClientFactory", _FakeFactory)
 
-    http_client, sdk_client = await mod._create_client("http://agent.local")
+    http_client, sdk_client = await mod._create_client(
+        "http://agent.local",
+        headers={"Authorization": "Bearer secret-token"},
+    )
 
     assert captured["base_url"] == "http://agent.local"
     assert captured["config"].httpx_client is http_client
@@ -592,5 +595,88 @@ async def test_create_client_disables_stream_read_timeout(monkeypatch) -> None:
     assert http_client.timeout.connect == 10.0
     assert http_client.timeout.write == 60.0
     assert http_client.timeout.pool == 60.0
+    assert http_client.headers["Authorization"] == "Bearer secret-token"
     await sdk_client.close()
     await http_client.aclose()
+
+
+@pytest.mark.asyncio
+async def test_probe_agent_card_forwards_headers(monkeypatch) -> None:
+    mod = _load_script_module()
+    captured = {}
+
+    class _FakeResponse:
+        def raise_for_status(self):
+            return None
+
+        def json(self):
+            return {
+                "name": "Protected agent",
+                "supportedInterfaces": [{"url": "http://agent.local/a2a"}],
+            }
+
+    class _FakeAsyncClient:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return None
+
+        async def get(self, url, headers=None):
+            captured["url"] = url
+            captured["headers"] = headers
+            return _FakeResponse()
+
+    monkeypatch.setattr(mod.httpx, "AsyncClient", _FakeAsyncClient)
+
+    rpc_url, card = await mod._probe_agent_card(
+        "http://agent.local",
+        headers={"Authorization": "Bearer secret-token"},
+    )
+
+    assert rpc_url == "http://agent.local/a2a"
+    assert card["name"] == "Protected agent"
+    assert captured["url"] == "http://agent.local/.well-known/agent-card.json"
+    assert captured["headers"] == {"Authorization": "Bearer secret-token"}
+
+
+@pytest.mark.asyncio
+async def test_main_forwards_auth_token_to_probe_and_client(monkeypatch) -> None:
+    mod = _load_script_module()
+    captured = {}
+
+    class _DummyClient:
+        async def close(self):
+            return None
+
+    class _DummyHttpClient:
+        async def aclose(self):
+            return None
+
+    async def _fake_probe(base_url, headers=None):
+        captured["probe_base_url"] = base_url
+        captured["probe_headers"] = headers
+        return "http://agent.local/a2a", {"name": "Protected agent"}
+
+    async def _fake_create(base_url, headers=None):
+        captured["client_base_url"] = base_url
+        captured["client_headers"] = headers
+        return _DummyHttpClient(), _DummyClient()
+
+    async def _fake_loop(session, *, input_fn=input, output=None):
+        del session, input_fn, output
+        return 0
+
+    monkeypatch.setattr(mod, "_probe_agent_card", _fake_probe)
+    monkeypatch.setattr(mod, "_create_client", _fake_create)
+    monkeypatch.setattr(mod, "interactive_chat_loop", _fake_loop)
+
+    exit_code = await mod.main(
+        ["--base-url", "http://agent.local", "--auth-token", "secret-token"]
+    )
+
+    assert exit_code == 0
+    assert captured["probe_base_url"] == "http://agent.local"
+    assert captured["probe_headers"] == {"Authorization": "Bearer secret-token"}
+    assert captured["client_base_url"] == "http://agent.local/a2a"
+    assert captured["client_headers"] == {"Authorization": "Bearer secret-token"}

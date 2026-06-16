@@ -45,6 +45,13 @@ TERMINAL_TASK_STATES = frozenset(
 )
 
 
+def _auth_headers(auth_token: str | None) -> dict[str, str] | None:
+    token = (auth_token or "").strip()
+    if not token:
+        return None
+    return {"Authorization": f"Bearer {token}"}
+
+
 def _task_text(task: Task) -> str:
     message = task.status.message
     parts = list(getattr(message, "parts", []) or [])
@@ -268,8 +275,13 @@ async def _run_multi_turn(
     return first_done, second_done
 
 
-async def _create_client(base_url: str, *, streaming: bool = False) -> tuple[httpx.AsyncClient, Client]:
-    http_client = httpx.AsyncClient()
+async def _create_client(
+    base_url: str,
+    *,
+    streaming: bool = False,
+    headers: dict[str, str] | None = None,
+) -> tuple[httpx.AsyncClient, Client]:
+    http_client = httpx.AsyncClient(headers=headers)
     factory = ClientFactory(
         ClientConfig(
             httpx_client=http_client,
@@ -292,17 +304,26 @@ async def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--expected-multi-second-response")
     parser.add_argument("--timeout", type=float, default=60.0)
     parser.add_argument("--streaming", action="store_true")
+    parser.add_argument("--auth-token", help="Bearer token for protected A2A HTTP routes.")
     args = parser.parse_args(argv)
 
     base_url = args.base_url.rstrip("/")
+    headers = _auth_headers(args.auth_token)
 
     async with httpx.AsyncClient() as probe:
-        card_response = await probe.get(f"{base_url}/.well-known/agent-card.json")
+        card_response = await probe.get(
+            f"{base_url}/.well-known/agent-card.json",
+            headers=headers,
+        )
         card_response.raise_for_status()
         card = card_response.json()
         print(f"agent_card_url: {card['supportedInterfaces'][0]['url']}")
 
-    http_client, sdk_client = await _create_client(base_url, streaming=args.streaming)
+    http_client, sdk_client = await _create_client(
+        base_url,
+        streaming=args.streaming,
+        headers=headers,
+    )
     try:
         if args.streaming:
             first_done = await _run_streaming_turn(
