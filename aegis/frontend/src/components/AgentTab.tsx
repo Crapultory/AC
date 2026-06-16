@@ -130,7 +130,7 @@ export default function AgentTab({
   }
 
   return (
-    <div className="flex-1 space-y-6 overflow-y-auto p-6 text-xs scrollbar-thin select-none">
+    <div className="flex-1 space-y-6 overflow-y-auto p-6 text-xs scrollbar-thin">
       <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
         <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-[#05080F] p-4">
           <div>

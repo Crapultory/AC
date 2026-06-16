@@ -1,3 +1,4 @@
+import asyncio
 import json
 import threading
 from types import SimpleNamespace
@@ -8,6 +9,7 @@ import pytest
 from a2a.types import Role, TaskState
 import a2a.client as a2a_client
 
+import tools.a2a_delegate_tool as a2a_delegate_tool_module
 from tools.a2a_delegate_tool import A2A_REGISTRY, _A2ADelegateSession, a2a_delegate
 
 
@@ -152,11 +154,49 @@ def test_local_loop_suppresses_user_events(mock_agent_cls, _mock_history):
     )
 
     assert result["loop_exit_reason"] == "main_command"
+    assert result["is_loop"] is True
     assert sink.events == [
         ("delegate", "status", "entered foreground loop", "child-session"),
         ("delegate", "ai", "first", "child-session"),
         ("delegate", "ai", "second", "child-session"),
         ("delegate", "status", "return to main", "child-session"),
+    ]
+
+
+@patch("tools.a2a_delegate_tool.load_conversation_history", return_value=[])
+@patch("run_agent.AIAgent")
+def test_local_delegate_emits_ai_delta_before_final_message(mock_agent_cls, _mock_history):
+    parent = _make_parent()
+    child = MagicMock()
+    child.session_id = "child-session"
+    child._session_db = None
+
+    def _run_conversation(**kwargs):
+        del kwargs
+        if callable(child.stream_delta_callback):
+            child.stream_delta_callback("chunk-1 ")
+            child.stream_delta_callback("chunk-2")
+            child.stream_delta_callback(None)
+        return {"final_response": "chunk-1 chunk-2", "completed": True, "api_calls": 1}
+
+    child.run_conversation.side_effect = _run_conversation
+    mock_agent_cls.return_value = child
+    sink = _OutputSink()
+
+    result = json.loads(
+        a2a_delegate(
+            goal="start",
+            agent="local",
+            output=sink,
+            parent_agent=parent,
+        )
+    )
+
+    assert result["success"] is True
+    assert sink.events == [
+        ("delegate", "ai_delta", "chunk-1 ", "child-session"),
+        ("delegate", "ai_delta", "chunk-2", "child-session"),
+        ("delegate", "ai", "chunk-1 chunk-2", "child-session"),
     ]
 
 
@@ -206,6 +246,13 @@ async def test_a2a_session_suppresses_tool_result_events():
                     _make_a2a_task(
                         task_id=task_id,
                         context_id="ctx-1",
+                        state=TaskState.TASK_STATE_WORKING,
+                        text="final ",
+                        role=Role.ROLE_AGENT,
+                    ),
+                    _make_a2a_task(
+                        task_id=task_id,
+                        context_id="ctx-1",
                         state=TaskState.TASK_STATE_COMPLETED,
                         text="final reply",
                         role=Role.ROLE_AGENT,
@@ -230,6 +277,8 @@ async def test_a2a_session_suppresses_tool_result_events():
     assert result["final_response"] == "final reply"
     assert sink.events == [
         ("delegate", "tool_call", 'web_search {"q":"cats"}', "ctx-1"),
+        ("delegate", "ai_delta", "final ", "ctx-1"),
+        ("delegate", "ai_delta", "reply", "ctx-1"),
         ("delegate", "ai", "final reply", "ctx-1"),
     ]
 
@@ -273,6 +322,127 @@ async def test_a2a_session_open_applies_configured_headers(monkeypatch):
     assert captured["base_url"] == "http://agent.local"
     assert captured["http_closed"] is True
     assert captured["client_closed"] is True
+
+
+@pytest.mark.asyncio
+async def test_a2a_session_cancel_issues_cancel_task_request():
+    captured = {}
+
+    class _CancelableClient:
+        async def cancel_task(self, request, *, context=None):
+            del context
+            captured["request_id"] = request.id
+            return _make_a2a_task(
+                task_id=request.id,
+                context_id="ctx-1",
+                state=TaskState.TASK_STATE_CANCELED,
+                role=Role.ROLE_AGENT,
+            )
+
+        async def close(self):
+            return None
+
+    session = _A2ADelegateSession("http://agent.local", session_id="ctx-1")
+    session._client = _CancelableClient()
+    session._http_client = _FakeAsyncHTTPClient()
+    session.task_id = "task-123"
+
+    result = await session.cancel()
+    await session.close()
+
+    assert captured["request_id"] == "task-123"
+    assert result.id == "task-123"
+
+
+def test_a2a_cancel_handle_runs_cancel_on_owner_loop_from_foreign_thread():
+    session = _A2ADelegateSession("http://agent.local", session_id="ctx-1")
+    owner_thread_id = {"value": None}
+    cancel_thread_id = {"value": None}
+    ready = threading.Event()
+    cancelled = threading.Event()
+
+    class _CancelableClient:
+        async def cancel_task(self, request, *, context=None):
+            del context
+            cancel_thread_id["value"] = threading.get_ident()
+            cancelled.set()
+            return _make_a2a_task(
+                task_id=request.id,
+                context_id="ctx-1",
+                state=TaskState.TASK_STATE_CANCELED,
+                role=Role.ROLE_AGENT,
+            )
+
+        async def close(self):
+            return None
+
+    session._client = _CancelableClient()
+    session._http_client = _FakeAsyncHTTPClient()
+    session.task_id = "task-123"
+
+    def _run_owner_loop() -> None:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        session._owner_loop = loop
+        session._owner_thread_id = threading.get_ident()
+        owner_thread_id["value"] = threading.get_ident()
+        ready.set()
+        loop.run_forever()
+        loop.close()
+
+    worker = threading.Thread(target=_run_owner_loop, daemon=True)
+    worker.start()
+    assert ready.wait(timeout=1.0) is True
+
+    try:
+        handle = a2a_delegate_tool_module._RemoteA2ADelegateCancelHandle(session)
+        assert handle.cancel() == "sent"
+    finally:
+        owner_loop, _owner_tid = session.owner_runtime()
+        assert owner_loop is not None
+        assert cancelled.wait(timeout=1.0) is True
+        owner_loop.call_soon_threadsafe(owner_loop.stop)
+        worker.join(timeout=1.0)
+
+    assert cancel_thread_id["value"] == owner_thread_id["value"]
+
+
+def test_a2a_cancel_handle_returns_completed_when_owner_loop_future_finishes_immediately():
+    session = _A2ADelegateSession("http://agent.local", session_id="ctx-1")
+    session.task_id = "task-123"
+    loop = MagicMock()
+    loop.is_running.return_value = True
+    session._owner_loop = loop
+    session._owner_thread_id = threading.get_ident() + 1
+
+    class _DoneFuture:
+        def done(self):
+            return True
+
+        def result(self):
+            return _make_a2a_task(
+                task_id="task-123",
+                context_id="ctx-1",
+                state=TaskState.TASK_STATE_CANCELED,
+                role=Role.ROLE_AGENT,
+            )
+
+    def _patched_run_coroutine_threadsafe(coro, owner_loop):
+        del owner_loop
+        coro.close()
+        return _DoneFuture()
+
+    monkeypatch = pytest.MonkeyPatch()
+    monkeypatch.setattr(
+        a2a_delegate_tool_module.asyncio,
+        "run_coroutine_threadsafe",
+        _patched_run_coroutine_threadsafe,
+    )
+    try:
+        handle = a2a_delegate_tool_module._RemoteA2ADelegateCancelHandle(session)
+        assert handle.cancel() == "completed"
+    finally:
+        monkeypatch.undo()
 
 
 @patch("tools.a2a_delegate_tool.load_conversation_history", return_value=[])
@@ -351,3 +521,179 @@ def test_a2a_mode_returns_default_session_id(monkeypatch):
 
     assert captured["session_id"] == "delegate_worker_alpha_a2a_20260606_120000"
     assert result["session_id"] == "delegate_worker_alpha_a2a_20260606_120000"
+
+
+def test_a2a_mode_cancelled_task_is_reported_as_interrupted_and_clears_parent_handle(monkeypatch):
+    parent = _make_parent()
+    A2A_REGISTRY["remote"] = {
+        "name": "remote",
+        "url": "http://agent.local",
+        "available": True,
+        "capabilities": ["streaming"],
+        "agent_card": {"supported_interfaces": [{"url": "http://agent.local/a2a"}]},
+        "agent_card_name": "Remote Agent",
+        "error": None,
+    }
+    captured = {"registered": False}
+
+    class _FakeSession:
+        def __init__(self, base_url, *, output=None, timeout=60.0, poll_interval=0.05, session_id=None):
+            del base_url, output, timeout, poll_interval
+            self.context_id = session_id
+            self.task_id = "task-1"
+
+        async def send_turn(self, text: str, *, is_delegate_output: bool = True):
+            del text, is_delegate_output
+            handle = getattr(parent, "_active_a2a_delegate_session", None)
+            captured["registered"] = callable(getattr(handle, "cancel", None))
+            return {
+                "final_response": "",
+                "state": TaskState.TASK_STATE_CANCELED,
+                "state_name": "canceled",
+            }
+
+        async def close(self):
+            return None
+
+        def latest_assistant_text(self):
+            return ""
+
+        def should_suppress_stop_exception(self, exc):
+            del exc
+            return False
+
+    monkeypatch.setattr("tools.a2a_delegate_tool._A2ADelegateSession", _FakeSession)
+
+    result = json.loads(
+        a2a_delegate(
+            goal="test remote",
+            agent="a2a",
+            a2a_name="remote",
+            parent_agent=parent,
+        )
+    )
+
+    assert captured["registered"] is True
+    assert result["success"] is True
+    assert result["is_loop"] is False
+    assert result["loop_exit_reason"] == "interrupted"
+    assert result["completed"] is False
+    assert "error" not in result
+    assert result["final_response"] == "已按用户请求停止当前 A2A 委托，无需重试。"
+    assert getattr(parent, "_active_a2a_delegate_session", None) is None
+
+
+def test_a2a_mode_stop_with_last_output_returns_interrupted_payload(monkeypatch):
+    parent = _make_parent()
+    A2A_REGISTRY["remote"] = {
+        "name": "remote",
+        "url": "http://agent.local",
+        "available": True,
+        "capabilities": ["streaming"],
+        "agent_card": {"supported_interfaces": [{"url": "http://agent.local/a2a"}]},
+        "agent_card_name": "Remote Agent",
+        "error": None,
+    }
+    captured = {"registered": False}
+
+    class _FakeSession:
+        def __init__(self, base_url, *, output=None, timeout=60.0, poll_interval=0.05, session_id=None):
+            del base_url, output, timeout, poll_interval
+            self.context_id = session_id
+            self.task_id = "task-1"
+
+        async def send_turn(self, text: str, *, is_delegate_output: bool = True):
+            del text, is_delegate_output
+            handle = getattr(parent, "_active_a2a_delegate_session", None)
+            captured["registered"] = callable(getattr(handle, "cancel", None))
+            return {
+                "final_response": "partial answer",
+                "state": TaskState.TASK_STATE_CANCELED,
+                "state_name": "canceled",
+            }
+
+        async def close(self):
+            return None
+
+        def latest_assistant_text(self):
+            return "partial answer"
+
+        def should_suppress_stop_exception(self, exc):
+            del exc
+            return False
+
+    monkeypatch.setattr("tools.a2a_delegate_tool._A2ADelegateSession", _FakeSession)
+
+    result = json.loads(
+        a2a_delegate(
+            goal="test remote",
+            agent="a2a",
+            a2a_name="remote",
+            parent_agent=parent,
+        )
+    )
+
+    assert captured["registered"] is True
+    assert result["success"] is True
+    assert result["is_loop"] is False
+    assert result["loop_exit_reason"] == "interrupted"
+    assert "error" not in result
+    assert result["final_response"] == (
+        "已按用户请求停止当前 A2A 委托，无需重试。\n\n停止前最后输出：partial answer"
+    )
+    assert getattr(parent, "_active_a2a_delegate_session", None) is None
+
+
+def test_a2a_mode_stop_close_teardown_exception_still_returns_interrupted_payload(monkeypatch):
+    parent = _make_parent()
+    A2A_REGISTRY["remote"] = {
+        "name": "remote",
+        "url": "http://agent.local",
+        "available": True,
+        "capabilities": ["streaming"],
+        "agent_card": {"supported_interfaces": [{"url": "http://agent.local/a2a"}]},
+        "agent_card_name": "Remote Agent",
+        "error": None,
+    }
+
+    class _FakeSession:
+        def __init__(self, base_url, *, output=None, timeout=60.0, poll_interval=0.05, session_id=None):
+            del base_url, output, timeout, poll_interval
+            self.context_id = session_id
+            self.task_id = "task-1"
+            self._stop_requested = False
+
+        async def send_turn(self, text: str, *, is_delegate_output: bool = True):
+            del text, is_delegate_output
+            self._stop_requested = True
+            return {
+                "final_response": "",
+                "state": TaskState.TASK_STATE_CANCELED,
+                "state_name": "canceled",
+            }
+
+        async def close(self):
+            raise RuntimeError("Event loop is closed")
+
+        def latest_assistant_text(self):
+            return ""
+
+        def should_suppress_stop_exception(self, exc):
+            return self._stop_requested and "event loop is closed" in str(exc).lower()
+
+    monkeypatch.setattr("tools.a2a_delegate_tool._A2ADelegateSession", _FakeSession)
+
+    result_text = a2a_delegate(
+        goal="test remote",
+        agent="a2a",
+        a2a_name="remote",
+        parent_agent=parent,
+    )
+
+    assert not result_text.startswith("Error executing tool")
+    result = json.loads(result_text)
+    assert result["success"] is True
+    assert result["is_loop"] is False
+    assert result["loop_exit_reason"] == "interrupted"
+    assert result["final_response"] == "已按用户请求停止当前 A2A 委托，无需重试。"
+    assert getattr(parent, "_active_a2a_delegate_session", None) is None

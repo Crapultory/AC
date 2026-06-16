@@ -33,6 +33,7 @@ class AegisStore:
             self._write(updated)
             self._payload.clear()
             self._payload.update(deepcopy(updated))
+            self._invalidate_a2a_caches()
             return result
 
     def _reload_from_disk_locked(self) -> dict[str, Any]:
@@ -93,6 +94,18 @@ class AegisStore:
         except Exception:
             Path(tmp_path).unlink(missing_ok=True)
             raise
+
+    @staticmethod
+    def _invalidate_a2a_caches() -> None:
+        try:
+            from tools import a2a_delegate_tool
+        except Exception:
+            return
+
+        registry = getattr(a2a_delegate_tool, "A2A_REGISTRY", None)
+        if isinstance(registry, dict):
+            registry.clear()
+        setattr(a2a_delegate_tool, "A2A_CONTEXT", "")
 
 
 _STORE: AegisStore | None = None

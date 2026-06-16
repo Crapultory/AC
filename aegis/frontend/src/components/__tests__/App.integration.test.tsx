@@ -349,4 +349,46 @@ describe('Aegis App integration', () => {
     expect(await screen.findByText('background session kept streaming')).toBeInTheDocument();
     expect(await screen.findByText(/approval required/i)).toBeInTheDocument();
   });
+
+  it('keeps app shell and tab content selectable by default', async () => {
+    window.localStorage.setItem('aegis_session_token', 'frontend-test-token');
+
+    global.fetch = vi.fn(async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/auth/session') {
+        return jsonResponse({ authenticated: true, token_source: 'env' });
+      }
+      if (url === '/api/agents') {
+        return jsonResponse({ agents: [] });
+      }
+      if (url === '/api/routing/global') {
+        return jsonResponse({ rules: [] });
+      }
+      throw new Error(`Unhandled request: GET ${url}`);
+    }) as typeof global.fetch;
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /aegis chat/i });
+
+    const mainViewport = document.getElementById('main-content-viewport');
+    const appShell = mainViewport?.parentElement?.parentElement as HTMLElement | null;
+    const sidebar = document.getElementById('sidebar-container');
+
+    expect(appShell).toBeTruthy();
+    expect(sidebar).toBeTruthy();
+    expect(mainViewport?.firstElementChild).toBeTruthy();
+    expect(appShell).not.toHaveClass('select-none');
+    expect(sidebar).not.toHaveClass('select-none');
+    expect(mainViewport?.firstElementChild).not.toHaveClass('select-none');
+
+    fireEvent.click(screen.getByRole('button', { name: /agent orchestration/i }));
+    expect(mainViewport?.firstElementChild).not.toHaveClass('select-none');
+
+    fireEvent.click(screen.getByRole('button', { name: /routing policy/i }));
+    expect(mainViewport?.firstElementChild).not.toHaveClass('select-none');
+
+    fireEvent.click(screen.getByRole('button', { name: /aegis chat/i }));
+    expect(mainViewport?.firstElementChild).not.toHaveClass('select-none');
+  });
 });

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import time
 from typing import Any
 
@@ -203,12 +204,176 @@ class _DelegateAgent:
         input_adapter = input_factory()
         assert input_adapter.enter_foreground() is True
         output.emit("delegate", "status", "entered foreground loop", session_id="delegate-sess")
+        output.emit("delegate", "ai_delta", "delegate-start: ", session_id="delegate-sess")
+        output.emit("delegate", "ai_delta", user_message, session_id="delegate-sess")
         output.emit("delegate", "ai", f"delegate-start: {user_message}", session_id="delegate-sess")
         next_message = input_adapter.read_line()
+        output.emit("delegate", "ai_delta", "delegate-followup: ", session_id="delegate-sess")
+        output.emit("delegate", "ai_delta", next_message, session_id="delegate-sess")
         output.emit("delegate", "ai", f"delegate-followup: {next_message}", session_id="delegate-sess")
         output.emit("delegate", "status", "return to main", session_id="delegate-sess")
         input_adapter.exit_foreground()
         return {"final_response": "", "completed": True}
+
+
+class _RemoteCancelHandle:
+    def __init__(self) -> None:
+        self.cancel_calls = 0
+        self.cancelled = threading.Event()
+
+    def cancel(self) -> bool:
+        self.cancel_calls += 1
+        self.cancelled.set()
+        return True
+
+
+class _DelayedRemoteCancelHandle:
+    def __init__(self, delay_seconds: float = 0.2) -> None:
+        self.cancel_calls = 0
+        self.cancelled = threading.Event()
+        self.delay_seconds = delay_seconds
+
+    def has_live_task(self) -> bool:
+        return True
+
+    def cancel(self) -> str:
+        self.cancel_calls += 1
+
+        def _finish_cancel() -> None:
+            time.sleep(self.delay_seconds)
+            self.cancelled.set()
+
+        threading.Thread(target=_finish_cancel, daemon=True).start()
+        return "sent"
+
+
+class _FailingRemoteCancelHandle:
+    def has_live_task(self) -> bool:
+        return True
+
+    def cancel(self) -> str:
+        raise RuntimeError("cancel dispatch failed")
+
+
+class _RemoteCancelableDelegateAgent:
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.stream_delta_callback = None
+        self.tool_start_callback = None
+        self.tool_complete_callback = None
+        self.remote_handle = _RemoteCancelHandle()
+
+    def run_conversation(
+        self,
+        user_message: str,
+        system_message: str | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
+        task_id: str | None = None,
+        stream_callback=None,
+        persist_user_message: bool = True,
+    ) -> dict[str, Any]:
+        del system_message, conversation_history, task_id, stream_callback, persist_user_message, user_message
+        self.remote_handle = _RemoteCancelHandle()
+        if callable(self.tool_start_callback):
+            self.tool_start_callback("call-delegate", "a2a_delegate", {"a2a_name": "threat-intel"})
+        setattr(self, "_active_a2a_delegate_session", self.remote_handle)
+        output = getattr(self, "_delegate_ext_output_adapter")
+        input_factory = getattr(self, "_delegate_ext_input_factory")
+        input_adapter = input_factory()
+        assert input_adapter.enter_foreground() is True
+        output.emit("delegate", "status", "entered foreground loop", session_id="remote-delegate-sess")
+        if self.remote_handle.cancelled.wait(timeout=0.4):
+            output.emit("delegate", "status", "interrupted", session_id="remote-delegate-sess")
+        else:
+            output.emit("delegate", "status", "return to main", session_id="remote-delegate-sess")
+        input_adapter.exit_foreground()
+        return {"final_response": "", "completed": False, "interrupted": self.remote_handle.cancelled.is_set()}
+
+
+class _DelayedRemoteCancelableDelegateAgent(_RemoteCancelableDelegateAgent):
+    def __init__(self, session_id: str):
+        super().__init__(session_id)
+        self.remote_handle = _DelayedRemoteCancelHandle()
+
+    def run_conversation(
+        self,
+        user_message: str,
+        system_message: str | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
+        task_id: str | None = None,
+        stream_callback=None,
+        persist_user_message: bool = True,
+    ) -> dict[str, Any]:
+        del system_message, conversation_history, task_id, stream_callback, persist_user_message, user_message
+        self.remote_handle = _DelayedRemoteCancelHandle()
+        if callable(self.tool_start_callback):
+            self.tool_start_callback("call-delegate", "a2a_delegate", {"a2a_name": "threat-intel"})
+        setattr(self, "_active_a2a_delegate_session", self.remote_handle)
+        output = getattr(self, "_delegate_ext_output_adapter")
+        input_factory = getattr(self, "_delegate_ext_input_factory")
+        input_adapter = input_factory()
+        assert input_adapter.enter_foreground() is True
+        output.emit("delegate", "status", "entered foreground loop", session_id="remote-delegate-sess")
+        if self.remote_handle.cancelled.wait(timeout=0.6):
+            output.emit("delegate", "status", "interrupted", session_id="remote-delegate-sess")
+        else:
+            output.emit("delegate", "status", "return to main", session_id="remote-delegate-sess")
+        input_adapter.exit_foreground()
+        return {"final_response": "", "completed": False, "interrupted": self.remote_handle.cancelled.is_set()}
+
+
+class _FailingRemoteCancelableDelegateAgent(_RemoteCancelableDelegateAgent):
+    def __init__(self, session_id: str):
+        super().__init__(session_id)
+        self.remote_handle = _FailingRemoteCancelHandle()
+
+    def run_conversation(
+        self,
+        user_message: str,
+        system_message: str | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
+        task_id: str | None = None,
+        stream_callback=None,
+        persist_user_message: bool = True,
+    ) -> dict[str, Any]:
+        del system_message, conversation_history, task_id, stream_callback, persist_user_message, user_message
+        if callable(self.tool_start_callback):
+            self.tool_start_callback("call-delegate", "a2a_delegate", {"a2a_name": "threat-intel"})
+        setattr(self, "_active_a2a_delegate_session", self.remote_handle)
+        output = getattr(self, "_delegate_ext_output_adapter")
+        input_factory = getattr(self, "_delegate_ext_input_factory")
+        input_adapter = input_factory()
+        assert input_adapter.enter_foreground() is True
+        output.emit("delegate", "status", "entered foreground loop", session_id="remote-delegate-sess")
+        if self.remote_handle.cancelled.wait(timeout=0.2):
+            output.emit("delegate", "status", "interrupted", session_id="remote-delegate-sess")
+        input_adapter.exit_foreground()
+        return {"final_response": "", "completed": False}
+
+
+class _InterruptAwareAgent:
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.stream_delta_callback = None
+        self.tool_start_callback = None
+        self.tool_complete_callback = None
+        self.interrupt_messages: list[str | None] = []
+
+    def interrupt(self, message: str | None = None) -> None:
+        self.interrupt_messages.append(message)
+
+    def run_conversation(
+        self,
+        user_message: str,
+        system_message: str | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
+        task_id: str | None = None,
+        stream_callback=None,
+        persist_user_message: bool = True,
+    ) -> dict[str, Any]:
+        del system_message, conversation_history, task_id, stream_callback, persist_user_message, user_message
+        time.sleep(0.2)
+        return {"final_response": "finished", "completed": True}
 
 
 class _ApprovalAgent:
@@ -686,7 +851,8 @@ def test_chat_ws_help_slash_lists_supported_aegis_commands(
                 "Aegis slash commands:\n"
                 "/help - show available Aegis-native slash commands\n"
                 "/model <model_name> - switch the current live session model\n"
-                "/a2a - show the current A2A context XML"
+                "/a2a - show the current A2A context XML\n"
+                "/stop - cancel the active remote A2A delegate task"
             )
 
 
@@ -989,10 +1155,17 @@ def test_chat_ws_routes_follow_up_into_delegate_foreground_with_srcagent(
             assert entered["session_id"] == session_id
             assert entered["srcagent"] == "threat-intel"
 
+            first_delegate_delta = _recv_until(ws, "message.delta")
+            assert first_delegate_delta["source"] == "delegate"
+            assert first_delegate_delta["srcagent"] == "threat-intel"
+            assert first_delegate_delta["delta"] == "delegate-start: "
+            assert first_delegate_delta["turn_id"] == first_accepted["turn_id"]
+
             first_delegate_reply = _recv_until(ws, "message.completed")
             assert first_delegate_reply["source"] == "delegate"
             assert first_delegate_reply["srcagent"] == "threat-intel"
             assert first_delegate_reply["content"] == "delegate-start: delegate please"
+            assert first_delegate_reply["message_id"] == first_delegate_delta["message_id"]
             assert first_delegate_reply["turn_id"] == first_accepted["turn_id"]
 
             ws.send_json(
@@ -1005,16 +1178,284 @@ def test_chat_ws_routes_follow_up_into_delegate_foreground_with_srcagent(
             )
             second_accepted = _recv_until(ws, "message.accepted")
             assert second_accepted["turn_id"] != first_accepted["turn_id"]
+            second_delegate_delta = _recv_until(ws, "message.delta")
+            assert second_delegate_delta["source"] == "delegate"
+            assert second_delegate_delta["srcagent"] == "threat-intel"
+            assert second_delegate_delta["delta"] == "delegate-followup: "
+            assert second_delegate_delta["turn_id"] == second_accepted["turn_id"]
             second_delegate_reply = _recv_until(ws, "message.completed")
             assert second_delegate_reply["source"] == "delegate"
             assert second_delegate_reply["srcagent"] == "threat-intel"
             assert second_delegate_reply["content"] == "delegate-followup: follow-up routed to delegate"
+            assert second_delegate_reply["message_id"] == second_delegate_delta["message_id"]
             assert second_delegate_reply["turn_id"] == second_accepted["turn_id"]
 
             exited = _recv_until(ws, "delegate.exited")
             assert exited["srcagent"] == "threat-intel"
             assert exited["reason"] == "return_to_main"
             assert exited["turn_id"] == second_accepted["turn_id"]
+
+
+def test_chat_ws_stop_slash_cancels_active_remote_a2a_delegate(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    agent = _RemoteCancelableDelegateAgent("remote-cancel")
+    app.state.chat_manager.set_agent_factory(lambda session_id: agent)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws:
+            ws.send_json({"type": "session.bind", "title": "Remote Stop Slash"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "start remote delegate",
+                    "client_msg_id": "msg-1",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            entered = _recv_until(ws, "delegate.entered")
+            assert entered["srcagent"] == "threat-intel"
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "/stop",
+                    "client_msg_id": "msg-stop",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            exited = _recv_until_one_of(ws, {"delegate.exited", "error"})
+            assert exited["type"] == "delegate.exited"
+            assert exited["source"] == "delegate"
+            assert exited["srcagent"] == "threat-intel"
+            assert exited["reason"] == "interrupted"
+            assert agent.remote_handle.cancel_calls == 1
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "start remote delegate again",
+                    "client_msg_id": "msg-2",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            reentered = _recv_until(ws, "delegate.entered")
+            assert reentered["srcagent"] == "threat-intel"
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "/stop",
+                    "client_msg_id": "msg-stop-2",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            second_exit = _recv_until_one_of(ws, {"delegate.exited", "error"})
+            assert second_exit["type"] == "delegate.exited"
+            assert second_exit["reason"] == "interrupted"
+
+
+def test_chat_ws_session_interrupt_cancels_active_remote_a2a_delegate(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    agent = _RemoteCancelableDelegateAgent("remote-cancel")
+    app.state.chat_manager.set_agent_factory(lambda session_id: agent)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws:
+            ws.send_json({"type": "session.bind", "title": "Remote Interrupt"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "start remote delegate",
+                    "client_msg_id": "msg-1",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            entered = _recv_until(ws, "delegate.entered")
+            assert entered["srcagent"] == "threat-intel"
+
+            ws.send_json({"type": "session.interrupt", "session_id": session_id})
+
+            exited = _recv_until_one_of(ws, {"delegate.exited", "error"})
+            assert exited["type"] == "delegate.exited"
+            assert exited["source"] == "delegate"
+            assert exited["srcagent"] == "threat-intel"
+            assert exited["reason"] == "interrupted"
+            assert agent.remote_handle.cancel_calls == 1
+
+
+def test_chat_ws_stop_slash_treats_delayed_cancel_dispatch_as_success(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    agent = _DelayedRemoteCancelableDelegateAgent("remote-delayed-cancel")
+    app.state.chat_manager.set_agent_factory(lambda session_id: agent)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws:
+            ws.send_json({"type": "session.bind", "title": "Remote Delayed Stop"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "start remote delegate",
+                    "client_msg_id": "msg-1",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            _recv_until(ws, "delegate.entered")
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "/stop",
+                    "client_msg_id": "msg-stop",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            run_state = _recv_until_one_of(ws, {"run.state", "error"})
+            assert run_state["type"] == "run.state"
+            assert run_state["state"] == "interrupted"
+            exited = _recv_until_one_of(ws, {"delegate.exited", "error"})
+            assert exited["type"] == "delegate.exited"
+            assert exited["reason"] == "interrupted"
+            assert agent.remote_handle.cancel_calls == 1
+
+
+def test_chat_ws_stop_slash_reports_real_cancel_failures(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    agent = _FailingRemoteCancelableDelegateAgent("remote-failing-cancel")
+    app.state.chat_manager.set_agent_factory(lambda session_id: agent)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws:
+            ws.send_json({"type": "session.bind", "title": "Remote Failing Stop"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "start remote delegate",
+                    "client_msg_id": "msg-1",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            _recv_until(ws, "delegate.entered")
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "/stop",
+                    "client_msg_id": "msg-stop",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            error = _recv_until(ws, "error")
+            assert error["code"] == "delegate_cancel_failed"
+            assert "cancel dispatch failed" in error["message"]
+
+
+def test_chat_ws_stop_slash_without_active_delegate_returns_info_message(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    agent = _InterruptAwareAgent("no-remote-delegate")
+    app.state.chat_manager.set_agent_factory(lambda session_id: agent)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws:
+            ws.send_json({"type": "session.bind", "title": "No Remote Stop"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "/stop",
+                    "client_msg_id": "msg-stop",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            reply = _recv_until_one_of(ws, {"message.completed", "error"})
+            assert reply["type"] == "message.completed"
+            assert reply["content"] == "No active remote A2A delegate task."
+            assert agent.interrupt_messages == []
+
+
+def test_chat_ws_session_interrupt_keeps_existing_main_agent_interrupt_behavior(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    agent = _InterruptAwareAgent("interrupt-aware")
+    app.state.chat_manager.set_agent_factory(lambda session_id: agent)
+
+    with TestClient(app) as client:
+        with client.websocket_connect("/api/chat/ws?token=test-session-token") as ws:
+            ws.send_json({"type": "session.bind", "title": "Main Interrupt"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "run main task",
+                    "client_msg_id": "msg-1",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+
+            ws.send_json({"type": "session.interrupt", "session_id": session_id})
+
+            while True:
+                run_state = _recv_until(ws, "run.state")
+                if run_state["state"] == "interrupted":
+                    break
+            assert run_state["state"] == "interrupted"
+            assert run_state["source"] == "main"
+            assert agent.interrupt_messages == ["Interrupted by websocket client."]
 
 
 def test_chat_ws_emits_approval_request_and_resolves_over_same_socket(

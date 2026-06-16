@@ -94,7 +94,7 @@ export default function OverviewTab({ agents, currentUtcTime, setTab }: Overview
   }, []);
 
   return (
-    <div className="space-y-4 flex-1 overflow-y-auto p-4 scrollbar-thin select-none">
+    <div className="space-y-4 flex-1 overflow-y-auto p-4 scrollbar-thin">
       {/* Top Banner & Control Status */}
       <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4 bg-[#05080F] border border-slate-800 rounded-xl p-4 shadow-lg">
         <div>
@@ -415,7 +415,7 @@ export default function OverviewTab({ agents, currentUtcTime, setTab }: Overview
             <div className="p-4 border-b border-slate-800 bg-[#03060C] space-y-3">
               <div className="flex justify-between items-center">
                 <h4 className="text-[11px] font-bold text-white uppercase tracking-widest italic">Agent Index</h4>
-                <div className="flex gap-1 text-[9px] font-mono select-none">
+                <div className="flex gap-1 text-[9px] font-mono">
                   <span className="bg-[#080C14] text-cyan-400 border border-slate-800 px-1.5 py-0.5 rounded font-bold">
                     Total: {totalCount}
                   </span>

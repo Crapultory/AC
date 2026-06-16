@@ -444,8 +444,7 @@ class TestDelegateExt:
         assert result["session_id"] == "ctx-remote"
         assert result["toolsets"] is None
         assert result["max_iterations"] is None
-        assert result["remote_url"] == "http://agent.local/a2a"
-        assert result["agent_card_name"] == "Remote Agent"
+        assert result["is_loop"] is False
         assert result["final_response"] == "remote:first"
 
     def test_a2a_mode_passes_entry_headers_into_remote_session(self, monkeypatch):
@@ -638,6 +637,7 @@ class TestDelegateExt:
         assert captured["entered"] == 1
         assert captured["exited"] == 1
         assert captured["closed"] is True
+        assert result["is_loop"] is True
         assert result["loop_exit_reason"] == "main_command"
         assert result["final_response"] == "remote:2"
         assert sink == [
@@ -661,6 +661,7 @@ class TestDelegateExt:
 
         assert result["agent"] == "local"
         assert result["toolsets"] == ["hermes-cli"]
+        assert result["is_loop"] is False
         assert result["final_response"] == "done"
         _, kwargs = mock_agent_cls.call_args
         assert kwargs["enabled_toolsets"] == ["hermes-cli"]
@@ -1217,8 +1218,9 @@ class TestA2ADelegateSession:
         assert fake_client.sent_requests[1].message.context_id == "ctx-1"
         assert sink == [
             ("delegate", "tool_call", 'web_search {"q":"cats"}', "ctx-1"),
-            ("delegate", "tool_result", 'web_search -> {"results":["cats"]}', "ctx-1"),
+            ("delegate", "ai_delta", "first reply", "ctx-1"),
             ("delegate", "ai", "first reply", "ctx-1"),
             ("delegate", "tool_call", 'web_search {"q":"cats"}', "ctx-1"),
+            ("delegate", "ai_delta", "second reply", "ctx-1"),
             ("delegate", "ai", "second reply", "ctx-1"),
         ]

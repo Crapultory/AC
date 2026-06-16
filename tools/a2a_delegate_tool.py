@@ -35,6 +35,12 @@ DEFAULT_TOOLSETS = ["hermes-cli"]
 DEFAULT_MAX_ITERATIONS = 90
 A2A_REGISTRY: Dict[str, Dict[str, Any]] = {}
 A2A_CONTEXT = ""
+_ACTIVE_A2A_SESSION_ATTR = "_active_a2a_delegate_session"
+_ACTIVE_A2A_SESSION_LOCK_ATTR = "_active_a2a_delegate_session_lock"
+_A2A_STOP_MESSAGE = "已按用户请求停止当前 A2A 委托，无需重试。"
+_A2A_CANCEL_STATUS_NOOP = "noop"
+_A2A_CANCEL_STATUS_SENT = "sent"
+_A2A_CANCEL_STATUS_COMPLETED = "completed"
 
 
 A2A_LIST_SCHEMA = {
@@ -511,6 +517,105 @@ def _run_coro_sync(coro):
     return result.get("value")
 
 
+def _is_benign_a2a_stop_exception(exc: BaseException) -> bool:
+    message = str(exc or "").strip().lower()
+    if not message:
+        return False
+    benign_markers = (
+        "event loop is closed",
+        "attached to a different loop",
+        "bound to a different event loop",
+        "different event loop",
+        "non-thread-safe operation invoked on an event loop",
+        "event loop stopped before future completed",
+    )
+    return any(marker in message for marker in benign_markers)
+
+
+def _build_a2a_stop_final_response(last_text: str | None) -> str:
+    cleaned = str(last_text or "").strip()
+    if not cleaned:
+        return _A2A_STOP_MESSAGE
+    return f"{_A2A_STOP_MESSAGE}\n\n停止前最后输出：{cleaned}"
+
+
+class _RemoteA2ADelegateCancelHandle:
+    def __init__(self, session: "_A2ADelegateSession") -> None:
+        self._session = session
+        self._lock = threading.Lock()
+
+    def has_live_task(self) -> bool:
+        return bool(getattr(self._session, "task_id", None))
+
+    def _log_async_cancel_outcome(self, future) -> None:
+        try:
+            future.result()
+        except Exception as exc:
+            if self._session.should_suppress_stop_exception(exc):
+                logger.debug("Suppressing benign async A2A stop exception", exc_info=True)
+                return
+            logger.warning("Asynchronous A2A cancel failed after request dispatch: %s", exc, exc_info=True)
+
+    def cancel(self) -> str:
+        self._session.mark_stop_requested()
+        if not self.has_live_task():
+            return _A2A_CANCEL_STATUS_NOOP
+        with self._lock:
+            if not self.has_live_task():
+                return _A2A_CANCEL_STATUS_NOOP
+            try:
+                owner_loop, owner_thread_id = self._session.owner_runtime()
+                current_thread_id = threading.get_ident()
+                if owner_loop is not None and owner_loop.is_running() and owner_thread_id != current_thread_id:
+                    future = asyncio.run_coroutine_threadsafe(
+                        self._session.cancel(use_existing_client=True),
+                        owner_loop,
+                    )
+                    if future.done():
+                        future.result()
+                        return _A2A_CANCEL_STATUS_COMPLETED
+                    future.add_done_callback(self._log_async_cancel_outcome)
+                    return _A2A_CANCEL_STATUS_SENT
+                else:
+                    # If the owner loop is not available to schedule onto,
+                    # cancel with a fresh client instead of reusing loop-bound state.
+                    _run_coro_sync(self._session.cancel(use_existing_client=False))
+                    return _A2A_CANCEL_STATUS_COMPLETED
+            except Exception as exc:
+                if self._session.should_suppress_stop_exception(exc):
+                    logger.debug("Suppressing benign A2A stop exception", exc_info=True)
+                    return _A2A_CANCEL_STATUS_SENT
+                raise
+        return _A2A_CANCEL_STATUS_COMPLETED
+
+
+def _parent_active_a2a_session_lock(parent_agent) -> threading.Lock:
+    lock = getattr(parent_agent, _ACTIVE_A2A_SESSION_LOCK_ATTR, None)
+    if lock is None:
+        lock = threading.Lock()
+        setattr(parent_agent, _ACTIVE_A2A_SESSION_LOCK_ATTR, lock)
+    return lock
+
+
+def _register_active_a2a_session(parent_agent, session: "_A2ADelegateSession"):
+    if parent_agent is None:
+        return None
+    handle = _RemoteA2ADelegateCancelHandle(session)
+    lock = _parent_active_a2a_session_lock(parent_agent)
+    with lock:
+        setattr(parent_agent, _ACTIVE_A2A_SESSION_ATTR, handle)
+    return handle
+
+
+def _clear_active_a2a_session(parent_agent, handle) -> None:
+    if parent_agent is None or handle is None:
+        return
+    lock = _parent_active_a2a_session_lock(parent_agent)
+    with lock:
+        if getattr(parent_agent, _ACTIVE_A2A_SESSION_ATTR, None) is handle:
+            setattr(parent_agent, _ACTIVE_A2A_SESSION_ATTR, None)
+
+
 def _normalize_a2a_base_url(url: str) -> str:
     value = str(url or "").strip()
     if not value:
@@ -742,6 +847,12 @@ def _a2a_input_required_state() -> Any:
     return TaskState.TASK_STATE_INPUT_REQUIRED
 
 
+def _a2a_canceled_state() -> Any:
+    from a2a.types import TaskState
+
+    return TaskState.TASK_STATE_CANCELED
+
+
 def _a2a_state_name(state: Any) -> str:
     from a2a.types import TaskState
 
@@ -775,13 +886,58 @@ class _A2ADelegateSession:
         self._client = None
         self._rendered_tool_entries: set[str] = set()
         self._tool_names_by_call_id: dict[str, str] = {}
+        self._streamed_assistant_text = ""
+        self._last_assistant_text = ""
+        self._state_lock = threading.RLock()
+        self._owner_loop: asyncio.AbstractEventLoop | None = None
+        self._owner_thread_id: int | None = None
+        self._stop_requested = False
 
-    async def open(self) -> None:
-        if self._client is not None:
+    def _bind_owner_runtime(self) -> None:
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
             return
-        from a2a.client import ClientConfig, ClientFactory
+        with self._state_lock:
+            if self._owner_loop is None:
+                self._owner_loop = loop
+            if self._owner_thread_id is None:
+                self._owner_thread_id = threading.get_ident()
 
-        self._http_client = httpx.AsyncClient(
+    def owner_runtime(self) -> tuple[asyncio.AbstractEventLoop | None, int | None]:
+        with self._state_lock:
+            return self._owner_loop, self._owner_thread_id
+
+    def mark_stop_requested(self) -> None:
+        with self._state_lock:
+            self._stop_requested = True
+
+    def stop_requested(self) -> bool:
+        with self._state_lock:
+            return self._stop_requested
+
+    def latest_assistant_text(self) -> str:
+        with self._state_lock:
+            return self._last_assistant_text
+
+    def should_suppress_stop_exception(self, exc: BaseException) -> bool:
+        return self.stop_requested() and _is_benign_a2a_stop_exception(exc)
+
+    def _snapshot_remote_ids(self) -> tuple[str | None, str | None]:
+        with self._state_lock:
+            return self.task_id, self.context_id
+
+    def _set_remote_ids(self, *, task_id: str | None, context_id: str | None) -> None:
+        with self._state_lock:
+            self.task_id = task_id or self.task_id
+            self.context_id = context_id or self.context_id
+
+    def _set_last_assistant_text(self, text: str) -> None:
+        with self._state_lock:
+            self._last_assistant_text = text
+
+    def _build_http_client(self):
+        return httpx.AsyncClient(
             timeout=httpx.Timeout(
                 connect=10.0,
                 read=None,
@@ -790,16 +946,33 @@ class _A2ADelegateSession:
             ),
             headers=self.headers or None,
         )
+
+    async def _create_remote_client(self, http_client):
+        from a2a.client import ClientConfig, ClientFactory
+
         factory = ClientFactory(
             ClientConfig(
-                httpx_client=self._http_client,
+                httpx_client=http_client,
                 streaming=True,
                 polling=True,
             )
         )
-        self._client = await factory.create_from_url(self.base_url)
+        return await factory.create_from_url(self.base_url)
+
+    async def open(self) -> None:
+        self._bind_owner_runtime()
+        if self._client is not None:
+            return
+        self._http_client = self._build_http_client()
+        self._client = await self._create_remote_client(self._http_client)
 
     async def close(self) -> None:
+        self._bind_owner_runtime()
+        owner_loop, _owner_thread_id = self.owner_runtime()
+        if owner_loop is not None:
+            current_loop = asyncio.get_running_loop()
+            if current_loop is not owner_loop:
+                raise RuntimeError("A2A delegate session close must run on the owner event loop.")
         client = self._client
         http_client = self._http_client
         self._client = None
@@ -809,10 +982,63 @@ class _A2ADelegateSession:
         if http_client is not None:
             await http_client.aclose()
 
+    async def cancel(self, *, use_existing_client: bool = True):
+        from a2a.types import CancelTaskRequest
+
+        self.mark_stop_requested()
+        if use_existing_client:
+            self._bind_owner_runtime()
+            await self.open()
+            client = self._client
+            http_client = None
+        else:
+            http_client = self._build_http_client()
+            client = await self._create_remote_client(http_client)
+
+        task_id, _context_id = self._snapshot_remote_ids()
+        if not task_id:
+            if http_client is not None:
+                try:
+                    await client.close()
+                except Exception:
+                    logger.debug("Failed to close temporary A2A client", exc_info=True)
+                try:
+                    await http_client.aclose()
+                except Exception:
+                    logger.debug("Failed to close temporary A2A HTTP client", exc_info=True)
+            raise RuntimeError("No active remote A2A task to cancel.")
+        try:
+            task = await client.cancel_task(CancelTaskRequest(id=task_id))
+        finally:
+            if http_client is not None:
+                try:
+                    await client.close()
+                except Exception:
+                    logger.debug("Failed to close temporary A2A client", exc_info=True)
+                try:
+                    await http_client.aclose()
+                except Exception:
+                    logger.debug("Failed to close temporary A2A HTTP client", exc_info=True)
+
+        self._set_remote_ids(
+            task_id=getattr(task, "id", None),
+            context_id=getattr(task, "context_id", None),
+        )
+        self._emit_tool_messages(
+            _a2a_task_messages(task),
+            session_id=getattr(task, "context_id", None) or self.context_id,
+        )
+        self._emit_text_deltas(
+            task,
+            session_id=getattr(task, "context_id", None) or self.context_id,
+        )
+        return task
+
     async def send_turn(self, text: str, *, is_delegate_output: bool = True) -> dict[str, Any]:
         await self.open()
         self._rendered_tool_entries.clear()
         self._tool_names_by_call_id.clear()
+        self._streamed_assistant_text = ""
         task = await self._send_text(text)
         self.context_id = getattr(task, "context_id", None) or self.context_id
         self.task_id = getattr(task, "id", None) or self.task_id
@@ -820,6 +1046,8 @@ class _A2ADelegateSession:
         self.context_id = getattr(finished, "context_id", None) or self.context_id
         self.task_id = getattr(finished, "id", None) or self.task_id
         final_response = _a2a_task_text(finished)
+        if final_response:
+            self._set_last_assistant_text(final_response)
         if is_delegate_output and final_response:
             _emit_delegate_event(
                 self.output,
@@ -862,6 +1090,10 @@ class _A2ADelegateSession:
                 if not self.context_id:
                     self.context_id = getattr(last_task, "context_id", None) or self.context_id
                 self.task_id = getattr(last_task, "id", None) or self.task_id
+                self._emit_text_deltas(
+                    last_task,
+                    session_id=getattr(last_task, "context_id", None) or self.context_id,
+                )
                 if _a2a_field(getattr(last_task, "status", None), "state", None) in _a2a_final_task_states():
                     return last_task
 
@@ -879,6 +1111,10 @@ class _A2ADelegateSession:
         while True:
             self._emit_tool_messages(
                 _a2a_task_messages(current_task),
+                session_id=getattr(current_task, "context_id", None) or self.context_id,
+            )
+            self._emit_text_deltas(
+                current_task,
                 session_id=getattr(current_task, "context_id", None) or self.context_id,
             )
             state = _a2a_field(getattr(current_task, "status", None), "state", None)
@@ -914,6 +1150,26 @@ class _A2ADelegateSession:
 
             if _a2a_is_tool_message(message):
                 continue
+
+    def _emit_text_deltas(self, task, *, session_id: str | None) -> None:
+        text = _a2a_task_text(task)
+        if not text or text == self._streamed_assistant_text:
+            return
+        if self._streamed_assistant_text and text.startswith(self._streamed_assistant_text):
+            delta = text[len(self._streamed_assistant_text) :]
+        else:
+            delta = text
+        self._streamed_assistant_text = text
+        self._set_last_assistant_text(text)
+        if not delta:
+            return
+        _emit_delegate_event(
+            self.output,
+            "delegate",
+            "ai_delta",
+            delta,
+            session_id=session_id,
+        )
 
 
 def _resolve_a2a_entry(a2a_name: Optional[str]) -> tuple[Optional[dict[str, Any]], Optional[str]]:
@@ -1058,9 +1314,28 @@ def _run_local_delegate(
     )
     _register_active_child(parent_agent, child)
     start = time.monotonic()
+    old_child_stream = getattr(child, "stream_delta_callback", None)
 
     def _effective_child_session_id() -> str:
         return _child_session_id(child) or session_id
+
+    def _on_child_delta(delta: str | None) -> None:
+        if callable(old_child_stream):
+            try:
+                old_child_stream(delta)
+            except Exception:
+                pass
+        if delta is None or not is_delegate_output:
+            return
+        _emit_delegate_event(
+            output,
+            "delegate",
+            "ai_delta",
+            delta,
+            session_id=_effective_child_session_id(),
+        )
+
+    child.stream_delta_callback = _on_child_delta
 
     def _run_single_turn(user_message: str) -> dict[str, Any]:
         history = load_conversation_history(child, _effective_child_session_id())
@@ -1101,6 +1376,7 @@ def _run_local_delegate(
             "session_id": _effective_child_session_id(),
             "toolsets": list(toolsets),
             "max_iterations": max_iterations,
+            "is_loop": bool(is_loop),
             "completed": bool(last_result.get("completed", success)),
             "loop_exit_reason": loop_exit_reason,
             "api_calls": api_calls,
@@ -1196,6 +1472,7 @@ def _build_a2a_payload(
     a2a_name: str,
     entry: dict[str, Any],
     session: _A2ADelegateSession | None,
+    is_loop: bool,
     loop_exit_reason: str,
     duration_seconds: float,
     final_response: str,
@@ -1210,17 +1487,50 @@ def _build_a2a_payload(
         "session_id": getattr(session, "context_id", None),
         "toolsets": None,
         "max_iterations": None,
+        "is_loop": bool(is_loop),
         "completed": completed,
         "loop_exit_reason": loop_exit_reason,
         "api_calls": 0,
         "duration_seconds": round(duration_seconds, 3),
         "final_response": final_response,
-        "remote_url": _resolve_a2a_remote_url(entry),
-        "agent_card_name": entry.get("agent_card_name"),
     }
     if error_message:
         payload["error"] = error_message
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _build_interrupted_a2a_payload(
+    *,
+    goal: str,
+    a2a_name: str,
+    entry: dict[str, Any],
+    session: _A2ADelegateSession | None,
+    is_loop: bool,
+    duration_seconds: float,
+    last_result: dict[str, Any] | None = None,
+) -> str:
+    last_text = ""
+    if isinstance(last_result, dict):
+        last_text = str(last_result.get("final_response") or "")
+    if not last_text and session is not None:
+        latest_text = getattr(session, "latest_assistant_text", None)
+        if callable(latest_text):
+            try:
+                last_text = str(latest_text() or "")
+            except Exception:
+                last_text = ""
+    return _build_a2a_payload(
+        success=True,
+        goal=goal,
+        a2a_name=a2a_name,
+        entry=entry,
+        session=session,
+        is_loop=is_loop,
+        loop_exit_reason="interrupted",
+        duration_seconds=duration_seconds,
+        final_response=_build_a2a_stop_final_response(last_text),
+        completed=False,
+    )
 
 
 def _run_a2a_delegate(
@@ -1232,6 +1542,7 @@ def _run_a2a_delegate(
     output,
     is_loop: bool,
     input,
+    parent_agent=None,
 ) -> str:
     start = time.monotonic()
     try:
@@ -1252,6 +1563,7 @@ def _run_a2a_delegate(
         _resolve_a2a_remote_url(entry),
         **session_kwargs,
     )
+    active_handle = _register_active_a2a_session(parent_agent, session)
 
     async def _run_loop() -> str:
         last_result = {"final_response": "", "state": None, "state_name": "idle"}
@@ -1266,6 +1578,7 @@ def _run_a2a_delegate(
                         a2a_name=a2a_name,
                         entry=entry,
                         session=session,
+                        is_loop=is_loop,
                         loop_exit_reason="error",
                         duration_seconds=time.monotonic() - start,
                         final_response="",
@@ -1281,6 +1594,24 @@ def _run_a2a_delegate(
                 )
 
             last_result = await session.send_turn(goal, is_delegate_output=is_delegate_output)
+            if last_result.get("state") == _a2a_canceled_state():
+                if is_loop:
+                    _emit_delegate_event(
+                        output,
+                        "delegate",
+                        "status",
+                        "interrupted",
+                        session_id=getattr(session, "context_id", None),
+                    )
+                return _build_interrupted_a2a_payload(
+                    goal=goal,
+                    a2a_name=a2a_name,
+                    entry=entry,
+                    session=session,
+                    is_loop=is_loop,
+                    duration_seconds=time.monotonic() - start,
+                    last_result=last_result,
+                )
             if not is_loop:
                 state = last_result.get("state")
                 completed = state == _a2a_completed_state()
@@ -1292,6 +1623,7 @@ def _run_a2a_delegate(
                     a2a_name=a2a_name,
                     entry=entry,
                     session=session,
+                    is_loop=is_loop,
                     loop_exit_reason="completed" if success else "error",
                     duration_seconds=time.monotonic() - start,
                     final_response=str(last_result.get("final_response") or ""),
@@ -1308,6 +1640,7 @@ def _run_a2a_delegate(
                         a2a_name=a2a_name,
                         entry=entry,
                         session=session,
+                        is_loop=is_loop,
                         loop_exit_reason="input_closed",
                         duration_seconds=time.monotonic() - start,
                         final_response=str(last_result.get("final_response") or ""),
@@ -1329,6 +1662,7 @@ def _run_a2a_delegate(
                         a2a_name=a2a_name,
                         entry=entry,
                         session=session,
+                        is_loop=is_loop,
                         loop_exit_reason="main_command",
                         duration_seconds=time.monotonic() - start,
                         final_response=str(last_result.get("final_response") or ""),
@@ -1339,7 +1673,42 @@ def _run_a2a_delegate(
                     stripped,
                     is_delegate_output=is_delegate_output,
                 )
+                if last_result.get("state") == _a2a_canceled_state():
+                    _emit_delegate_event(
+                        output,
+                        "delegate",
+                        "status",
+                        "interrupted",
+                        session_id=getattr(session, "context_id", None),
+                    )
+                    return _build_interrupted_a2a_payload(
+                        goal=goal,
+                        a2a_name=a2a_name,
+                        entry=entry,
+                        session=session,
+                        is_loop=is_loop,
+                        duration_seconds=time.monotonic() - start,
+                        last_result=last_result,
+                    )
         except Exception as exc:
+            if session.should_suppress_stop_exception(exc):
+                if is_delegate_output:
+                    _emit_delegate_event(
+                        output,
+                        "delegate",
+                        "status",
+                        "interrupted",
+                        session_id=getattr(session, "context_id", None),
+                    )
+                return _build_interrupted_a2a_payload(
+                    goal=goal,
+                    a2a_name=a2a_name,
+                    entry=entry,
+                    session=session,
+                    is_loop=is_loop,
+                    duration_seconds=time.monotonic() - start,
+                    last_result=last_result,
+                )
             if is_delegate_output:
                 _emit_delegate_event(
                     output,
@@ -1354,6 +1723,7 @@ def _run_a2a_delegate(
                 a2a_name=a2a_name,
                 entry=entry,
                 session=session,
+                is_loop=is_loop,
                 loop_exit_reason="error",
                 duration_seconds=time.monotonic() - start,
                 final_response=str(last_result.get("final_response") or ""),
@@ -1361,9 +1731,16 @@ def _run_a2a_delegate(
                 error_message=str(exc),
             )
         finally:
+            _clear_active_a2a_session(parent_agent, active_handle)
             if entered_foreground:
                 _exit_delegate_foreground(input)
-            await session.close()
+            try:
+                await session.close()
+            except Exception as exc:
+                if session.should_suppress_stop_exception(exc):
+                    logger.debug("Suppressing benign A2A close exception after stop", exc_info=True)
+                else:
+                    raise
 
     return _run_coro_sync(_run_loop())
 
@@ -1406,6 +1783,7 @@ def a2a_delegate(
             output=output,
             is_loop=effective_is_loop,
             input=input,
+            parent_agent=parent_agent,
         )
 
     normalized_toolsets, toolsets_error = _normalize_toolsets(toolsets)

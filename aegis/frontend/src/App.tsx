@@ -92,7 +92,7 @@ function AuthenticatedAppShell({
   const { chatAttentionCount } = useAegisChatRuntime();
 
   return (
-    <div className="flex h-screen w-screen overflow-hidden border border-slate-800 bg-[#020408] font-sans text-slate-300 antialiased select-none">
+    <div className="flex h-screen w-screen overflow-hidden border border-slate-800 bg-[#020408] font-sans text-slate-300 antialiased">
       <Sidebar
         activeTab={activeTab}
         setActiveTab={navigateTo}

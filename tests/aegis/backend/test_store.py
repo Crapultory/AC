@@ -270,6 +270,76 @@ def test_mutate_locked_does_not_persist_failed_mutations(
     }
 
 
+def test_mutate_locked_invalidates_a2a_caches_after_successful_write(
+    load_backend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    store_module = load_backend("aegis.backend.services.store")
+    a2a_delegate_tool = load_backend("tools.a2a_delegate_tool")
+    store = store_module.get_aegis_store()
+
+    a2a_delegate_tool.A2A_REGISTRY["cached-agent"] = {
+        "name": "cached-agent",
+        "url": "http://cached.local/a2a",
+        "available": True,
+    }
+    a2a_delegate_tool.A2A_CONTEXT = "<aegis_context>stale</aegis_context>"
+
+    store.mutate_locked(
+        lambda payload: payload["a2a"].__setitem__(
+            "agent-1",
+            {"url": "http://127.0.0.1:9086/a2a"},
+        )
+    )
+
+    assert a2a_delegate_tool.A2A_REGISTRY == {}
+    assert a2a_delegate_tool.A2A_CONTEXT == ""
+
+
+def test_mutate_locked_keeps_a2a_caches_when_write_fails(
+    load_backend,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    store_module = load_backend("aegis.backend.services.store")
+    a2a_delegate_tool = load_backend("tools.a2a_delegate_tool")
+    store = store_module.get_aegis_store()
+
+    a2a_delegate_tool.A2A_REGISTRY["cached-agent"] = {
+        "name": "cached-agent",
+        "url": "http://cached.local/a2a",
+        "available": True,
+    }
+    a2a_delegate_tool.A2A_CONTEXT = "<aegis_context>stale</aegis_context>"
+
+    def _fail_write(payload: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(store, "_write", _fail_write)
+
+    with pytest.raises(OSError, match="disk full"):
+        store.mutate_locked(
+            lambda payload: payload["a2a"].__setitem__(
+                "agent-1",
+                {"url": "http://127.0.0.1:9086/a2a"},
+            )
+        )
+
+    assert a2a_delegate_tool.A2A_REGISTRY == {
+        "cached-agent": {
+            "name": "cached-agent",
+            "url": "http://cached.local/a2a",
+            "available": True,
+        }
+    }
+    assert a2a_delegate_tool.A2A_CONTEXT == "<aegis_context>stale</aegis_context>"
+
+
 def test_get_aegis_store_initializes_singleton_once_under_parallel_access(
     load_backend,
     monkeypatch: pytest.MonkeyPatch,

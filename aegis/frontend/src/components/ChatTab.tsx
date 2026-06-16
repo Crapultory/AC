@@ -214,7 +214,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
     : "Ask Aegis anything... 触发关键词：'钓鱼邮件', '勒索病毒', '敏感泄露'...";
 
   return (
-    <div className="flex h-full w-full bg-[#020408] items-stretch select-none overflow-hidden text-xs">
+    <div className="flex h-full w-full bg-[#020408] items-stretch overflow-hidden text-xs">
       <div className={`${sidebarCollapsed ? 'w-16' : 'w-80'} border-r border-slate-800 bg-[#05080F] flex flex-col pt-4 shrink-0 z-10 transition-[width] duration-200`}>
         <div className={`${sidebarCollapsed ? 'px-2 pb-3' : 'px-4 pb-3'} border-b border-slate-800 space-y-3`}>
           <div className={`flex ${sidebarCollapsed ? 'flex-col gap-2' : 'justify-between items-center'}`}>
@@ -348,7 +348,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
       </div>
 
       <div className={`flex-1 flex flex-col h-full min-w-0 bg-[#020408] relative ${composerExpanded ? 'pb-32' : 'pb-16'}`}>
-        <div className="p-4 border-b border-slate-800 bg-[#03060C] flex justify-between items-center select-none">
+        <div className="p-4 border-b border-slate-800 bg-[#03060C] flex justify-between items-center">
           <div>
             <h3 className="text-sm font-bold text-white flex items-center gap-1.5 uppercase italic">
               {activeConversation ? activeConversation.title : '安全事件会话'}
@@ -397,7 +397,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
 
         <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin">
           {activeMessages.length === 0 ? (
-            <div className="h-full flex flex-col items-center justify-center text-center p-6 max-w-xl mx-auto space-y-4 select-none my-auto">
+            <div className="h-full flex flex-col items-center justify-center text-center p-6 max-w-xl mx-auto space-y-4 my-auto">
               <div className="h-11 w-11 bg-cyan-500 shadow-[0_0_15px_rgba(6,182,212,0.4)] rounded-lg flex items-center justify-center shrink-0">
                 <Layers className="h-5 w-5 text-white animate-pulse" />
               </div>
@@ -509,7 +509,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
                         <div className="text-[10px] font-mono text-cyan-400 uppercase tracking-widest flex items-center gap-1.5 font-bold">
                           <Layers className="h-3.5 w-3.5 text-cyan-500" /> Orchestration Chain
                         </div>
-                        <div className="flex gap-3 overflow-x-auto pb-2 relative select-none scrollbar-thin">
+                        <div className="flex gap-3 overflow-x-auto pb-2 relative scrollbar-thin">
                           {(message.chainSteps || []).map((step) => (
                             <div key={step.id || `${step.agentName}-${step.timestamp}`} className="min-w-[240px] max-w-[240px] p-2.5 bg-[#080C14] border border-slate-800 rounded-lg relative overflow-hidden flex flex-col justify-between shrink-0">
                               <div className="absolute top-0 left-0 right-0 h-[2px] bg-cyan-500" />
@@ -624,7 +624,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
           </div>
         ) : null}
 
-        <div className="absolute bottom-0 left-0 right-0 p-3 border-t border-slate-800 bg-[#03060C] flex items-end gap-2 select-none z-10">
+        <div className="absolute bottom-0 left-0 right-0 p-3 border-t border-slate-800 bg-[#03060C] flex items-end gap-2 z-10">
           <button
             type="button"
             className="p-2 bg-[#05080F] hover:bg-slate-800/80 border border-slate-800 rounded text-slate-500 hover:text-white transition-all scale-100 active:scale-95 shrink-0"

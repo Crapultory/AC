@@ -29,7 +29,7 @@ export default function Sidebar({ activeTab, setActiveTab, chatAttentionCount = 
   ];
 
   return (
-    <aside id="sidebar-container" className="w-64 bg-[#05080F] border-r border-slate-800 flex flex-col h-screen overflow-y-auto shrink-0 select-none scrollbar-thin">
+    <aside id="sidebar-container" className="w-64 bg-[#05080F] border-r border-slate-800 flex flex-col h-screen overflow-y-auto shrink-0 scrollbar-thin">
       {/* Brand Header */}
       <div className="p-6 border-b border-slate-800 bg-[#05080F]">
         <div className="flex min-h-[72px] items-center gap-4">
@@ -109,7 +109,7 @@ export default function Sidebar({ activeTab, setActiveTab, chatAttentionCount = 
 
       {/* System Integrity & Footer Info */}
       <div className="p-6 border-t border-slate-800/50 bg-[#03060C] shrink-0">
-        <div className="flex items-center justify-between text-[10px] uppercase tracking-widest text-slate-500 mb-2 font-bold select-none">
+        <div className="flex items-center justify-between text-[10px] uppercase tracking-widest text-slate-500 mb-2 font-bold">
           <span>System Integrity</span>
           <span className="text-emerald-500 font-mono">Secure</span>
         </div>

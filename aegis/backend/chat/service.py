@@ -84,7 +84,8 @@ def _aegis_help_text() -> str:
         "Aegis slash commands:\n"
         "/help - show available Aegis-native slash commands\n"
         "/model <model_name> - switch the current live session model\n"
-        "/a2a - show the current A2A context XML"
+        "/a2a - show the current A2A context XML\n"
+        "/stop - cancel the active remote A2A delegate task"
     )
 
 
@@ -250,7 +251,7 @@ class ChatSessionActor:
             return None
         first_word, _, remainder = stripped.partition(" ")
         command = first_word.lower()
-        if command not in {"/a2a", "/help", "/model"}:
+        if command not in {"/a2a", "/help", "/model", "/stop"}:
             return None
         return command, remainder.strip()
 
@@ -285,6 +286,70 @@ class ChatSessionActor:
 
     def _handle_help_slash(self, turn_id: str) -> None:
         self._emit_main_text_reply(_aegis_help_text(), turn_id)
+
+    def _active_remote_a2a_cancel_handle(self):
+        handle = getattr(self._agent, "_active_a2a_delegate_session", None)
+        if handle is None:
+            return None
+        has_live_task = getattr(handle, "has_live_task", None)
+        if callable(has_live_task):
+            try:
+                return handle if has_live_task() else None
+            except Exception:
+                return None
+        return handle if callable(getattr(handle, "cancel", None)) else None
+
+    @staticmethod
+    def _is_cancel_request_sent(cancel_status: object) -> bool:
+        return cancel_status in {"sent", "completed", True}
+
+    @staticmethod
+    def _is_cancel_noop(cancel_status: object) -> bool:
+        return cancel_status in {"noop", False, None}
+
+    def _cancel_active_remote_a2a_delegate(self, *, turn_id: str, source: str) -> bool:
+        handle = self._active_remote_a2a_cancel_handle()
+        if handle is None:
+            return False
+        cancel = getattr(handle, "cancel", None)
+        if not callable(cancel):
+            return False
+        try:
+            cancel_status = cancel()
+        except Exception as exc:
+            self._send_event(
+                "error",
+                {
+                    "code": "delegate_cancel_failed",
+                    "message": f"Failed to cancel remote A2A task: {exc}",
+                    "srcagent": self._foreground_agent or None,
+                },
+                source="delegate",
+                turn_id=turn_id,
+            )
+            return True
+        if self._is_cancel_noop(cancel_status):
+            return False
+        if self._is_cancel_request_sent(cancel_status):
+            self._set_run_state("interrupted", source=source)
+            return True
+        self._send_event(
+            "error",
+            {
+                "code": "delegate_cancel_failed",
+                "message": f"Failed to cancel remote A2A task: unexpected status {cancel_status!r}",
+                "srcagent": self._foreground_agent or None,
+            },
+            source="delegate",
+            turn_id=turn_id,
+        )
+        return True
+
+    def _handle_stop_slash(self, turn_id: str) -> bool:
+        if self._cancel_active_remote_a2a_delegate(turn_id=turn_id, source="delegate"):
+            return True
+        self._emit_main_text_reply("No active remote A2A delegate task.", turn_id)
+        return True
 
     def _handle_model_slash(self, arg: str, turn_id: str) -> None:
         model_input = str(arg or "").strip()
@@ -400,6 +465,9 @@ class ChatSessionActor:
             if slash_parts is not None:
                 command, arg = slash_parts
                 self._turn_id = turn_id
+                if command == "/stop":
+                    if self._handle_stop_slash(turn_id):
+                        return
                 if command == "/a2a":
                     self._handle_a2a_slash(turn_id)
                     return
@@ -512,6 +580,11 @@ class ChatSessionActor:
         self._set_run_state("running", source=self._foreground_source)
 
     def interrupt(self) -> None:
+        if self._cancel_active_remote_a2a_delegate(
+            turn_id=self._turn_id or f"turn_{uuid4().hex[:10]}",
+            source=self._foreground_source,
+        ):
+            return
         agent = self._agent
         interrupt = getattr(agent, "interrupt", None)
         if callable(interrupt):
@@ -588,6 +661,10 @@ class ChatSessionActor:
             if "return to main" in normalized:
                 with self._lock:
                     self._foreground_state.reason = "return_to_main"
+            elif "interrupted" in normalized:
+                with self._lock:
+                    self._foreground_state.reason = "interrupted"
+                self._set_run_state("interrupted", source="delegate")
             elif "entered foreground loop" in normalized:
                 self._set_run_state("waiting_for_delegate_input", source="delegate")
             return
@@ -621,9 +698,25 @@ class ChatSessionActor:
             self._set_run_state("error", source="delegate")
             return
 
-        if event_type == "ai":
-            message_id = f"delegate_msg_{uuid4().hex[:10]}"
+        if event_type == "ai_delta":
+            if not content or not _message_delta_enabled():
+                return
+            message_id = self._latest_delegate_message_id or f"delegate_msg_{uuid4().hex[:10]}"
             self._latest_delegate_message_id = message_id
+            self._send_event(
+                "message.delta",
+                {
+                    "message_id": message_id,
+                    "delta": content,
+                    "srcagent": self._foreground_agent or None,
+                },
+                source="delegate",
+                turn_id=self._turn_id,
+            )
+            return
+
+        if event_type == "ai":
+            message_id = self._latest_delegate_message_id or f"delegate_msg_{uuid4().hex[:10]}"
             self._send_event(
                 "message.completed",
                 {
@@ -635,6 +728,7 @@ class ChatSessionActor:
                 source="delegate",
                 turn_id=self._turn_id,
             )
+            self._latest_delegate_message_id = None
 
     def record_pending_delegate_name(self, function_args: dict[str, Any] | None) -> None:
         if not function_args:

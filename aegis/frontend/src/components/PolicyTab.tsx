@@ -101,7 +101,7 @@ export default function PolicyTab({
   }
 
   return (
-    <div className="flex-1 space-y-6 overflow-y-auto p-6 text-xs scrollbar-thin select-none">
+    <div className="flex-1 space-y-6 overflow-y-auto p-6 text-xs scrollbar-thin">
       <div className="relative flex flex-col justify-between gap-4 overflow-hidden rounded-xl border border-slate-800 bg-[#05080F] p-5 md:flex-row md:items-center">
         <div className="absolute right-0 top-0 h-32 w-32 rounded-full bg-cyan-500/5 blur-2xl" />
         <div className="max-w-2xl flex-1 space-y-1.5">
