@@ -1172,10 +1172,10 @@ class _A2ADelegateSession:
         )
 
 
-def _resolve_a2a_entry(a2a_name: Optional[str]) -> tuple[Optional[dict[str, Any]], Optional[str]]:
-    name = str(a2a_name or "").strip()
+def _resolve_a2a_entry(agent_name: Optional[str]) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    name = str(agent_name or "").strip()
     if not name:
-        return None, "a2a_delegate a2a mode requires a non-empty a2a_name."
+        return None, "a2a_delegate a2a mode requires a non-empty agent_name."
 
     loaded = _load_a2a_registry(force_refresh=False)
     entry = loaded.get(name)
@@ -1371,7 +1371,7 @@ def _run_local_delegate(
         duration = round(time.monotonic() - start, 3)
         payload = {
             "success": success,
-            "agent": "local",
+            "type": "local",
             "goal": goal,
             "session_id": _effective_child_session_id(),
             "toolsets": list(toolsets),
@@ -1469,7 +1469,7 @@ def _build_a2a_payload(
     *,
     success: bool,
     goal: str,
-    a2a_name: str,
+    agent_name: str,
     entry: dict[str, Any],
     session: _A2ADelegateSession | None,
     is_loop: bool,
@@ -1481,8 +1481,8 @@ def _build_a2a_payload(
 ) -> str:
     payload = {
         "success": success,
-        "agent": "a2a",
-        "a2a_name": a2a_name,
+        "type": "a2a",
+        "agent_name": agent_name,
         "goal": goal,
         "session_id": getattr(session, "context_id", None),
         "toolsets": None,
@@ -1502,7 +1502,7 @@ def _build_a2a_payload(
 def _build_interrupted_a2a_payload(
     *,
     goal: str,
-    a2a_name: str,
+    agent_name: str,
     entry: dict[str, Any],
     session: _A2ADelegateSession | None,
     is_loop: bool,
@@ -1522,7 +1522,7 @@ def _build_interrupted_a2a_payload(
     return _build_a2a_payload(
         success=True,
         goal=goal,
-        a2a_name=a2a_name,
+        agent_name=agent_name,
         entry=entry,
         session=session,
         is_loop=is_loop,
@@ -1536,7 +1536,7 @@ def _build_interrupted_a2a_payload(
 def _run_a2a_delegate(
     *,
     goal: str,
-    a2a_name: str,
+    agent_name: str,
     session_id: str,
     is_delegate_output: bool,
     output,
@@ -1546,11 +1546,11 @@ def _run_a2a_delegate(
 ) -> str:
     start = time.monotonic()
     try:
-        entry, entry_error = _resolve_a2a_entry(a2a_name)
+        entry, entry_error = _resolve_a2a_entry(agent_name)
     except (OSError, ValueError, json.JSONDecodeError) as exc:
-        return tool_error(str(exc), success=False, agent="a2a", a2a_name=a2a_name)
+        return tool_error(str(exc), success=False, type="a2a", agent_name=agent_name)
     if entry_error:
-        return tool_error(entry_error, success=False, agent="a2a", a2a_name=a2a_name)
+        return tool_error(entry_error, success=False, type="a2a", agent_name=agent_name)
     assert entry is not None
 
     session_kwargs: dict[str, Any] = {
@@ -1575,7 +1575,7 @@ def _run_a2a_delegate(
                     return _build_a2a_payload(
                         success=False,
                         goal=goal,
-                        a2a_name=a2a_name,
+                        agent_name=agent_name,
                         entry=entry,
                         session=session,
                         is_loop=is_loop,
@@ -1605,7 +1605,7 @@ def _run_a2a_delegate(
                     )
                 return _build_interrupted_a2a_payload(
                     goal=goal,
-                    a2a_name=a2a_name,
+                    agent_name=agent_name,
                     entry=entry,
                     session=session,
                     is_loop=is_loop,
@@ -1620,7 +1620,7 @@ def _run_a2a_delegate(
                 return _build_a2a_payload(
                     success=success,
                     goal=goal,
-                    a2a_name=a2a_name,
+                    agent_name=agent_name,
                     entry=entry,
                     session=session,
                     is_loop=is_loop,
@@ -1637,7 +1637,7 @@ def _run_a2a_delegate(
                     return _build_a2a_payload(
                         success=True,
                         goal=goal,
-                        a2a_name=a2a_name,
+                        agent_name=agent_name,
                         entry=entry,
                         session=session,
                         is_loop=is_loop,
@@ -1659,7 +1659,7 @@ def _run_a2a_delegate(
                     return _build_a2a_payload(
                         success=True,
                         goal=goal,
-                        a2a_name=a2a_name,
+                        agent_name=agent_name,
                         entry=entry,
                         session=session,
                         is_loop=is_loop,
@@ -1683,7 +1683,7 @@ def _run_a2a_delegate(
                     )
                     return _build_interrupted_a2a_payload(
                         goal=goal,
-                        a2a_name=a2a_name,
+                        agent_name=agent_name,
                         entry=entry,
                         session=session,
                         is_loop=is_loop,
@@ -1702,7 +1702,7 @@ def _run_a2a_delegate(
                     )
                 return _build_interrupted_a2a_payload(
                     goal=goal,
-                    a2a_name=a2a_name,
+                    agent_name=agent_name,
                     entry=entry,
                     session=session,
                     is_loop=is_loop,
@@ -1720,7 +1720,7 @@ def _run_a2a_delegate(
             return _build_a2a_payload(
                 success=False,
                 goal=goal,
-                a2a_name=a2a_name,
+                agent_name=agent_name,
                 entry=entry,
                 session=session,
                 is_loop=is_loop,
@@ -1748,8 +1748,8 @@ def _run_a2a_delegate(
 def a2a_delegate(
     goal: Optional[str] = None,
     context: Optional[str] = None,
-    agent: str = DEFAULT_AGENT_MODE,
-    a2a_name: Optional[str] = None,
+    type: str = DEFAULT_AGENT_MODE,
+    agent_name: Optional[str] = None,
     toolsets: Optional[List[str]] = None,
     max_iterations: Optional[int] = None,
     session_id: Optional[str] = None,
@@ -1768,16 +1768,16 @@ def a2a_delegate(
     if effective_is_loop and input is None:
         return tool_error("a2a_delegate loop mode requires an input adapter.")
 
-    mode = str(agent or DEFAULT_AGENT_MODE).strip().lower() or DEFAULT_AGENT_MODE
+    mode = str(type or DEFAULT_AGENT_MODE).strip().lower() or DEFAULT_AGENT_MODE
     if mode not in {"local", "a2a"}:
-        return tool_error("agent must be one of: local, a2a.")
+        return tool_error("type must be one of: local, a2a.")
 
     resolved_session_id = _resolve_delegate_session_id(mode, session_id)
 
     if mode == "a2a":
         return _run_a2a_delegate(
             goal=goal.strip(),
-            a2a_name=str(a2a_name or "").strip(),
+            agent_name=str(agent_name or "").strip(),
             session_id=resolved_session_id,
             is_delegate_output=is_delegate_output,
             output=output,
@@ -1828,24 +1828,24 @@ A2A_DELEGATE_SCHEMA = {
                 "type": "string",
                 "description": "Additional context or constraints for the delegated task.",
             },
-            "agent": {
+            "type": {
                 "type": "string",
                 "enum": ["a2a", "local"],
                 "description": "Delegation target mode. Default: a2a. Use a2a for configured remote agents.",
             },
-            "a2a_name": {
+            "agent_name": {
                 "type": "string",
-                "description": "Configured remote A2A agent name. Only used when agent='a2a'.",
+                "description": "Configured remote A2A agent name or id. Only used when type='a2a'.",
             },
             "toolsets": {
                 "type": "array",
                 "items": {"type": "string"},
-                "description": "Toolsets to enable for local delegated execution only. Default: ['hermes-cli']. Ignored when agent='a2a'.",
+                "description": "Toolsets to enable for local delegated execution only. Default: ['hermes-cli']. Ignored when type='a2a'.",
             },
             "max_iterations": {
                 "type": "integer",
                 "minimum": 1,
-                "description": "Maximum agent loop iterations for local delegated execution only. Defaults to the parent agent's limit. Ignored when agent='a2a'.",
+                "description": "Maximum agent loop iterations for local delegated execution only. Defaults to the parent agent's limit. Ignored when type='a2a'.",
             },
             "session_id": {
                 "type": "string",
@@ -1862,7 +1862,7 @@ A2A_DELEGATE_SCHEMA = {
                 "description": "Whether to run in interactive loop mode. Defaults to false unless explicitly enabled.",
             },
         },
-        "required": ["goal","agent","a2a_name"],
+        "required": ["goal","type","agent_name"],
     },
 }
 
@@ -1885,8 +1885,8 @@ registry.register(
     handler=lambda args, **kw: a2a_delegate(
         goal=args.get("goal"),
         context=args.get("context"),
-        agent=args.get("agent", DEFAULT_AGENT_MODE),
-        a2a_name=args.get("a2a_name"),
+        type=args.get("type", DEFAULT_AGENT_MODE),
+        agent_name=args.get("agent_name"),
         toolsets=args.get("toolsets"),
         max_iterations=args.get("max_iterations"),
         session_id=args.get("session_id"),

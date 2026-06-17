@@ -558,7 +558,7 @@ class TestSlackDelegateForegroundLoopRelease:
                 result_box["payload"] = json.loads(
                     a2a_delegate(
                         goal="start local delegate",
-                        agent="local",
+                        type="local",
                         is_loop=True,
                         input=input_adapter,
                         output=runtime["output"],
@@ -608,8 +608,8 @@ class TestSlackDelegateForegroundLoopRelease:
                 result_box["payload"] = json.loads(
                     a2a_delegate(
                         goal="start remote delegate",
-                        agent="a2a",
-                        a2a_name="remote",
+                        type="a2a",
+                        agent_name="remote",
                         is_loop=True,
                         input=input_adapter,
                         output=runtime["output"],

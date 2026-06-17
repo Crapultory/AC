@@ -198,7 +198,7 @@ class _DelegateAgent:
     ) -> dict[str, Any]:
         del system_message, conversation_history, task_id, stream_callback, persist_user_message
         if callable(self.tool_start_callback):
-            self.tool_start_callback("call-delegate", "a2a_delegate", {"a2a_name": "threat-intel"})
+            self.tool_start_callback("call-delegate", "a2a_delegate", {"agent_name": "threat-intel"})
         output = getattr(self, "_delegate_ext_output_adapter")
         input_factory = getattr(self, "_delegate_ext_input_factory")
         input_adapter = input_factory()
@@ -275,7 +275,7 @@ class _RemoteCancelableDelegateAgent:
         del system_message, conversation_history, task_id, stream_callback, persist_user_message, user_message
         self.remote_handle = _RemoteCancelHandle()
         if callable(self.tool_start_callback):
-            self.tool_start_callback("call-delegate", "a2a_delegate", {"a2a_name": "threat-intel"})
+            self.tool_start_callback("call-delegate", "a2a_delegate", {"agent_name": "threat-intel"})
         setattr(self, "_active_a2a_delegate_session", self.remote_handle)
         output = getattr(self, "_delegate_ext_output_adapter")
         input_factory = getattr(self, "_delegate_ext_input_factory")
@@ -307,7 +307,7 @@ class _DelayedRemoteCancelableDelegateAgent(_RemoteCancelableDelegateAgent):
         del system_message, conversation_history, task_id, stream_callback, persist_user_message, user_message
         self.remote_handle = _DelayedRemoteCancelHandle()
         if callable(self.tool_start_callback):
-            self.tool_start_callback("call-delegate", "a2a_delegate", {"a2a_name": "threat-intel"})
+            self.tool_start_callback("call-delegate", "a2a_delegate", {"agent_name": "threat-intel"})
         setattr(self, "_active_a2a_delegate_session", self.remote_handle)
         output = getattr(self, "_delegate_ext_output_adapter")
         input_factory = getattr(self, "_delegate_ext_input_factory")
@@ -338,7 +338,7 @@ class _FailingRemoteCancelableDelegateAgent(_RemoteCancelableDelegateAgent):
     ) -> dict[str, Any]:
         del system_message, conversation_history, task_id, stream_callback, persist_user_message, user_message
         if callable(self.tool_start_callback):
-            self.tool_start_callback("call-delegate", "a2a_delegate", {"a2a_name": "threat-intel"})
+            self.tool_start_callback("call-delegate", "a2a_delegate", {"agent_name": "threat-intel"})
         setattr(self, "_active_a2a_delegate_session", self.remote_handle)
         output = getattr(self, "_delegate_ext_output_adapter")
         input_factory = getattr(self, "_delegate_ext_input_factory")

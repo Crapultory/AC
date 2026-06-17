@@ -4434,8 +4434,8 @@ class AIAgent:
         return _a2a_delegate(
             goal=function_args.get("goal"),
             context=function_args.get("context"),
-            agent=function_args.get("agent"),
-            a2a_name=function_args.get("a2a_name"),
+            type=function_args.get("type"),
+            agent_name=function_args.get("agent_name"),
             toolsets=function_args.get("toolsets"),
             max_iterations=function_args.get("max_iterations"),
             session_id=function_args.get("session_id"),

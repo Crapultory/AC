@@ -734,8 +734,8 @@ class ChatSessionActor:
         if not function_args:
             return
         delegate_name = (
-            str(function_args.get("a2a_name") or "").strip()
-            or str(function_args.get("agent") or "").strip()
+            str(function_args.get("agent_name") or "").strip()
+            or str(function_args.get("type") or "").strip()
             or "delegate"
         )
         with self._lock:

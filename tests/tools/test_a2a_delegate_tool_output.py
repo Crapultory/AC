@@ -145,7 +145,7 @@ def test_local_loop_suppresses_user_events(mock_agent_cls, _mock_history):
     result = json.loads(
         a2a_delegate(
             goal="start",
-            agent="local",
+            type="local",
             is_loop=True,
             input=_Input(["follow up", "/main"]),
             output=sink,
@@ -186,7 +186,7 @@ def test_local_delegate_emits_ai_delta_before_final_message(mock_agent_cls, _moc
     result = json.loads(
         a2a_delegate(
             goal="start",
-            agent="local",
+            type="local",
             output=sink,
             parent_agent=parent,
         )
@@ -461,7 +461,7 @@ def test_local_mode_returns_default_session_id(mock_agent_cls, _mock_history, mo
     monkeypatch.setattr("tools.a2a_delegate_tool.get_active_profile_name", lambda: "worker_alpha")
     monkeypatch.setattr("tools.a2a_delegate_tool.time.strftime", lambda fmt: "20260606_120000")
 
-    result = json.loads(a2a_delegate(goal="inspect code", agent="local", parent_agent=parent))
+    result = json.loads(a2a_delegate(goal="inspect code", type="local", parent_agent=parent))
 
     assert result["session_id"] == "delegate_worker_alpha_local_20260606_120000"
     _, kwargs = mock_agent_cls.call_args
@@ -513,8 +513,8 @@ def test_a2a_mode_returns_default_session_id(monkeypatch):
     result = json.loads(
         a2a_delegate(
             goal="test remote",
-            agent="a2a",
-            a2a_name="remote",
+            type="a2a",
+            agent_name="remote",
             parent_agent=parent,
         )
     )
@@ -567,8 +567,8 @@ def test_a2a_mode_cancelled_task_is_reported_as_interrupted_and_clears_parent_ha
     result = json.loads(
         a2a_delegate(
             goal="test remote",
-            agent="a2a",
-            a2a_name="remote",
+            type="a2a",
+            agent_name="remote",
             parent_agent=parent,
         )
     )
@@ -627,8 +627,8 @@ def test_a2a_mode_stop_with_last_output_returns_interrupted_payload(monkeypatch)
     result = json.loads(
         a2a_delegate(
             goal="test remote",
-            agent="a2a",
-            a2a_name="remote",
+            type="a2a",
+            agent_name="remote",
             parent_agent=parent,
         )
     )
@@ -685,8 +685,8 @@ def test_a2a_mode_stop_close_teardown_exception_still_returns_interrupted_payloa
 
     result_text = a2a_delegate(
         goal="test remote",
-        agent="a2a",
-        a2a_name="remote",
+        type="a2a",
+        agent_name="remote",
         parent_agent=parent,
     )
 

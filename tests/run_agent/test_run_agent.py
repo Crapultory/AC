@@ -164,7 +164,7 @@ def test_dispatch_helper_injects_runtime_adapters():
             {
                 "goal": "ship it",
                 "context": "repo root",
-                "a2a_name": "remote-reviewer",
+                "agent_name": "remote-reviewer",
                 "is_delegate_output": True,
                 "is_loop": True,
             }
@@ -173,8 +173,8 @@ def test_dispatch_helper_injects_runtime_adapters():
     mock_a2a_delegate.assert_called_once_with(
         goal="ship it",
         context="repo root",
-        agent=None,
-        a2a_name="remote-reviewer",
+        type=None,
+        agent_name="remote-reviewer",
         toolsets=None,
         max_iterations=None,
         session_id=None,
@@ -206,8 +206,8 @@ def test_dispatch_helper_omitted_loop_defaults_to_one_shot_mode():
     mock_a2a_delegate.assert_called_once_with(
         goal="ship it",
         context="repo root",
-        agent=None,
-        a2a_name=None,
+        type=None,
+        agent_name=None,
         toolsets=None,
         max_iterations=None,
         session_id=None,
@@ -239,8 +239,8 @@ def test_dispatch_helper_skips_input_factory_when_loop_disabled():
     mock_a2a_delegate.assert_called_once_with(
         goal="ship it",
         context=None,
-        agent=None,
-        a2a_name=None,
+        type=None,
+        agent_name=None,
         toolsets=None,
         max_iterations=None,
         session_id=None,

@@ -158,20 +158,22 @@ class TestDelegateExtSchema:
         props = A2A_DELEGATE_SCHEMA["parameters"]["properties"]
         assert "goal" in props
         assert "context" in props
-        assert "agent" in props
+        assert "type" in props
         assert "toolsets" in props
         assert "max_iterations" in props
         assert "session_id" in props
-        assert props["agent"]["enum"] == ["local", "a2a"]
+        assert props["type"]["enum"] == ["a2a", "local"]
+        assert "agent" not in props
 
     def test_schema_fields_include_loop_and_io(self):
         props = A2A_DELEGATE_SCHEMA["parameters"]["properties"]
         assert "is_delegate_output" in props
         assert "is_loop" in props
 
-    def test_schema_includes_a2a_name(self):
+    def test_schema_includes_agent_name(self):
         props = A2A_DELEGATE_SCHEMA["parameters"]["properties"]
-        assert "a2a_name" in props
+        assert "agent_name" in props
+        assert "a2a_name" not in props
 
 
 class TestDelegateExt:
@@ -189,14 +191,14 @@ class TestDelegateExt:
         assert "error" in result
         assert "goal" in result["error"].lower()
 
-    def test_a2a_mode_requires_a2a_name(self):
+    def test_a2a_mode_requires_agent_name(self):
         parent = _make_mock_parent()
         result = json.loads(
-            a2a_delegate(goal="test remote", agent="a2a", parent_agent=parent)
+            a2a_delegate(goal="test remote", type="a2a", parent_agent=parent)
         )
         assert result["error"]
-        assert result["agent"] == "a2a"
-        assert "a2a_name" in result["error"].lower()
+        assert result["type"] == "a2a"
+        assert "agent_name" in result["error"].lower()
 
     def test_a2a_list_reads_profile_local_registry(self, tmp_path, monkeypatch):
         hermes_home = tmp_path / "profile"
@@ -427,8 +429,8 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="test remote",
-                agent="a2a",
-                a2a_name="remote",
+                type="a2a",
+                agent_name="remote",
                 toolsets=["terminal"],
                 max_iterations=7,
                 parent_agent=parent,
@@ -439,8 +441,8 @@ class TestDelegateExt:
         assert captured["turns"] == [("test remote", True)]
         assert captured["closed"] is True
         assert result["success"] is True
-        assert result["agent"] == "a2a"
-        assert result["a2a_name"] == "remote"
+        assert result["type"] == "a2a"
+        assert result["agent_name"] == "remote"
         assert result["session_id"] == "ctx-remote"
         assert result["toolsets"] is None
         assert result["max_iterations"] is None
@@ -495,8 +497,8 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="test remote",
-                agent="a2a",
-                a2a_name="remote",
+                type="a2a",
+                agent_name="remote",
                 parent_agent=parent,
             )
         )
@@ -549,8 +551,8 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="test remote",
-                agent="a2a",
-                a2a_name="remote",
+                type="a2a",
+                agent_name="remote",
                 session_id="persisted-remote-session",
                 parent_agent=parent,
             )
@@ -624,8 +626,8 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="start remote",
-                agent="a2a",
-                a2a_name="remote",
+                type="a2a",
+                agent_name="remote",
                 is_loop=True,
                 input=_Input(["follow up", "/main"]),
                 output=_Output(),
@@ -657,9 +659,9 @@ class TestDelegateExt:
         }
         mock_agent_cls.return_value = child
 
-        result = json.loads(a2a_delegate(goal="finish task", agent="local", parent_agent=parent))
+        result = json.loads(a2a_delegate(goal="finish task", type="local", parent_agent=parent))
 
-        assert result["agent"] == "local"
+        assert result["type"] == "local"
         assert result["toolsets"] == ["hermes-cli"]
         assert result["is_loop"] is False
         assert result["final_response"] == "done"
@@ -687,7 +689,7 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="inspect code",
-                agent="local",
+                type="local",
                 context="focus on tests",
                 toolsets=["terminal", "file"],
                 max_iterations=17,
@@ -716,7 +718,7 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="inspect code",
-                agent="local",
+                type="local",
                 session_id="persisted-local-session",
                 parent_agent=parent,
             )
@@ -740,7 +742,7 @@ class TestDelegateExt:
         monkeypatch.setattr(a2a_delegate_tool_module.time, "strftime", lambda fmt: "20260605_123456")
 
         result = json.loads(
-            a2a_delegate(goal="inspect code", agent="local", parent_agent=parent)
+            a2a_delegate(goal="inspect code", type="local", parent_agent=parent)
         )
 
         _, kwargs = mock_agent_cls.call_args
@@ -792,8 +794,8 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="test remote",
-                agent="a2a",
-                a2a_name="remote",
+                type="a2a",
+                agent_name="remote",
                 parent_agent=parent,
             )
         )
@@ -806,7 +808,7 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="bad tools",
-                agent="local",
+                type="local",
                 toolsets=["nope-toolset"],
                 parent_agent=parent,
             )
@@ -842,7 +844,7 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="finish",
-                agent="local",
+                type="local",
                 is_loop=False,
                 is_delegate_output=True,
                 output=_Output(),
@@ -872,7 +874,7 @@ class TestDelegateExt:
 
         a2a_delegate(
             goal="finish",
-            agent="local",
+            type="local",
             is_loop=False,
             is_delegate_output=False,
             output=_Output(),
@@ -893,7 +895,7 @@ class TestDelegateExt:
         mock_agent_cls.return_value = child
 
         result = json.loads(
-            a2a_delegate(goal="finish task", agent="local", parent_agent=parent)
+            a2a_delegate(goal="finish task", type="local", parent_agent=parent)
         )
 
         assert result["final_response"] == "done"
@@ -914,7 +916,7 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="finish task",
-                agent="local",
+                type="local",
                 input=input_adapter,
                 parent_agent=parent,
             )
@@ -960,7 +962,7 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="start",
-                agent="local",
+                type="local",
                 is_loop=True,
                 input=_Input(["follow up", "/main"]),
                 parent_agent=parent,
@@ -993,7 +995,7 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="start",
-                agent="local",
+                type="local",
                 is_loop=True,
                 input=_Input(["/exit"]),
                 parent_agent=parent,
@@ -1051,7 +1053,7 @@ class TestDelegateExt:
         result = json.loads(
             a2a_delegate(
                 goal="start",
-                agent="local",
+                type="local",
                 is_loop=True,
                 input=_Input(["follow up", "/main"]),
                 parent_agent=parent,
@@ -1083,8 +1085,8 @@ class TestDelegateExtIntegration:
             {
                 "goal": "ship it",
                 "context": "repo root",
-                "agent": "local",
-                "a2a_name": "remote-reviewer",
+                "type": "local",
+                "agent_name": "remote-reviewer",
                 "toolsets": ["terminal"],
                 "max_iterations": 5,
             }
@@ -1094,8 +1096,8 @@ class TestDelegateExtIntegration:
         mock_a2a_delegate.assert_called_once_with(
             goal="ship it",
             context="repo root",
-            agent="local",
-            a2a_name="remote-reviewer",
+            type="local",
+            agent_name="remote-reviewer",
             toolsets=["terminal"],
             max_iterations=5,
             session_id=None,
