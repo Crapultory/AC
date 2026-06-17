@@ -454,6 +454,29 @@ def _exit_delegate_foreground(input_adapter) -> None:
         exit_foreground()
 
 
+def _format_aegis_source_header(parent_agent) -> str:
+    raw_user_id = getattr(parent_agent, "_user_id", "")
+    raw_user_name = getattr(parent_agent, "_user_name", "")
+    user_id = raw_user_id.strip() if isinstance(raw_user_id, str) else ""
+    user_name = raw_user_name.strip() if isinstance(raw_user_name, str) else ""
+    if not user_id and not user_name:
+        return ""
+    source_data = {"platform": "aegis"}
+    if user_id:
+        source_data["uid"] = user_id
+    if user_name:
+        source_data["uname"] = user_name
+    source_payload = json.dumps(source_data, ensure_ascii=False, separators=(",", ":"))
+    return f"<source>{source_payload}</source>"
+
+
+def _decorate_a2a_user_message(text: str, parent_agent) -> str:
+    source_header = _format_aegis_source_header(parent_agent)
+    if not source_header:
+        return text
+    return f"{source_header}\n\n{text}"
+
+
 def _normalize_toolsets(toolsets: Optional[List[str]]) -> tuple[Optional[List[str]], Optional[str]]:
     if toolsets is None:
         return list(DEFAULT_TOOLSETS), None
@@ -1593,7 +1616,10 @@ def _run_a2a_delegate(
                     session_id=getattr(session, "context_id", None),
                 )
 
-            last_result = await session.send_turn(goal, is_delegate_output=is_delegate_output)
+            last_result = await session.send_turn(
+                _decorate_a2a_user_message(goal, parent_agent),
+                is_delegate_output=is_delegate_output,
+            )
             if last_result.get("state") == _a2a_canceled_state():
                 if is_loop:
                     _emit_delegate_event(
@@ -1670,7 +1696,7 @@ def _run_a2a_delegate(
                     )
 
                 last_result = await session.send_turn(
-                    stripped,
+                    _decorate_a2a_user_message(stripped, parent_agent),
                     is_delegate_output=is_delegate_output,
                 )
                 if last_result.get("state") == _a2a_canceled_state():

@@ -4,15 +4,49 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 
 
-AUTH_HEADERS = {"Authorization": "Bearer test-session-token"}
+AUTH_TOKEN = jwt.encode(
+    {
+        "sub": "0000000000000001",
+        "username": "admin",
+        "email": "admin@aegis.local",
+        "iat": 1,
+        "exp": 4102444800,
+    },
+    "test-jwt-secret-1234567890-abcdef",
+    algorithm="HS256",
+)
+AUTH_HEADERS = {"Authorization": f"Bearer {AUTH_TOKEN}"}
 
 
 def _write_store(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _create_non_admin_headers(client: TestClient) -> dict[str, str]:
+    create_response = client.post(
+        "/api/users",
+        headers=AUTH_HEADERS,
+        json={
+            "username": "analyst",
+            "password": "Password123!",
+            "email": "analyst@example.com",
+            "status": "enabled",
+        },
+    )
+    assert create_response.status_code == 201
+
+    login_response = client.post(
+        "/api/auth/login",
+        json={"username": "analyst", "password": "Password123!"},
+    )
+    assert login_response.status_code == 200
+    token = login_response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
@@ -21,7 +55,7 @@ def agent_client(
     monkeypatch: pytest.MonkeyPatch,
     hermes_home,
 ) -> Iterator[TestClient]:
-    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
 
     server = load_backend("aegis.backend.server")
     app = server.create_app()
@@ -118,6 +152,60 @@ def test_agents_crud_persists_through_shared_store(
     assert delete_response.status_code == 200
     assert delete_response.json() == {"deleted": True, "agent_id": "agent-1"}
     assert json.loads((hermes_home / "a2a.json").read_text()) == {"a2a": {}, "global": []}
+
+
+def test_agent_routes_require_admin_access(agent_client: TestClient) -> None:
+    user_headers = _create_non_admin_headers(agent_client)
+
+    list_response = agent_client.get("/api/agents", headers=user_headers)
+    assert list_response.status_code == 403
+    assert list_response.json() == {"detail": "Admin access required."}
+
+    create_response = agent_client.post(
+        "/api/agents/agent-1",
+        headers=user_headers,
+        json={
+            "url": "http://127.0.0.1:9086/a2a",
+            "description": "A2A test endpoint",
+            "headers": {},
+            "status": "active",
+            "extcapabilities": [],
+        },
+    )
+    assert create_response.status_code == 403
+    assert create_response.json() == {"detail": "Admin access required."}
+
+
+def test_overview_agents_route_returns_sanitized_agent_data_for_authenticated_users(
+    agent_client: TestClient,
+) -> None:
+    create_response = agent_client.post(
+        "/api/agents/agent-1",
+        headers=AUTH_HEADERS,
+        json={
+            "url": "http://127.0.0.1:9086/a2a",
+            "description": "A2A test endpoint",
+            "headers": {"Authorization": "Bearer secret"},
+            "status": "active",
+            "extcapabilities": ["query-ip", "query-domain"],
+        },
+    )
+    assert create_response.status_code == 201
+
+    user_headers = _create_non_admin_headers(agent_client)
+    overview_response = agent_client.get("/api/overview/agents", headers=user_headers)
+    assert overview_response.status_code == 200
+    assert overview_response.json() == {
+        "agents": [
+            {
+                "agent_id": "agent-1",
+                "url": "http://127.0.0.1:9086/a2a",
+                "description": "A2A test endpoint",
+                "status": "active",
+                "extcapabilities": ["query-ip", "query-domain"],
+            }
+        ]
+    }
 
 
 def test_agent_create_and_global_rule_create_share_same_persisted_store(
@@ -279,7 +367,7 @@ def test_list_agents_supports_legacy_string_persisted_entries(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _write_store(
         tmp_path / "a2a.json",
@@ -316,7 +404,7 @@ def test_list_agents_normalizes_legacy_string_entry_without_scheme(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _write_store(
         tmp_path / "a2a.json",
@@ -353,7 +441,7 @@ def test_get_agent_returns_controlled_error_for_malformed_persisted_entry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _write_store(
         tmp_path / "a2a.json",

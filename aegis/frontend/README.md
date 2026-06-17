@@ -38,8 +38,10 @@
 
 说明：
 
-- 登录令牌来自后端 `AEGIS_SESSION_TOKEN`。
+- 登录方式为用户名/密码，成功后前端会保存后端签发的 JWT access token。
+- 默认初始化管理员账号为 `admin / admin123456`，仅适合本地引导，登录后应尽快修改。
 - Agent 与 Global Rule 数据持久化在 `HERMES_HOME/a2a.json`。
+- 用户数据持久化在 `HERMES_HOME/aegis.db`。
 - Chat 页面的会话回放仍然保存在浏览器 `localStorage`，键名为 `aegis_convs`。
 
 如果只想跑前端开发服务器：

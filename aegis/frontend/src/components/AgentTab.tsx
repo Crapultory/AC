@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Activity, AlertCircle, Edit2, Plus, RefreshCw, Search, Trash2, Users, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { ApiError } from '../lib/api';
+import { alertApiError } from '../lib/api';
 import { Agent, AgentDraft } from '../types';
 
 interface AgentTabProps {
@@ -91,7 +91,7 @@ export default function AgentTab({
       await onDelete(agentId);
       setError('');
     } catch (caughtError) {
-      setError(caughtError instanceof ApiError ? caughtError.message : '删除智能体失败。');
+      alertApiError(caughtError, '删除智能体失败。');
     }
   }
 
@@ -123,7 +123,7 @@ export default function AgentTab({
       }
       setIsModalOpen(false);
     } catch (caughtError) {
-      setError(caughtError instanceof ApiError ? caughtError.message : '保存智能体失败。');
+      alertApiError(caughtError, '保存智能体失败。');
     } finally {
       setSubmitting(false);
     }

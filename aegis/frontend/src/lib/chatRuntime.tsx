@@ -638,7 +638,7 @@ export function AegisChatProvider({
   ): boolean {
     const token = getStoredToken();
     if (!token) {
-      setTransportError('Missing session token for chat transport.');
+      setTransportError('Missing access token for chat transport.');
       return false;
     }
 

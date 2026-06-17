@@ -9,6 +9,17 @@ export class ApiError extends Error {
   }
 }
 
+export function getApiErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return fallback;
+}
+
+export function alertApiError(error: unknown, fallback: string): void {
+  window.alert(getApiErrorMessage(error, fallback));
+}
+
 export async function fetchJSON<T>(
   path: string,
   init: RequestInit = {},
@@ -28,8 +39,8 @@ export async function fetchJSON<T>(
 
   const response = await fetch(path, { ...init, headers });
   if (!response.ok) {
-    const message = await response.text();
-    throw new ApiError(message || response.statusText, response.status);
+    const raw = await response.text();
+    throw new ApiError(raw || response.statusText, response.status);
   }
 
   if (response.status === 204) {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
+import inspect
 import json
 import os
 import threading
@@ -122,12 +123,47 @@ def _refresh_live_agent_runtime_after_model_switch(agent: object) -> None:
         )
 
 
-def _build_default_aegis_agent(session_id: str) -> object:
+def _build_default_aegis_agent(
+    session_id: str,
+    *,
+    user_id: str | None = None,
+    user_name: str | None = None,
+) -> object:
+    kwargs: dict[str, object] = {
+        "platform": "aegis",
+        "ephemeral_system_prompt": build_aegis_ephemeral_system_prompt(),
+    }
+    if user_id:
+        kwargs["user_id"] = user_id
+    if user_name:
+        kwargs["user_name"] = user_name
     return default_agent_factory(
         session_id,
-        platform="aegis",
-        ephemeral_system_prompt=build_aegis_ephemeral_system_prompt(),
+        **kwargs,
     )
+
+
+def _invoke_agent_factory(
+    agent_factory: Callable[..., object],
+    session_id: str,
+    *,
+    user_id: str | None = None,
+    user_name: str | None = None,
+) -> object:
+    kwargs: dict[str, str] = {}
+    try:
+        parameters = inspect.signature(agent_factory).parameters
+    except (TypeError, ValueError):
+        parameters = {}
+    accepts_var_kwargs = any(
+        parameter.kind is inspect.Parameter.VAR_KEYWORD
+        for parameter in parameters.values()
+    )
+    if user_id and (accepts_var_kwargs or "user_id" in parameters):
+        kwargs["user_id"] = str(user_id)
+    if user_name and (accepts_var_kwargs or "user_name" in parameters):
+        kwargs["user_name"] = str(user_name)
+    return agent_factory(session_id, **kwargs)
 
 
 class ChatSessionActor:
@@ -136,12 +172,21 @@ class ChatSessionActor:
         *,
         session_id: str,
         title: str,
-        agent_factory: Callable[[str], object],
+        agent_factory: Callable[..., object],
+        user_id: str | None = None,
+        user_name: str | None = None,
     ) -> None:
         self.session_id = session_id
         self.title = title
         self._agent_factory = agent_factory
-        self._agent = agent_factory(session_id)
+        self._user_id = str(user_id or "").strip()
+        self._user_name = str(user_name or "").strip()
+        self._agent = _invoke_agent_factory(
+            agent_factory,
+            session_id,
+            user_id=self._user_id or None,
+            user_name=self._user_name or None,
+        )
         self._loop: asyncio.AbstractEventLoop | None = None
         self._websocket: WebSocket | None = None
         self._lock = threading.RLock()
@@ -813,7 +858,12 @@ class ChatSessionActor:
         session_tokens = []
         try:
             approval_token = set_current_session_key(self.session_id)
-            session_tokens = set_session_vars(platform="aegis", session_key=self.session_id)
+            session_tokens = set_session_vars(
+                platform="aegis",
+                session_key=self.session_id,
+                user_id=self._user_id,
+                user_name=self._user_name,
+            )
             register_gateway_notify(self.session_id, self._approval_notify_sync)
 
             def _on_delta(delta: str) -> None:
@@ -1033,12 +1083,12 @@ class ChatSessionActor:
 
 
 class ChatSessionManager:
-    def __init__(self, agent_factory: Callable[[str], object] | None = None) -> None:
+    def __init__(self, agent_factory: Callable[..., object] | None = None) -> None:
         self._agent_factory = agent_factory or _build_default_aegis_agent
         self._lock = threading.Lock()
         self._sessions: dict[str, ChatSessionActor] = {}
 
-    def set_agent_factory(self, agent_factory: Callable[[str], object]) -> None:
+    def set_agent_factory(self, agent_factory: Callable[..., object]) -> None:
         with self._lock:
             self._agent_factory = agent_factory
             self._sessions.clear()
@@ -1050,6 +1100,8 @@ class ChatSessionManager:
         *,
         session_id: str | None,
         title: str | None,
+        user_id: str | None = None,
+        user_name: str | None = None,
     ) -> ChatSessionActor:
         resolved_session_id = str(session_id or "").strip() or f"aegis-{uuid4().hex}"
         with self._lock:
@@ -1059,6 +1111,8 @@ class ChatSessionManager:
                     session_id=resolved_session_id,
                     title=_conversation_title(title),
                     agent_factory=self._agent_factory,
+                    user_id=user_id,
+                    user_name=user_name,
                 )
                 self._sessions[resolved_session_id] = actor
             else:

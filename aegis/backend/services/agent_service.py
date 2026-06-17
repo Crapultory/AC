@@ -7,7 +7,7 @@ from typing import Any
 from fastapi import HTTPException
 from pydantic import ValidationError
 
-from aegis.backend.models import AgentResponse, AgentUpsertRequest
+from aegis.backend.models import AgentResponse, AgentUpsertRequest, OverviewAgentResponse
 from aegis.backend.services.store import AegisStore, get_aegis_store
 
 
@@ -28,6 +28,12 @@ class AgentService:
         return [
             self._build_agent_response(agent_id, value)
             for agent_id, value in sorted(agents.items())
+        ]
+
+    def list_overview_agents(self) -> list[OverviewAgentResponse]:
+        return [
+            self._build_overview_agent_response(agent)
+            for agent in self.list_agents()
         ]
 
     def get_agent(self, agent_id: str) -> AgentResponse:
@@ -93,4 +99,16 @@ class AgentService:
         raise HTTPException(
             status_code=500,
             detail=f"Stored agent '{agent_id}' has an invalid shape.",
+        )
+
+    @staticmethod
+    def _build_overview_agent_response(agent: AgentResponse) -> OverviewAgentResponse:
+        return OverviewAgentResponse.model_validate(
+            {
+                "agent_id": agent.agent_id,
+                "url": agent.url,
+                "description": agent.description,
+                "status": agent.status,
+                "extcapabilities": agent.extcapabilities,
+            }
         )

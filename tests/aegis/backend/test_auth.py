@@ -8,36 +8,47 @@ def test_load_settings_generates_token_when_env_missing(
     load_backend,
     monkeypatch,
 ) -> None:
-    monkeypatch.delenv("AEGIS_SESSION_TOKEN", raising=False)
+    monkeypatch.delenv("AEGIS_JWT_SECRET", raising=False)
 
     config = load_backend("aegis.backend.config")
     settings = config.load_aegis_settings()
 
-    assert settings.token_source == "generated"
-    assert settings.session_token
+    assert settings.jwt_secret
+    assert settings.jwt_expire_seconds == 28800
 
 
 def test_login_session_and_logout_routes(client: TestClient) -> None:
-    login_response = client.post("/api/auth/login", json={"token": "test-session-token"})
+    login_response = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "admin123456"},
+    )
     assert login_response.status_code == 200
-    assert login_response.json() == {"authenticated": True}
+    payload = login_response.json()
+    assert payload["authenticated"] is True
+    assert payload["access_token"]
+    assert payload["token_type"] == "bearer"
+    assert payload["expires_in"] == 28800
+    assert payload["user"]["username"] == "admin"
+    assert payload["user"]["is_admin"] is True
+    assert payload["user"]["uid"] == "0000000000000001"
+    assert len(payload["user"]["uid"]) == 16
 
     session_without_auth = client.get("/api/auth/session")
     assert session_without_auth.status_code == 200
     assert session_without_auth.json() == {
         "authenticated": False,
-        "token_source": "env",
     }
 
     session_with_auth = client.get(
         "/api/auth/session",
-        headers={"Authorization": "Bearer test-session-token"},
+        headers={"Authorization": f"Bearer {payload['access_token']}"},
     )
     assert session_with_auth.status_code == 200
-    assert session_with_auth.json() == {
-        "authenticated": True,
-        "token_source": "env",
-    }
+    session_payload = session_with_auth.json()
+    assert session_payload["authenticated"] is True
+    assert session_payload["user"]["username"] == "admin"
+    assert len(session_payload["user"]["uid"]) == 16
+    assert session_payload["expires_in"] > 0
 
     logout_response = client.post("/api/auth/logout")
     assert logout_response.status_code == 200
@@ -45,25 +56,71 @@ def test_login_session_and_logout_routes(client: TestClient) -> None:
 
 
 def test_session_accepts_case_insensitive_bearer_schemes(client: TestClient) -> None:
+    login_response = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "admin123456"},
+    )
+    token = login_response.json()["access_token"]
+
     lowercase = client.get(
         "/api/auth/session",
-        headers={"Authorization": "bearer test-session-token"},
+        headers={"Authorization": f"bearer {token}"},
     )
     assert lowercase.status_code == 200
-    assert lowercase.json() == {
-        "authenticated": True,
-        "token_source": "env",
-    }
+    assert lowercase.json()["authenticated"] is True
 
     mixed_case = client.get(
         "/api/auth/session",
-        headers={"Authorization": "BeArEr test-session-token"},
+        headers={"Authorization": f"BeArEr {token}"},
     )
     assert mixed_case.status_code == 200
-    assert mixed_case.json() == {
-        "authenticated": True,
-        "token_source": "env",
-    }
+    assert mixed_case.json()["authenticated"] is True
+
+
+def test_register_defaults_user_to_disabled_and_login_is_blocked(client: TestClient) -> None:
+    register_response = client.post(
+        "/api/auth/register",
+        json={
+            "username": "new-user",
+            "password": "Password123!",
+            "email": "new-user@example.com",
+        },
+    )
+    assert register_response.status_code == 201
+    assert register_response.json() == {"registered": True, "status": "disabled"}
+
+    login_response = client.post(
+        "/api/auth/login",
+        json={"username": "new-user", "password": "Password123!"},
+    )
+    assert login_response.status_code == 403
+    assert login_response.json() == {"detail": "User account is disabled."}
+
+
+def test_change_password_updates_user_credentials(
+    client: TestClient,
+    auth_headers: dict[str, str],
+) -> None:
+    change_response = client.put(
+        "/api/auth/password",
+        headers=auth_headers,
+        json={"old_password": "admin123456", "new_password": "AdminPassword123!"},
+    )
+    assert change_response.status_code == 200
+    assert change_response.json() == {"updated": True}
+
+    old_login = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "admin123456"},
+    )
+    assert old_login.status_code == 401
+    assert old_login.json() == {"detail": "Invalid username or password."}
+
+    new_login = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "AdminPassword123!"},
+    )
+    assert new_login.status_code == 200
 
 
 def test_auth_middleware_protects_other_api_routes(client: TestClient) -> None:
@@ -71,16 +128,21 @@ def test_auth_middleware_protects_other_api_routes(client: TestClient) -> None:
     assert unauthorized.status_code == 401
     assert unauthorized.json() == {"detail": "Unauthorized"}
 
+    login_response = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "admin123456"},
+    )
+    token = login_response.json()["access_token"]
     authorized = client.get(
         "/api/does-not-exist",
-        headers={"Authorization": "Bearer test-session-token"},
+        headers={"Authorization": f"Bearer {token}"},
     )
     assert authorized.status_code == 404
     assert authorized.json() == {"detail": "Not Found"}
 
     lowercase = client.get(
         "/api/does-not-exist",
-        headers={"Authorization": "bearer test-session-token"},
+        headers={"Authorization": f"bearer {token}"},
     )
     assert lowercase.status_code == 404
     assert lowercase.json() == {"detail": "Not Found"}
@@ -119,7 +181,7 @@ def test_public_health_and_bootstrap_routes_are_accessible(client: TestClient) -
     assert bootstrap_response.status_code == 200
     assert bootstrap_response.json() == {
         "embedded_chat": False,
-        "auth_scheme": "bearer-token",
+        "auth_scheme": "jwt-password",
     }
 
 
@@ -131,9 +193,9 @@ def test_openapi_includes_bearer_auth_scheme(client: TestClient) -> None:
     assert schema["components"]["securitySchemes"]["bearerAuth"] == {
         "type": "http",
         "scheme": "bearer",
-        "bearerFormat": "Token",
+        "bearerFormat": "JWT",
         "description": (
-            "Paste Aegis session token. Swagger will send "
+            "Paste Aegis JWT access token. Swagger will send "
             "`Authorization: Bearer <token>`."
         ),
     }

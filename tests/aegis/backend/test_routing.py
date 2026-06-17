@@ -4,15 +4,49 @@ import json
 from collections.abc import Iterator
 from pathlib import Path
 
+import jwt
 import pytest
 from fastapi.testclient import TestClient
 
 
-AUTH_HEADERS = {"Authorization": "Bearer test-session-token"}
+AUTH_TOKEN = jwt.encode(
+    {
+        "sub": "0000000000000001",
+        "username": "admin",
+        "email": "admin@aegis.local",
+        "iat": 1,
+        "exp": 4102444800,
+    },
+    "test-jwt-secret-1234567890-abcdef",
+    algorithm="HS256",
+)
+AUTH_HEADERS = {"Authorization": f"Bearer {AUTH_TOKEN}"}
 
 
 def _write_store(path: Path, payload: dict) -> None:
     path.write_text(json.dumps(payload), encoding="utf-8")
+
+
+def _create_non_admin_headers(client: TestClient) -> dict[str, str]:
+    create_response = client.post(
+        "/api/users",
+        headers=AUTH_HEADERS,
+        json={
+            "username": "analyst",
+            "password": "Password123!",
+            "email": "analyst@example.com",
+            "status": "enabled",
+        },
+    )
+    assert create_response.status_code == 201
+
+    login_response = client.post(
+        "/api/auth/login",
+        json={"username": "analyst", "password": "Password123!"},
+    )
+    assert login_response.status_code == 200
+    token = login_response.json()["access_token"]
+    return {"Authorization": f"Bearer {token}"}
 
 
 @pytest.fixture
@@ -21,7 +55,7 @@ def routing_client(
     monkeypatch: pytest.MonkeyPatch,
     hermes_home,
 ) -> Iterator[TestClient]:
-    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
 
     server = load_backend("aegis.backend.server")
     app = server.create_app()
@@ -102,12 +136,32 @@ def test_global_routing_crud_persists_through_shared_store(
     assert json.loads((hermes_home / "a2a.json").read_text()) == {"a2a": {}, "global": []}
 
 
+def test_routing_routes_require_admin_access(routing_client: TestClient) -> None:
+    user_headers = _create_non_admin_headers(routing_client)
+
+    list_response = routing_client.get("/api/routing/global", headers=user_headers)
+    assert list_response.status_code == 403
+    assert list_response.json() == {"detail": "Admin access required."}
+
+    create_response = routing_client.post(
+        "/api/routing/global",
+        headers=user_headers,
+        json={
+            "name": "Prioritize phishing incidents",
+            "policy": "Route all phishing investigations to the email response queue.",
+            "status": "active",
+        },
+    )
+    assert create_response.status_code == 403
+    assert create_response.json() == {"detail": "Admin access required."}
+
+
 def test_create_global_routing_rule_avoids_duplicate_generated_ids(
     load_backend,
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _write_store(
         tmp_path / "a2a.json",
@@ -220,7 +274,7 @@ def test_list_rules_returns_controlled_error_for_malformed_persisted_entry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _write_store(
         tmp_path / "a2a.json",
@@ -246,7 +300,7 @@ def test_get_rule_returns_controlled_error_for_malformed_persisted_entry(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _write_store(
         tmp_path / "a2a.json",
@@ -279,7 +333,7 @@ def test_get_put_and_delete_fail_closed_for_duplicate_ids_on_disk(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _write_store(
         tmp_path / "a2a.json",
@@ -372,7 +426,7 @@ def test_mutations_fail_closed_for_malformed_persisted_entries(
     path: str,
     body: dict[str, str] | None,
 ) -> None:
-    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _write_store(
         tmp_path / "a2a.json",
@@ -417,7 +471,7 @@ def test_create_global_routing_rule_fails_when_id_generation_is_exhausted(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     _write_store(
         tmp_path / "a2a.json",

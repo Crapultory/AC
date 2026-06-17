@@ -7,9 +7,10 @@ import asyncio
 from fastapi import APIRouter, WebSocket
 from starlette.websockets import WebSocketDisconnect
 
-from aegis.backend.auth import token_matches
+from aegis.backend.auth import get_current_user_from_token
 from aegis.backend.chat.service import ChatSessionManager
 from aegis.backend.config import AegisSettings
+from aegis.backend.services.user_service import UserService
 
 
 def _ws_token(websocket: WebSocket) -> str | None:
@@ -19,6 +20,7 @@ def _ws_token(websocket: WebSocket) -> str | None:
 
 def build_chat_router(
     settings: AegisSettings,
+    user_service: UserService,
     manager: ChatSessionManager | None = None,
 ) -> APIRouter:
     router = APIRouter(tags=["chat"])
@@ -26,7 +28,14 @@ def build_chat_router(
 
     @router.websocket("/api/chat/ws")
     async def chat_ws(websocket: WebSocket) -> None:
-        if not token_matches(_ws_token(websocket), settings):
+        token = _ws_token(websocket)
+        if not token:
+            await websocket.close(code=4401)
+            return
+        current_user = None
+        try:
+            current_user, _payload = get_current_user_from_token(token, settings, user_service)
+        except Exception:
             await websocket.close(code=4401)
             return
 
@@ -52,6 +61,8 @@ def build_chat_router(
                         asyncio.get_running_loop(),
                         session_id=str(payload.get("session_id") or "").strip() or None,
                         title=str(payload.get("title") or "").strip() or None,
+                        user_id=current_user.uid if current_user is not None else None,
+                        user_name=current_user.username if current_user is not None else None,
                     )
                     await websocket.send_json(
                         actor.build_bound_event(resumed=bool(payload.get("session_id")))

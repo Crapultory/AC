@@ -19,13 +19,17 @@ from aegis.backend.chat.service import ChatSessionManager
 from aegis.backend.config import AegisSettings, is_loopback_host, load_aegis_settings
 from aegis.backend.routes.agents import build_agents_router
 from aegis.backend.routes.auth import build_auth_router
+from aegis.backend.routes.overview import build_overview_router
 from aegis.backend.routes.routing import build_routing_router
 from aegis.backend.routes.system import build_system_router
+from aegis.backend.routes.users import build_users_router
+from aegis.backend.services.user_service import UserService
 
 
 PUBLIC_API_PATHS = frozenset(
     {
         "/api/auth/login",
+        "/api/auth/register",
         "/api/auth/session",
         "/api/auth/logout",
         "/health",
@@ -53,7 +57,7 @@ def _install_docs_bearer_auth(app: FastAPI) -> None:
             version="0.1.0",
             description=(
                 "Aegis backend API. Use the `Authorize` button in Swagger UI "
-                "and provide `Bearer <token>` automatically via the token field."
+                "and provide `Bearer <token>` automatically via the JWT access token field."
             ),
             routes=app.routes,
         )
@@ -63,9 +67,9 @@ def _install_docs_bearer_auth(app: FastAPI) -> None:
         security_schemes["bearerAuth"] = {
             "type": "http",
             "scheme": "bearer",
-            "bearerFormat": "Token",
+            "bearerFormat": "JWT",
             "description": (
-                "Paste Aegis session token. Swagger will send "
+                "Paste Aegis JWT access token. Swagger will send "
                 "`Authorization: Bearer <token>`."
             ),
         }
@@ -82,6 +86,9 @@ def create_app(settings: AegisSettings | None = None) -> FastAPI:
     active_settings = settings or load_aegis_settings()
     app = FastAPI(title="Aegis Backend")
     app.state.aegis_settings = active_settings
+    user_service = UserService()
+    user_service.ensure_bootstrap_admin()
+    app.state.user_service = user_service
     chat_manager = ChatSessionManager()
     app.state.chat_manager = chat_manager
 
@@ -104,17 +111,19 @@ def create_app(settings: AegisSettings | None = None) -> FastAPI:
         path = request.url.path
         if request.method != "OPTIONS" and path.startswith("/api/") and path not in PUBLIC_API_PATHS:
             try:
-                verify_bearer_token(request, active_settings)
+                verify_bearer_token(request, active_settings, user_service)
             except Exception as exc:
                 detail = getattr(exc, "detail", "Unauthorized")
                 return JSONResponse(status_code=401, content={"detail": detail})
         return await call_next(request)
 
-    app.include_router(build_auth_router(active_settings))
-    app.include_router(build_agents_router())
-    app.include_router(build_routing_router())
+    app.include_router(build_auth_router(active_settings, user_service))
+    app.include_router(build_overview_router(active_settings, user_service))
+    app.include_router(build_users_router(active_settings, user_service))
+    app.include_router(build_agents_router(active_settings, user_service))
+    app.include_router(build_routing_router(active_settings, user_service))
     app.include_router(build_system_router(active_settings))
-    app.include_router(build_chat_router(active_settings, manager=chat_manager))
+    app.include_router(build_chat_router(active_settings, user_service, manager=chat_manager))
     _install_docs_bearer_auth(app)
 
     dist_index = None
@@ -174,14 +183,9 @@ def start_server(
         dist_dir=dist_dir,
     )
     app = create_app(settings)
-
-    if settings.token_source == "generated":
-        print("Aegis session token (generated for this process):")
-        print(settings.session_token)
-    else:
-        print("Aegis session token source: AEGIS_SESSION_TOKEN")
     if os.environ.get("AEGIS_DEBUG_AUTH") == "1":
-        print(f"AEGIS_DEBUG_AUTH session token: {settings.session_token}")
+        print(f"AEGIS_DEBUG_AUTH default admin username: admin")
+        print(f"AEGIS_DEBUG_AUTH default admin password: admin123456")
 
     if open_browser:
         try:

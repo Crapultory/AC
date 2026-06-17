@@ -61,14 +61,17 @@ async def test_hermes_aegis_e2e_hosted_console_and_api_roundtrip(tmp_path) -> No
     )
     try:
         assert proc.stdout is not None
-        token = ""
+        username = ""
+        password = ""
         for _ in range(8):
             line = await asyncio.wait_for(asyncio.to_thread(proc.stdout.readline), timeout=20)
-            if line.startswith("AEGIS_DEBUG_AUTH session token: "):
-                token = line.split(": ", 1)[1]
+            if line.startswith("AEGIS_DEBUG_AUTH default admin username: "):
+                username = line.split(": ", 1)[1].strip()
+            if line.startswith("AEGIS_DEBUG_AUTH default admin password: "):
+                password = line.split(": ", 1)[1].strip()
                 break
-        token = token.strip()
-        assert token
+        assert username == "admin"
+        assert password == "admin123456"
 
         async with httpx.AsyncClient() as probe:
             deadline = time.monotonic() + 60
@@ -96,10 +99,12 @@ async def test_hermes_aegis_e2e_hosted_console_and_api_roundtrip(tmp_path) -> No
 
             login_response = await probe.post(
                 f"http://127.0.0.1:{port}/api/auth/login",
-                json={"token": token},
+                json={"username": username, "password": password},
             )
             assert login_response.status_code == 200
-            assert login_response.json() == {"authenticated": True}
+            payload = login_response.json()
+            assert payload["authenticated"] is True
+            token = payload["access_token"]
 
             headers = {"Authorization": f"Bearer {token}"}
 

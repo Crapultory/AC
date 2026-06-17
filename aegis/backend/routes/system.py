@@ -19,7 +19,7 @@ def build_system_router(settings: AegisSettings) -> APIRouter:
     async def bootstrap() -> SystemBootstrapResponse:
         return SystemBootstrapResponse(
             embedded_chat=settings.embedded_chat,
-            auth_scheme="bearer-token",
+            auth_scheme="jwt-password",
         )
 
     return router

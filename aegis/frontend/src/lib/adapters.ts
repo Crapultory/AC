@@ -16,6 +16,19 @@ export type BackendAgentList = {
   agents: BackendAgent[];
 };
 
+export type BackendOverviewAgent = {
+  agent_id: string;
+  url: string;
+  description: string;
+  status: BackendAgentStatus;
+  extcapabilities: string[];
+  headers?: Record<string, string>;
+};
+
+export type BackendOverviewAgentList = {
+  agents: BackendOverviewAgent[];
+};
+
 export type BackendRoutingRule = {
   id: string;
   name: string;
@@ -56,7 +69,7 @@ export function parseCapabilities(text: string): string[] {
     .filter(Boolean);
 }
 
-export function backendAgentToUi(agent: BackendAgent): Agent {
+export function backendAgentToUi(agent: BackendAgent | BackendOverviewAgent): Agent {
   const headerEntries = Object.entries(agent.headers || {});
   const [authHeaderKey = 'Authorization', authHeaderValue = ''] = headerEntries[0] || [];
   return {
