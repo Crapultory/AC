@@ -29,6 +29,7 @@ def hermes_home(
     tmp_path,
 ):
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
     return tmp_path
 
 
@@ -38,8 +39,25 @@ def client(
     monkeypatch: pytest.MonkeyPatch,
     hermes_home,
 ) -> Iterator[TestClient]:
-    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
     server = load_backend("aegis.backend.server")
     app = server.create_app()
     with TestClient(app) as test_client:
         yield test_client
+
+
+@pytest.fixture
+def auth_token(client: TestClient) -> str:
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": "admin123456"},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    token = payload.get("access_token")
+    assert isinstance(token, str) and token
+    return token
+
+
+@pytest.fixture
+def auth_headers(auth_token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {auth_token}"}

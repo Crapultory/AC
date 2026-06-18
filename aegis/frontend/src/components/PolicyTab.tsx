@@ -1,7 +1,7 @@
 import React, { useMemo, useState } from 'react';
 import { Edit2, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
-import { ApiError } from '../lib/api';
+import { alertApiError } from '../lib/api';
 import { RoutingRule, RoutingRuleDraft } from '../types';
 
 interface PolicyTabProps {
@@ -66,7 +66,7 @@ export default function PolicyTab({
       await onDelete(ruleId);
       setError('');
     } catch (caughtError) {
-      setError(caughtError instanceof ApiError ? caughtError.message : '删除路由规则失败。');
+      alertApiError(caughtError, '删除路由规则失败。');
     }
   }
 
@@ -94,7 +94,7 @@ export default function PolicyTab({
       }
       setIsModalOpen(false);
     } catch (caughtError) {
-      setError(caughtError instanceof ApiError ? caughtError.message : '保存路由规则失败。');
+      alertApiError(caughtError, '保存路由规则失败。');
     } finally {
       setSubmitting(false);
     }

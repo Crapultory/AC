@@ -1,5 +1,23 @@
 export type AgentStatus = 'Active' | 'Idle' | 'Offline';
 export type RoutingRuleStatus = 'Enabled' | 'Disabled';
+export type UserStatus = 'enabled' | 'disabled';
+
+export interface AuthenticatedUser {
+  uid: string;
+  username: string;
+  email: string;
+  status: UserStatus;
+  create_time: string;
+  last_login?: string | null;
+  is_admin: boolean;
+}
+
+export interface UserDraft {
+  username: string;
+  password: string;
+  email: string;
+  status: UserStatus;
+}
 
 export interface Agent {
   id: string;

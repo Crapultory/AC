@@ -90,7 +90,7 @@ def test_start_server_formats_ipv6_browser_url(monkeypatch: pytest.MonkeyPatch) 
     monkeypatch.setattr(
         backend_server,
         "load_aegis_settings",
-        lambda **kwargs: backend_server.AegisSettings(**kwargs, session_token="token"),
+        lambda **kwargs: backend_server.AegisSettings(**kwargs, jwt_secret="token"),
     )
     monkeypatch.setattr(
         backend_server.webbrowser,
@@ -136,7 +136,7 @@ def test_create_app_keeps_public_endpoints_available_when_store_is_invalid(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path,
 ) -> None:
-    monkeypatch.setenv("AEGIS_SESSION_TOKEN", "test-session-token")
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
     (tmp_path / "a2a.json").write_text(json.dumps({"a2a": [], "global": []}))
 
@@ -152,12 +152,16 @@ def test_create_app_keeps_public_endpoints_available_when_store_is_invalid(
         assert session_response.status_code == 200
         assert session_response.json() == {
             "authenticated": False,
-            "token_source": "env",
         }
 
     with TestClient(app, raise_server_exceptions=False) as client:
+        login_response = client.post(
+            "/api/auth/login",
+            json={"username": "admin", "password": "admin123456"},
+        )
+        token = login_response.json()["access_token"]
         protected_response = client.get(
             "/api/agents",
-            headers={"Authorization": "Bearer test-session-token"},
+            headers={"Authorization": f"Bearer {token}"},
         )
         assert protected_response.status_code == 500

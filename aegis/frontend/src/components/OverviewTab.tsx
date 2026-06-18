@@ -20,10 +20,11 @@ import { motion, AnimatePresence } from 'motion/react';
 interface OverviewTabProps {
   agents: Agent[];
   currentUtcTime: string;
+  isAdmin: boolean;
   setTab: (tab: string) => void;
 }
 
-export default function OverviewTab({ agents, currentUtcTime, setTab }: OverviewTabProps) {
+export default function OverviewTab({ agents, currentUtcTime, isAdmin, setTab }: OverviewTabProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedStatus, setSelectedStatus] = useState<string>('All');
   const [selectedNode, setSelectedNode] = useState<string | null>('threat-intel'); // Default highlight some node
@@ -360,20 +361,22 @@ export default function OverviewTab({ agents, currentUtcTime, setTab }: Overview
                       <div>Active Queue: <strong className="text-white text-xs">{currentAgent.tasksCount}</strong></div>
                       <div>Telemetry: {currentAgent.lastUpdated}</div>
                     </div>
-                    <div className="flex gap-2 mt-2">
-                      <button 
-                        onClick={() => setTab('orchestration')}
-                        className="text-[9px] bg-slate-800 border border-slate-700 px-2 py-1 text-slate-300 hover:text-white rounded hover:bg-slate-700 transition-all font-mono"
-                      >
-                        ORCHESTRATE
-                      </button>
-                      <button 
-                        onClick={() => setTab('policy')}
-                        className="text-[9px] bg-cyan-950 border border-cyan-800/40 px-2 py-1 text-cyan-400 rounded hover:bg-cyan-900 transition-all font-mono"
-                      >
-                        RULES_CONFIG
-                      </button>
-                    </div>
+                    {isAdmin ? (
+                      <div className="flex gap-2 mt-2">
+                        <button 
+                          onClick={() => setTab('orchestration')}
+                          className="text-[9px] bg-slate-800 border border-slate-700 px-2 py-1 text-slate-300 hover:text-white rounded hover:bg-slate-700 transition-all font-mono"
+                        >
+                          ORCHESTRATE
+                        </button>
+                        <button 
+                          onClick={() => setTab('policy')}
+                          className="text-[9px] bg-cyan-950 border border-cyan-800/40 px-2 py-1 text-cyan-400 rounded hover:bg-cyan-900 transition-all font-mono"
+                        >
+                          RULES_CONFIG
+                        </button>
+                      </div>
+                    ) : null}
                   </div>
                 </motion.div>
               )}

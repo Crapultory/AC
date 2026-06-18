@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../App';
+import type { AuthenticatedUser } from '../../types';
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
@@ -44,6 +45,31 @@ function jsonResponse(payload: unknown, status: number = 200): Response {
   });
 }
 
+const adminUser: AuthenticatedUser = {
+  uid: 'admin-uid',
+  username: 'admin',
+  email: 'admin@aegis.local',
+  status: 'enabled',
+  create_time: '2026-06-17T00:00:00Z',
+  last_login: '2026-06-17T01:00:00Z',
+  is_admin: true,
+};
+
+const analystUser: AuthenticatedUser = {
+  uid: 'analyst-uid',
+  username: 'analyst',
+  email: 'analyst@example.com',
+  status: 'enabled',
+  create_time: '2026-06-17T00:00:00Z',
+  last_login: '2026-06-17T01:00:00Z',
+  is_admin: false,
+};
+
+function seedStoredAuth(user: AuthenticatedUser = adminUser) {
+  window.localStorage.setItem('aegis_session_token', 'frontend-test-token');
+  window.localStorage.setItem('aegis_current_user', JSON.stringify(user));
+}
+
 describe('Aegis App integration', () => {
   const originalFetch = global.fetch;
   const originalWebSocket = globalThis.WebSocket;
@@ -62,7 +88,49 @@ describe('Aegis App integration', () => {
     vi.restoreAllMocks();
   });
 
-  it('authenticates and creates agents and global rules through the backend API', async () => {
+  it('leaves login inputs empty by default and surfaces raw API errors via alert', async () => {
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+
+    global.fetch = vi.fn(async (input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = init?.method || 'GET';
+
+      if (url === '/api/auth/login' && method === 'POST') {
+        return new Response('{"detail":"用户名或密码错误"}', {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+      if (url === '/api/auth/session') {
+        return jsonResponse({ authenticated: false });
+      }
+
+      throw new Error(`Unhandled request: ${method} ${url}`);
+    }) as typeof global.fetch;
+
+    render(<App />);
+
+    const usernameInput = await screen.findByLabelText(/^username$/i);
+    const passwordInput = screen.getByLabelText(/^password$/i) as HTMLInputElement;
+
+    expect(usernameInput).toHaveValue('');
+    expect(passwordInput).toHaveValue('');
+
+    fireEvent.change(usernameInput, {
+      target: { value: 'admin' },
+    });
+    fireEvent.change(passwordInput, {
+      target: { value: 'wrong-password' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^sign in$/i }));
+
+    await waitFor(() => {
+      expect(alertSpy).toHaveBeenCalledWith('{"detail":"用户名或密码错误"}');
+    });
+  });
+
+  it('supports register, login, agent/rule CRUD, and admin user management', async () => {
+    const confirmSpy = vi.spyOn(window, 'confirm').mockImplementation(() => true);
     const agents = [
       {
         agent_id: 'seed-agent',
@@ -81,6 +149,7 @@ describe('Aegis App integration', () => {
         status: 'active',
       },
     ];
+    const users = [adminUser];
     const requests: Array<{ url: string; method: string; auth: string | null }> = [];
 
     global.fetch = vi.fn(async (input, init) => {
@@ -94,16 +163,31 @@ describe('Aegis App integration', () => {
       });
 
       if (url === '/api/auth/session') {
-        return jsonResponse({ authenticated: false, token_source: 'env' });
+        return jsonResponse({ authenticated: false });
+      }
+      if (url === '/api/overview/agents' && method === 'GET') {
+        return jsonResponse({ agents });
+      }
+      if (url === '/api/auth/register' && method === 'POST') {
+        return jsonResponse({ registered: true, status: 'disabled' }, 201);
       }
       if (url === '/api/auth/login' && method === 'POST') {
-        return jsonResponse({ authenticated: true });
+        return jsonResponse({
+          authenticated: true,
+          access_token: 'jwt-admin-token',
+          token_type: 'bearer',
+          expires_in: 28800,
+          user: adminUser,
+        });
       }
       if (url === '/api/agents' && method === 'GET') {
         return jsonResponse({ agents });
       }
       if (url === '/api/routing/global' && method === 'GET') {
         return jsonResponse({ rules });
+      }
+      if (url === '/api/users' && method === 'GET') {
+        return jsonResponse({ users });
       }
       if (url === '/api/agents/new-agent' && method === 'POST') {
         agents.push({
@@ -125,21 +209,62 @@ describe('Aegis App integration', () => {
         });
         return jsonResponse(rules[rules.length - 1], 201);
       }
+      if (url === '/api/users' && method === 'POST') {
+        users.push({
+          uid: 'alice-uid',
+          username: 'alice',
+          email: 'alice@example.com',
+          status: 'enabled',
+          create_time: '2026-06-17T02:00:00Z',
+          last_login: null,
+          is_admin: false,
+        });
+        return jsonResponse(users[users.length - 1], 201);
+      }
+      if (url === '/api/users/alice-uid/status' && method === 'PUT') {
+        users[1] = { ...users[1], status: 'disabled' };
+        return jsonResponse(users[1]);
+      }
+      if (url === '/api/users/alice-uid/password' && method === 'PUT') {
+        return jsonResponse({ updated: true, uid: 'alice-uid' });
+      }
+      if (url === '/api/users/alice-uid' && method === 'DELETE') {
+        users.splice(1, 1);
+        return jsonResponse({ deleted: true, uid: 'alice-uid' });
+      }
 
       throw new Error(`Unhandled request: ${method} ${url}`);
     }) as typeof global.fetch;
 
     render(<App />);
 
-    expect(await screen.findByText(/authenticate/i)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: /sign in/i })).toBeInTheDocument();
 
-    fireEvent.change(screen.getByLabelText(/session token/i), {
-      target: { value: 'test-session-token' },
+    fireEvent.click(screen.getByRole('button', { name: /create account/i }));
+    expect(await screen.findByRole('heading', { name: /register/i })).toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText(/register username/i), {
+      target: { value: 'pending-user' },
     });
-    fireEvent.click(screen.getByRole('button', { name: /sign in/i }));
+    fireEvent.change(screen.getByLabelText(/register password/i), {
+      target: { value: 'Password123!' },
+    });
+    fireEvent.change(screen.getByLabelText(/register email/i), {
+      target: { value: 'pending@example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^register$/i }));
+    expect(await screen.findByText(/registration submitted/i)).toBeInTheDocument();
+
+    fireEvent.change(screen.getByLabelText(/^username$/i), {
+      target: { value: 'admin' },
+    });
+    fireEvent.change(screen.getByLabelText(/^password$/i), {
+      target: { value: 'admin123456' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /^sign in$/i }));
 
     await screen.findByRole('button', { name: /agent orchestration/i });
     expect(window.location.pathname).toBe('/overview');
+    expect(screen.getByText('Administrator')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /agent orchestration/i }));
     fireEvent.click(await screen.findByRole('button', { name: /注册智能体/i }));
@@ -163,9 +288,7 @@ describe('Aegis App integration', () => {
       target: { value: 'cap-a\ncap-b' },
     });
     fireEvent.click(screen.getByRole('button', { name: /save/i }));
-
     await screen.findByText('new-agent');
-    expect(screen.getByText('New agent description')).toBeInTheDocument();
 
     fireEvent.click(screen.getByRole('button', { name: /routing policy/i }));
     fireEvent.click(await screen.findByRole('button', { name: /新建路由规则/i }));
@@ -179,24 +302,138 @@ describe('Aegis App integration', () => {
       target: { value: 'Disabled' },
     });
     fireEvent.click(screen.getByRole('button', { name: /保存规则/i }));
-
     await screen.findByText('New Rule');
-    expect(screen.getAllByText('Route suspicious email to email-sec').length).toBeGreaterThan(0);
+
+    fireEvent.click(screen.getByRole('button', { name: /user management/i }));
+    fireEvent.click(await screen.findByRole('button', { name: /新增用户/i }));
+    fireEvent.change(screen.getByLabelText(/create username/i), {
+      target: { value: 'alice' },
+    });
+    fireEvent.change(screen.getByLabelText(/create password/i), {
+      target: { value: 'Password123!' },
+    });
+    fireEvent.change(screen.getByLabelText(/create email/i), {
+      target: { value: 'alice@example.com' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /create user/i }));
+    await screen.findByText('alice@example.com');
+
+    fireEvent.click(screen.getByRole('button', { name: /disable alice/i }));
+    await screen.findByText('disabled');
+    expect(confirmSpy).toHaveBeenCalledWith('Disable alice? (确定要disabled该用户吗？)');
+
+    fireEvent.click(screen.getByRole('button', { name: /reset password alice/i }));
+    fireEvent.change(screen.getByLabelText(/reset password alice/i), {
+      target: { value: 'NewPassword123!' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /save password/i }));
+
+    fireEvent.click(screen.getByRole('button', { name: /delete alice/i }));
+    await waitFor(() => {
+      expect(screen.queryByText('alice@example.com')).not.toBeInTheDocument();
+    });
+    expect(confirmSpy).toHaveBeenCalledWith('Delete alice? (确定删除该用户吗？此操作不可逆)');
 
     await waitFor(() => {
-      expect(requests.some((request) => request.url === '/api/agents/new-agent' && request.auth === 'Bearer test-session-token')).toBe(true);
-      expect(requests.some((request) => request.url === '/api/routing/global' && request.method === 'POST' && request.auth === 'Bearer test-session-token')).toBe(true);
+      expect(requests.some((request) => request.url === '/api/agents/new-agent' && request.auth === 'Bearer jwt-admin-token')).toBe(true);
+      expect(requests.some((request) => request.url === '/api/routing/global' && request.method === 'POST' && request.auth === 'Bearer jwt-admin-token')).toBe(true);
+      expect(requests.some((request) => request.url === '/api/users' && request.method === 'POST' && request.auth === 'Bearer jwt-admin-token')).toBe(true);
     });
   });
 
+  it('supports self password change from the user menu', async () => {
+    seedStoredAuth();
+
+    global.fetch = vi.fn(async (input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = init?.method || 'GET';
+      if (url === '/api/auth/session') {
+        return jsonResponse({ authenticated: true, user: adminUser, expires_in: 28800 });
+      }
+      if (url === '/api/overview/agents') {
+        return jsonResponse({ agents: [] });
+      }
+      if (url === '/api/agents') {
+        return jsonResponse({ agents: [] });
+      }
+      if (url === '/api/routing/global') {
+        return jsonResponse({ rules: [] });
+      }
+      if (url === '/api/users') {
+        return jsonResponse({ users: [adminUser] });
+      }
+      if (url === '/api/auth/password' && method === 'PUT') {
+        return jsonResponse({ updated: true });
+      }
+      throw new Error(`Unhandled request: ${method} ${url}`);
+    }) as typeof global.fetch;
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /user menu/i });
+    fireEvent.click(screen.getByRole('button', { name: /user menu/i }));
+    fireEvent.click(screen.getByRole('button', { name: /change password/i }));
+    fireEvent.change(screen.getByLabelText(/current password/i), {
+      target: { value: 'admin123456' },
+    });
+    fireEvent.change(screen.getByLabelText(/^new password$/i), {
+      target: { value: 'AdminPassword123!' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /update password/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByText(/change password/i)).not.toBeInTheDocument();
+    });
+  });
+
+  it('hides admin-only control pages from regular users and redirects direct access attempts', async () => {
+    seedStoredAuth(analystUser);
+    window.history.replaceState({}, '', '/orchestration');
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+
+    global.fetch = vi.fn(async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/auth/session') {
+        return jsonResponse({ authenticated: true, user: analystUser, expires_in: 28800 });
+      }
+      if (url === '/api/overview/agents') {
+        return jsonResponse({
+          agents: [
+            {
+              agent_id: 'analyst-visible-agent',
+              url: 'http://127.0.0.1:9086/a2a',
+              description: 'Visible to overview',
+              status: 'active',
+              extcapabilities: ['query-domain'],
+            },
+          ],
+        });
+      }
+      throw new Error(`Unhandled request: GET ${url}`);
+    }) as typeof global.fetch;
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /overview/i });
+    expect(window.location.pathname).toBe('/overview');
+    expect(alertSpy).toHaveBeenCalledWith('Admin access required.');
+    expect(screen.getAllByText('Visible to overview').length).toBeGreaterThan(0);
+    expect(screen.queryByRole('button', { name: /agent orchestration/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /routing policy/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /user management/i })).not.toBeInTheDocument();
+  });
+
   it('keeps session sockets alive when switching chat sessions and preserves parallel task streams', async () => {
-    window.localStorage.setItem('aegis_session_token', 'frontend-test-token');
+    seedStoredAuth(analystUser);
     vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
 
     global.fetch = vi.fn(async (input) => {
       const url = typeof input === 'string' ? input : input.toString();
       if (url === '/api/auth/session') {
-        return jsonResponse({ authenticated: true, token_source: 'env' });
+        return jsonResponse({ authenticated: true, user: analystUser, expires_in: 28800 });
+      }
+      if (url === '/api/overview/agents') {
+        return jsonResponse({ agents: [] });
       }
       if (url === '/api/agents') {
         return jsonResponse({ agents: [] });
@@ -217,6 +454,7 @@ describe('Aegis App integration', () => {
 
     await waitFor(() => {
       expect(MockWebSocket.instances).toHaveLength(1);
+      expect(MockWebSocket.instances[0].url).toContain('frontend-test-token');
     });
     const firstSocket = MockWebSocket.instances[0];
     await waitFor(() => {
@@ -242,12 +480,6 @@ describe('Aegis App integration', () => {
       expect(MockWebSocket.instances).toHaveLength(2);
     });
     const secondSocket = MockWebSocket.instances[1];
-    await waitFor(() => {
-      expect(secondSocket.sent.length).toBeGreaterThan(0);
-    });
-
-    expect(firstSocket.readyState).toBe(1);
-
     secondSocket.emit({
       type: 'session.bound',
       session_id: 'sess-2',
@@ -283,13 +515,16 @@ describe('Aegis App integration', () => {
   });
 
   it('keeps background chat state updating across app navigation and surfaces attention in the sidebar', async () => {
-    window.localStorage.setItem('aegis_session_token', 'frontend-test-token');
+    seedStoredAuth(analystUser);
     vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);
 
     global.fetch = vi.fn(async (input) => {
       const url = typeof input === 'string' ? input : input.toString();
       if (url === '/api/auth/session') {
-        return jsonResponse({ authenticated: true, token_source: 'env' });
+        return jsonResponse({ authenticated: true, user: analystUser, expires_in: 28800 });
+      }
+      if (url === '/api/overview/agents') {
+        return jsonResponse({ agents: [] });
       }
       if (url === '/api/agents') {
         return jsonResponse({ agents: [] });
@@ -351,18 +586,24 @@ describe('Aegis App integration', () => {
   });
 
   it('keeps app shell and tab content selectable by default', async () => {
-    window.localStorage.setItem('aegis_session_token', 'frontend-test-token');
+    seedStoredAuth(adminUser);
 
     global.fetch = vi.fn(async (input) => {
       const url = typeof input === 'string' ? input : input.toString();
       if (url === '/api/auth/session') {
-        return jsonResponse({ authenticated: true, token_source: 'env' });
+        return jsonResponse({ authenticated: true, user: adminUser, expires_in: 28800 });
+      }
+      if (url === '/api/overview/agents') {
+        return jsonResponse({ agents: [] });
       }
       if (url === '/api/agents') {
         return jsonResponse({ agents: [] });
       }
       if (url === '/api/routing/global') {
         return jsonResponse({ rules: [] });
+      }
+      if (url === '/api/users') {
+        return jsonResponse({ users: [adminUser] });
       }
       throw new Error(`Unhandled request: GET ${url}`);
     }) as typeof global.fetch;

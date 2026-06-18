@@ -252,6 +252,8 @@ def default_agent_factory(
     *,
     platform: str,
     ephemeral_system_prompt: str | None = None,
+    user_id: str | None = None,
+    user_name: str | None = None,
     config_module=hermes_config,
     runtime_provider_module=runtime_provider,
     session_db_cls=SessionDB,
@@ -275,6 +277,10 @@ def default_agent_factory(
     )
     if ephemeral_system_prompt is not None:
         agent_kwargs["ephemeral_system_prompt"] = ephemeral_system_prompt
+    if user_id:
+        agent_kwargs["user_id"] = str(user_id)
+    if user_name:
+        agent_kwargs["user_name"] = str(user_name)
     log_prefix = "A2A" if "a2a" in platform else "AISOC"
     active_logger.info(
         "%s profile injection from %s: %s",

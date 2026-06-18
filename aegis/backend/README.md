@@ -37,22 +37,33 @@ The last form intentionally exposes the API on the network and requires
 
 ## Authentication
 
-Set `AEGIS_SESSION_TOKEN` before starting the server to use a stable bearer
-token:
+The backend now uses username/password login plus JWT bearer auth for API and
+WebSocket access.
+
+Optional environment:
 
 ```bash
-export AEGIS_SESSION_TOKEN="replace-me"
+export AEGIS_JWT_SECRET="replace-me-with-a-long-random-secret"
 python aegis/backend/main.py
 ```
 
-Protected endpoints expect:
+Default bootstrap admin account:
 
 ```text
-Authorization: Bearer <AEGIS_SESSION_TOKEN>
+username: admin
+password: admin123456
 ```
 
-If `AEGIS_SESSION_TOKEN` is not set, the backend generates a token for that
-process and prints it on startup.
+This default password is intentionally high-risk and should be changed
+immediately after first login.
+
+Login response returns an access token. Protected endpoints expect:
+
+```text
+Authorization: Bearer <jwt_access_token>
+```
+
+The frontend login page also uses the same JWT for `/api/chat/ws?token=...`.
 
 ## Storage
 
@@ -80,7 +91,8 @@ served back as `http://127.0.0.1:9086/a2a`.
 
 The standalone backend currently supports these API areas:
 
-- Auth and session: `/api/auth/login`, `/api/auth/session`, `/api/auth/logout`
+- Auth and session: `/api/auth/login`, `/api/auth/register`, `/api/auth/session`, `/api/auth/logout`, `/api/auth/password`
+- User management: `/api/users`, `/api/users/{uid}/status`, `/api/users/{uid}/password`, `/api/users/{uid}`
 - System: `/health`, `/api/system/bootstrap`
 - Agents: `/api/agents`, `/api/agents/{agent_id}`
 - Global routing: `/api/routing/global`, `/api/routing/global/{rule_id}`
@@ -125,8 +137,7 @@ already been prepared.
 
 After startup, do a quick sanity check:
 
-- Confirm startup prints the token source. With `AEGIS_SESSION_TOKEN` set, the
-  server prints that it is using `AEGIS_SESSION_TOKEN`.
+- Sign in at `http://127.0.0.1:9130/login` with `admin / admin123456`.
 - Check `GET /health` returns `{"status":"ok"}`.
 - Open `http://127.0.0.1:9130/docs` and confirm Swagger UI loads and exposes
   bearer auth through the `Authorize` button.

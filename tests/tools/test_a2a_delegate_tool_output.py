@@ -583,6 +583,84 @@ def test_a2a_mode_cancelled_task_is_reported_as_interrupted_and_clears_parent_ha
     assert getattr(parent, "_active_a2a_delegate_session", None) is None
 
 
+@pytest.mark.parametrize(
+    ("user_id", "user_name", "expected_source"),
+    [
+        (
+            "user-42",
+            "alice",
+            '<source>{"platform":"aegis","uid":"user-42","uname":"alice"}</source>\n\n',
+        ),
+        (
+            "user-42",
+            "",
+            '<source>{"platform":"aegis","uid":"user-42"}</source>\n\n',
+        ),
+        (
+            "",
+            "alice",
+            '<source>{"platform":"aegis","uname":"alice"}</source>\n\n',
+        ),
+    ],
+)
+def test_a2a_mode_prefixes_aegis_source_identity_on_forwarded_messages(
+    monkeypatch,
+    user_id,
+    user_name,
+    expected_source,
+):
+    parent = _make_parent()
+    parent.platform = "cli"
+    parent._user_id = user_id
+    parent._user_name = user_name
+    A2A_REGISTRY["remote"] = {
+        "name": "remote",
+        "url": "http://agent.local",
+        "available": True,
+        "capabilities": ["streaming"],
+        "agent_card": {"supported_interfaces": [{"url": "http://agent.local/a2a"}]},
+        "agent_card_name": "Remote Agent",
+        "error": None,
+    }
+    captured: dict[str, list[str]] = {"texts": []}
+
+    class _FakeSession:
+        def __init__(self, base_url, *, output=None, timeout=60.0, poll_interval=0.05, session_id=None):
+            del base_url, output, timeout, poll_interval
+            self.context_id = session_id
+
+        async def send_turn(self, text: str, *, is_delegate_output: bool = True):
+            del is_delegate_output
+            captured["texts"].append(text)
+            return {
+                "final_response": "remote:ok",
+                "state": TaskState.TASK_STATE_COMPLETED,
+                "state_name": "completed",
+            }
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr("tools.a2a_delegate_tool._A2ADelegateSession", _FakeSession)
+
+    result = json.loads(
+        a2a_delegate(
+            goal="test remote",
+            type="a2a",
+            agent_name="remote",
+            is_loop=True,
+            input=_Input(["follow up", "/main"]),
+            parent_agent=parent,
+        )
+    )
+
+    assert result["success"] is True
+    assert captured["texts"] == [
+        f"{expected_source}test remote",
+        f"{expected_source}follow up",
+    ]
+
+
 def test_a2a_mode_stop_with_last_output_returns_interrupted_payload(monkeypatch):
     parent = _make_parent()
     A2A_REGISTRY["remote"] = {
