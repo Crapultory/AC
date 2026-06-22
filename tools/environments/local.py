@@ -232,6 +232,13 @@ def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = Non
     if _profile_home:
         sanitized["HOME"] = _profile_home
 
+    try:
+        from tools.user_env_runtime import get_current_user_env_values
+
+        sanitized.update(get_current_user_env_values())
+    except Exception:
+        pass
+
     return sanitized
 
 
@@ -344,6 +351,13 @@ def _make_run_env(env: dict) -> dict:
             value = var.get()
             if value is not _UNSET and value:
                 run_env[var_name] = value
+    except Exception:
+        pass
+
+    try:
+        from tools.user_env_runtime import get_current_user_env_values
+
+        run_env.update(get_current_user_env_values())
     except Exception:
         pass
 

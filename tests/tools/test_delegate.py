@@ -43,6 +43,9 @@ def _make_mock_parent(depth=0):
     parent.api_mode = "chat_completions"
     parent.model = "anthropic/claude-sonnet-4"
     parent.platform = "cli"
+    parent._user_id = "user-123"
+    parent._user_id_alt = "alt-123"
+    parent._user_name = "alice"
     parent.providers_allowed = None
     parent.providers_ignored = None
     parent.providers_order = None
@@ -1474,6 +1477,30 @@ class TestChildCredentialPoolResolution(unittest.TestCase):
             )
 
             self.assertEqual(mock_child._credential_pool, mock_pool)
+
+    def test_build_child_agent_propagates_user_identity(self):
+        parent = _make_mock_parent()
+
+        with patch("run_agent.AIAgent") as MockAgent:
+            mock_child = MagicMock()
+            MockAgent.return_value = mock_child
+
+            _build_child_agent(
+                task_index=0,
+                goal="Test identity propagation",
+                context=None,
+                toolsets=["terminal"],
+                model=None,
+                max_iterations=10,
+                parent_agent=parent,
+                task_count=1,
+            )
+
+        kwargs = MockAgent.call_args.kwargs
+        self.assertEqual(kwargs["platform"], "cli")
+        self.assertEqual(kwargs["user_id"], "user-123")
+        self.assertEqual(kwargs["user_id_alt"], "alt-123")
+        self.assertEqual(kwargs["user_name"], "alice")
 
     @patch("tools.delegate_tool._load_config", return_value={})
     def test_build_child_agent_preserves_mcp_toolsets_by_default(self, mock_cfg):
