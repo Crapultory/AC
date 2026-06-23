@@ -16,7 +16,7 @@ def test_user_env_identity_propagates_to_worker_thread():
         identity = get_current_user_env_identity()
         result_queue.put(identity.user_key if identity else None)
 
-    token = set_current_user_env_identity("slack", "u123", "alice", "slack.u123.alice")
+    token = set_current_user_env_identity("slack", "u123", "alice", "slack.u123")
     try:
         thread = threading.Thread(target=propagate_context_to_thread(worker))
         thread.start()
@@ -24,4 +24,4 @@ def test_user_env_identity_propagates_to_worker_thread():
     finally:
         reset_current_user_env_identity(token)
 
-    assert result_queue.get(timeout=1) == "slack.u123.alice"
+    assert result_queue.get(timeout=1) == "slack.u123"

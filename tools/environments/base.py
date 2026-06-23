@@ -445,9 +445,13 @@ class BaseEnvironment(ABC):
         # ``--`` keeps hyphen-prefixed directory names from being parsed as options.
         parts.append(f"builtin cd -- {quoted_cwd} || exit 126")
 
+        parts.extend(self._post_snapshot_pre_command_lines())
+
         # Run the actual command
         parts.append(f"eval '{escaped}'")
         parts.append("__hermes_ec=$?")
+
+        parts.extend(self._pre_snapshot_persist_lines())
 
         # Re-dump env vars to snapshot (last-writer-wins for concurrent calls)
         if self._snapshot_ready:
@@ -465,6 +469,14 @@ class BaseEnvironment(ABC):
         parts.append("exit $__hermes_ec")
 
         return "\n".join(parts)
+
+    def _post_snapshot_pre_command_lines(self) -> list[str]:
+        """Hook for backend-specific lines after snapshot restore and before command."""
+        return []
+
+    def _pre_snapshot_persist_lines(self) -> list[str]:
+        """Hook for backend-specific cleanup before snapshot persistence."""
+        return []
 
     # ------------------------------------------------------------------
     # Stdin heredoc embedding (for SDK backends)
@@ -871,6 +883,7 @@ class BaseEnvironment(ABC):
         )
         result = self._wait_for_process(proc, timeout=effective_timeout)
         self._update_cwd(result)
+        self._after_execute(result)
 
         return result
 
@@ -894,3 +907,6 @@ class BaseEnvironment(ABC):
 
         return _transform_sudo_command(command)
 
+    def _after_execute(self, result: dict) -> None:
+        """Hook called after each command result is available."""
+        pass

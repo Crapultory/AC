@@ -6,6 +6,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar, Token
 from dataclasses import dataclass
 from typing import Iterator
+from urllib.parse import quote
 
 from tools.user_env_store import make_user_env_key
 
@@ -17,6 +18,14 @@ class UserEnvIdentity:
     user_name: str
     user_key: str
 
+    @property
+    def storage_key(self) -> str:
+        return self.user_key
+
+    @property
+    def runtime_scope_key(self) -> str:
+        return make_user_env_runtime_scope_key(self.platform, self.user_id)
+
 
 _CURRENT_USER_ENV_IDENTITY: ContextVar[UserEnvIdentity | None] = ContextVar(
     "_CURRENT_USER_ENV_IDENTITY",
@@ -26,6 +35,15 @@ _CURRENT_USER_ENV_IDENTITY: ContextVar[UserEnvIdentity | None] = ContextVar(
 
 def _clean(value) -> str:
     return str(value or "").strip()
+
+
+def _runtime_scope_component(value) -> str:
+    return quote(_clean(value), safe=".-_~")
+
+
+def make_user_env_runtime_scope_key(platform, user_id) -> str:
+    """Build the in-memory runtime scope key used for local env isolation."""
+    return f"local::{_runtime_scope_component(platform)}::{_runtime_scope_component(user_id)}"
 
 
 def set_current_user_env_identity(
@@ -44,7 +62,7 @@ def set_current_user_env_identity(
         platform=platform_text,
         user_id=user_id_text,
         user_name=user_name_text,
-        user_key=user_key or make_user_env_key(platform_text, user_id_text, user_name_text),
+        user_key=make_user_env_key(platform_text, user_id_text, user_name_text),
     )
     return _CURRENT_USER_ENV_IDENTITY.set(identity)
 

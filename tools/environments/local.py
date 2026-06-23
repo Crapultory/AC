@@ -4,6 +4,7 @@ import logging
 import os
 import platform
 import re
+import shlex
 import shutil
 import signal
 import subprocess
@@ -305,8 +306,10 @@ _SANE_PATH = (
     "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"
 )
 
+_SHELL_EXPORT_NAME_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
 
-def _make_run_env(env: dict) -> dict:
+
+def _make_run_env(env: dict, *, include_user_env: bool = True) -> dict:
     """Build a run environment with a sane PATH and provider-var stripping."""
     try:
         from tools.env_passthrough import is_env_passthrough as _is_passthrough
@@ -354,12 +357,13 @@ def _make_run_env(env: dict) -> dict:
     except Exception:
         pass
 
-    try:
-        from tools.user_env_runtime import get_current_user_env_values
+    if include_user_env:
+        try:
+            from tools.user_env_runtime import get_current_user_env_values
 
-        run_env.update(get_current_user_env_values())
-    except Exception:
-        pass
+            run_env.update(get_current_user_env_values())
+        except Exception:
+            pass
 
     return run_env
 
@@ -459,7 +463,18 @@ class LocalEnvironment(BaseEnvironment):
         if cwd:
             cwd = os.path.expanduser(cwd)
         super().__init__(cwd=cwd or os.getcwd(), timeout=timeout, env=env)
+        self._suspend_user_env_injection = False
+        self._last_applied_userenv_keys: set[str] = set()
+        self._pending_userenv_keys: set[str] = set()
+        self._pending_userenv_cleanup_keys: set[str] = set()
         self.init_session()
+
+    def init_session(self):
+        self._suspend_user_env_injection = True
+        try:
+            super().init_session()
+        finally:
+            self._suspend_user_env_injection = False
 
     def get_temp_dir(self) -> str:
         """Return a shell-safe writable temp dir for local execution.
@@ -524,7 +539,10 @@ class LocalEnvironment(BaseEnvironment):
             if init_files:
                 cmd_string = _prepend_shell_init(cmd_string, init_files)
         args = [bash, "-l", "-c", cmd_string] if login else [bash, "-c", cmd_string]
-        run_env = _make_run_env(self.env)
+        run_env = _make_run_env(
+            self.env,
+            include_user_env=not self._suspend_user_env_injection,
+        )
 
         # Recover when the cwd has been deleted out from under us — usually by
         # a previous tool call that ran ``rm -rf`` on its own working dir
@@ -578,6 +596,43 @@ class LocalEnvironment(BaseEnvironment):
             _pipe_stdin(proc, stdin_data)
 
         return proc
+
+    def _post_snapshot_pre_command_lines(self) -> list[str]:
+        current_env = self._current_snapshot_sensitive_user_env()
+        current_keys = set(current_env)
+        stale_keys = self._last_applied_userenv_keys - current_keys
+
+        self._pending_userenv_keys = current_keys
+        self._pending_userenv_cleanup_keys = current_keys | stale_keys
+
+        lines: list[str] = []
+        for key in sorted(stale_keys):
+            lines.append(f"unset {key} 2>/dev/null || true")
+        for key in sorted(current_env):
+            lines.append(f"export {key}={shlex.quote(current_env[key])}")
+        return lines
+
+    def _pre_snapshot_persist_lines(self) -> list[str]:
+        return [
+            f"unset {key} 2>/dev/null || true"
+            for key in sorted(self._pending_userenv_cleanup_keys)
+        ]
+
+    def _after_execute(self, result: dict) -> None:
+        self._last_applied_userenv_keys = set(self._pending_userenv_keys)
+        self._pending_userenv_keys = set()
+        self._pending_userenv_cleanup_keys = set()
+
+    def _current_snapshot_sensitive_user_env(self) -> dict[str, str]:
+        try:
+            from tools.user_env_runtime import get_current_user_env_values
+        except Exception:
+            return {}
+        return {
+            key: value
+            for key, value in get_current_user_env_values().items()
+            if _SHELL_EXPORT_NAME_RE.match(key)
+        }
 
     def _kill_process(self, proc):
         """Kill the entire process group (all children)."""

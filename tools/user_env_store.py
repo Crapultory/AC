@@ -1,8 +1,9 @@
 """Persistent per-user environment-variable storage.
 
 Data lives in ``$HERMES_HOME/users.env.json`` and is keyed by
-``platform.user_id.user_name``. Components are normalized and percent-encoded
-so the key remains stable across turns and safe to persist in JSON.
+``platform.user_id``. ``user_name`` is persisted inside the payload as
+``CURRENT_USER_NAME`` so runtime env injection can still expose the current
+display name without using it as the storage partition key.
 """
 
 from __future__ import annotations
@@ -21,6 +22,7 @@ from utils import atomic_json_write
 logger = logging.getLogger(__name__)
 
 _STORE_LOCK = threading.RLock()
+CURRENT_USER_NAME_KEY = "CURRENT_USER_NAME"
 
 
 @dataclass(frozen=True)
@@ -43,8 +45,18 @@ def _normalize_identity_component(value: Any) -> str:
     return quote(text, safe=".-_~")
 
 
-def make_user_env_key(platform: Any, user_id: Any, user_name: Any) -> str:
-    """Build the canonical ``platform.user_id.user_name`` store key."""
+def make_user_env_key(platform: Any, user_id: Any, user_name: Any = None) -> str:
+    """Build the canonical ``platform.user_id`` store key."""
+    return ".".join(
+        (
+            _normalize_identity_component(platform),
+            _normalize_identity_component(user_id),
+        )
+    )
+
+
+def _make_legacy_user_env_key(platform: Any, user_id: Any, user_name: Any) -> str:
+    """Build the legacy ``platform.user_id.user_name`` store key."""
     return ".".join(
         (
             _normalize_identity_component(platform),
@@ -91,49 +103,60 @@ def _normalize_env_payload(raw_env: dict[str, Any] | None) -> dict[str, str]:
     }
 
 
+def _with_current_user_name(raw_env: dict[str, Any] | None, user_name: Any) -> dict[str, str]:
+    payload = _normalize_env_payload(raw_env)
+    payload[CURRENT_USER_NAME_KEY] = str(user_name or "").strip()
+    return payload
+
+
 def load_user_env(platform: Any, user_id: Any, user_name: Any) -> LoadedUserEnv:
-    """Load env for the current identity, migrating username-only drift in-place."""
+    """Load env for the current identity, migrating legacy username-keyed data."""
     platform_text = str(platform or "").strip()
     user_id_text = str(user_id or "").strip()
     user_name_text = str(user_name or "").strip()
-    user_key = make_user_env_key(platform_text, user_id_text, user_name_text)
-    prefix = (
-        f"{_normalize_identity_component(platform_text)}."
-        f"{_normalize_identity_component(user_id_text)}."
-    )
+    user_key = make_user_env_key(platform_text, user_id_text)
+    legacy_prefix = f"{user_key}."
 
     with _STORE_LOCK:
         payload = _read_store_unlocked()
         current_env = _normalize_env_payload(payload.get(user_key))
         if current_env:
-            return LoadedUserEnv(platform_text, user_id_text, user_name_text, user_key, current_env)
+            hydrated_env = _with_current_user_name(current_env, user_name_text)
+            if hydrated_env != current_env:
+                payload[user_key] = hydrated_env
+                _write_store_unlocked(payload)
+            return LoadedUserEnv(platform_text, user_id_text, user_name_text, user_key, hydrated_env)
 
-        # Username drift migration: only rename when exactly one matching
-        # ``platform.user_id.*`` record exists so we never merge ambiguous users.
-        matching_keys = [
+        legacy_matches = [
             existing_key
             for existing_key, existing_env in payload.items()
-            if existing_key.startswith(prefix) and isinstance(existing_env, dict)
+            if existing_key.startswith(legacy_prefix) and isinstance(existing_env, dict)
         ]
-        if len(matching_keys) == 1:
-            old_key = matching_keys[0]
-            migrated_env = _normalize_env_payload(payload.get(old_key))
+        if len(legacy_matches) == 1:
+            old_key = legacy_matches[0]
+            migrated_env = _with_current_user_name(payload.get(old_key), user_name_text)
             if old_key != user_key:
                 payload[user_key] = migrated_env
                 del payload[old_key]
                 _write_store_unlocked(payload)
             return LoadedUserEnv(platform_text, user_id_text, user_name_text, user_key, migrated_env)
-        if len(matching_keys) > 1:
+        if len(legacy_matches) > 1:
             logger.warning(
                 "Ambiguous user env migration for platform=%r user_id=%r user_name=%r; "
                 "candidates=%s",
                 platform_text,
                 user_id_text,
                 user_name_text,
-                matching_keys,
+                legacy_matches,
             )
 
-    return LoadedUserEnv(platform_text, user_id_text, user_name_text, user_key, {})
+    return LoadedUserEnv(
+        platform_text,
+        user_id_text,
+        user_name_text,
+        user_key,
+        _with_current_user_name({}, user_name_text),
+    )
 
 
 def list_user_env(platform: Any, user_id: Any, user_name: Any) -> LoadedUserEnv:
@@ -152,8 +175,10 @@ def set_user_env_var(platform: Any, user_id: Any, user_name: Any, key: Any, valu
     loaded = load_user_env(platform, user_id, user_name)
     with _STORE_LOCK:
         payload = _read_store_unlocked()
-        current_env = _normalize_env_payload(payload.get(loaded.user_key))
-        current_env[env_key] = str(value)
+        current_env = _with_current_user_name(payload.get(loaded.user_key), loaded.user_name)
+        current_env[env_key] = (
+            loaded.user_name if env_key == CURRENT_USER_NAME_KEY else str(value)
+        )
         payload[loaded.user_key] = current_env
         _write_store_unlocked(payload)
     return LoadedUserEnv(loaded.platform, loaded.user_id, loaded.user_name, loaded.user_key, current_env)
@@ -173,9 +198,10 @@ def delete_user_env_var(
     loaded = load_user_env(platform, user_id, user_name)
     with _STORE_LOCK:
         payload = _read_store_unlocked()
-        current_env = _normalize_env_payload(payload.get(loaded.user_key))
-        deleted = env_key in current_env
-        current_env.pop(env_key, None)
+        current_env = _with_current_user_name(payload.get(loaded.user_key), loaded.user_name)
+        deleted = env_key in current_env and env_key != CURRENT_USER_NAME_KEY
+        if env_key != CURRENT_USER_NAME_KEY:
+            current_env.pop(env_key, None)
         if current_env:
             payload[loaded.user_key] = current_env
         else:

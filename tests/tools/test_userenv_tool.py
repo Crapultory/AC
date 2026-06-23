@@ -16,7 +16,7 @@ def test_userenv_set_and_list_are_scoped_to_current_platform_user_and_mask_value
     from tools.user_env_runtime import reset_current_user_env_identity, set_current_user_env_identity
     from tools.userenv_tool import userenv_tool
 
-    token = set_current_user_env_identity("slack", "u123", "alice", "slack.u123.alice")
+    token = set_current_user_env_identity("slack", "u123", "alice", "slack.u123")
     try:
         set_result = json.loads(userenv_tool(action="set", key="GITHUB_TOKEN", value="ghp_secret_123"))
         list_result = json.loads(userenv_tool(action="list"))
@@ -28,17 +28,19 @@ def test_userenv_set_and_list_are_scoped_to_current_platform_user_and_mask_value
     assert set_result["key"] == "GITHUB_TOKEN"
     assert "ghp_secret_123" not in json.dumps(set_result, ensure_ascii=False)
 
-    assert list_result["user_key"] == "slack.u123.alice"
+    assert list_result["user_key"] == "slack.u123"
     assert list_result["count"] == 1
     assert list_result["variables"][0]["key"] == "GITHUB_TOKEN"
     assert "value" not in list_result["variables"][0]
     assert "ghp_secret_123" not in json.dumps(list_result, ensure_ascii=False)
 
     assert env["GITHUB_TOKEN"] == "ghp_secret_123"
+    assert env["CURRENT_USER_NAME"] == "alice"
     assert os.environ.get("GITHUB_TOKEN") != "ghp_secret_123"
 
     payload = _read_users_env(tmp_path)
-    assert payload["slack.u123.alice"]["GITHUB_TOKEN"] == "ghp_secret_123"
+    assert payload["slack.u123"]["GITHUB_TOKEN"] == "ghp_secret_123"
+    assert payload["slack.u123"]["CURRENT_USER_NAME"] == "alice"
 
 
 def test_userenv_persists_across_identity_rebinds(monkeypatch, tmp_path):
@@ -48,13 +50,13 @@ def test_userenv_persists_across_identity_rebinds(monkeypatch, tmp_path):
     from tools.user_env_runtime import reset_current_user_env_identity, set_current_user_env_identity
     from tools.userenv_tool import userenv_tool
 
-    first_token = set_current_user_env_identity("slack", "u123", "alice", "slack.u123.alice")
+    first_token = set_current_user_env_identity("slack", "u123", "alice", "slack.u123")
     try:
         json.loads(userenv_tool(action="set", key="API_TOKEN", value="persisted-secret"))
     finally:
         reset_current_user_env_identity(first_token)
 
-    second_token = set_current_user_env_identity("slack", "u123", "alice", "slack.u123.alice")
+    second_token = set_current_user_env_identity("slack", "u123", "alice", "slack.u123")
     try:
         list_result = json.loads(userenv_tool(action="list"))
         env = _make_run_env({"PATH": "/usr/bin:/bin"})
@@ -64,6 +66,7 @@ def test_userenv_persists_across_identity_rebinds(monkeypatch, tmp_path):
     assert list_result["count"] == 1
     assert list_result["variables"][0]["key"] == "API_TOKEN"
     assert env["API_TOKEN"] == "persisted-secret"
+    assert env["CURRENT_USER_NAME"] == "alice"
 
 
 def test_userenv_delete_removes_last_key_for_current_platform_user(monkeypatch, tmp_path):
@@ -72,7 +75,7 @@ def test_userenv_delete_removes_last_key_for_current_platform_user(monkeypatch, 
     from tools.user_env_runtime import reset_current_user_env_identity, set_current_user_env_identity
     from tools.userenv_tool import userenv_tool
 
-    token = set_current_user_env_identity("telegram", "u123", "alice", "telegram.u123.alice")
+    token = set_current_user_env_identity("telegram", "u123", "alice", "telegram.u123")
     try:
         json.loads(userenv_tool(action="set", key="API_TOKEN", value="secret"))
         delete_result = json.loads(userenv_tool(action="delete", key="API_TOKEN"))
@@ -81,7 +84,9 @@ def test_userenv_delete_removes_last_key_for_current_platform_user(monkeypatch, 
 
     assert delete_result["deleted"] is True
     assert delete_result["remaining"] == 0
-    assert _read_users_env(tmp_path) == {}
+    assert _read_users_env(tmp_path) == {
+        "telegram.u123": {"CURRENT_USER_NAME": "alice"}
+    }
 
 
 def test_userenv_requires_current_user_identity(monkeypatch, tmp_path):
@@ -99,7 +104,7 @@ def test_userenv_supports_empty_platform_and_user_name(monkeypatch, tmp_path):
     from tools.user_env_runtime import reset_current_user_env_identity, set_current_user_env_identity
     from tools.userenv_tool import userenv_tool
 
-    token = set_current_user_env_identity("", "u123", "", ".u123.")
+    token = set_current_user_env_identity("", "u123", "", ".u123")
     try:
         set_result = json.loads(userenv_tool(action="set", key="HAS SPACE", value="secret"))
         list_result = json.loads(userenv_tool(action="list"))
@@ -107,6 +112,6 @@ def test_userenv_supports_empty_platform_and_user_name(monkeypatch, tmp_path):
         reset_current_user_env_identity(token)
 
     assert set_result["updated"] is True
-    assert set_result["user_key"] == ".u123."
-    assert list_result["user_key"] == ".u123."
+    assert set_result["user_key"] == ".u123"
+    assert list_result["user_key"] == ".u123"
     assert list_result["variables"][0]["key"] == "HAS SPACE"

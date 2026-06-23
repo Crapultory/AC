@@ -4,11 +4,24 @@ from __future__ import annotations
 
 from tools.registry import registry, tool_error, tool_result
 from tools.user_env_runtime import get_current_user_env_identity
-from tools.user_env_store import delete_user_env_var, list_user_env, set_user_env_var
+from tools.user_env_store import (
+    CURRENT_USER_NAME_KEY,
+    delete_user_env_var,
+    list_user_env,
+    set_user_env_var,
+)
 
 
 def _mask_value(_: str) -> str:
     return "******"
+
+
+def _visible_env_items(env: dict[str, str]) -> list[tuple[str, str]]:
+    return [
+        (env_key, env_value)
+        for env_key, env_value in sorted(env.items())
+        if env_key != CURRENT_USER_NAME_KEY
+    ]
 
 
 def _require_identity():
@@ -29,7 +42,7 @@ def userenv_tool(action: str, key: str = "", value=None, **_kwargs) -> str:
         loaded = list_user_env(identity.platform, identity.user_id, identity.user_name)
         variables = [
             {"key": env_key, "masked_value": _mask_value(env_value)}
-            for env_key, env_value in sorted(loaded.env.items())
+            for env_key, env_value in _visible_env_items(loaded.env)
         ]
         return tool_result(
             action="list",
@@ -49,7 +62,7 @@ def userenv_tool(action: str, key: str = "", value=None, **_kwargs) -> str:
             user_key=loaded.user_key,
             key=str(key).strip(),
             masked_value=_mask_value(str(value)),
-            count=len(loaded.env),
+            count=len(_visible_env_items(loaded.env)),
         )
 
     if action_text == "delete":
@@ -62,7 +75,7 @@ def userenv_tool(action: str, key: str = "", value=None, **_kwargs) -> str:
             deleted=deleted,
             user_key=loaded.user_key,
             key=str(key).strip(),
-            remaining=len(loaded.env),
+            remaining=len(_visible_env_items(loaded.env)),
         )
 
     return tool_error("Unknown action. Use: set, list, delete")
