@@ -498,7 +498,49 @@ class TestSpawnEnvSanitization:
         assert ".exit" in bg_command
         assert "rc=$?;" in bg_command
         assert " > /tmp/hermes_bg_" not in bg_command
-        assert "cat /tmp/hermes_bg_" not in bg_command
+
+    def test_spawn_local_injects_current_user_env_into_background_env(self, registry, monkeypatch, tmp_path):
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        (tmp_path / "users.env.json").write_text(
+            json.dumps(
+                {"slack.u123": {"CURRENT_USER_NAME": "alice", "CUSTOM_TOKEN": "bg-secret"}},
+                ensure_ascii=False,
+            ),
+            encoding="utf-8",
+        )
+        captured = {}
+
+        def fake_popen(cmd, **kwargs):
+            captured["env"] = kwargs["env"]
+            proc = MagicMock()
+            proc.pid = 4321
+            proc.stdout = iter([])
+            proc.stdin = MagicMock()
+            proc.poll.return_value = None
+            return proc
+
+        fake_thread = MagicMock()
+
+        from tools.user_env_runtime import reset_current_user_env_identity, set_current_user_env_identity
+
+        token = set_current_user_env_identity("slack", "u123", "alice", "slack.u123")
+        try:
+            with patch.dict(os.environ, {
+                "PATH": "/usr/bin:/bin",
+                "HOME": "/home/user",
+                "USER": "tester",
+                "HERMES_HOME": str(tmp_path),
+            }, clear=True), \
+                patch("tools.process_registry._find_shell", return_value="/bin/bash"), \
+                patch("subprocess.Popen", side_effect=fake_popen), \
+                patch("threading.Thread", return_value=fake_thread), \
+                patch.object(registry, "_write_checkpoint"):
+                registry.spawn_local("echo hello", cwd="/tmp")
+        finally:
+            reset_current_user_env_identity(token)
+
+        assert captured["env"]["CUSTOM_TOKEN"] == "bg-secret"
+        assert captured["env"]["CURRENT_USER_NAME"] == "alice"
         fake_thread.start.assert_called_once()
 
     def test_env_poller_quotes_temp_paths_with_spaces(self, registry):

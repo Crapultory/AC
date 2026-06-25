@@ -50,6 +50,8 @@ _HERMES_CORE_TOOLS = [
     "todo", "memory",
     # Session history search
     "session_search",
+    # User-scoped runtime env management
+    "userenv",
     # Clarifying questions
     "clarify",
     # Code execution + delegation
@@ -225,6 +227,12 @@ TOOLSETS = {
     "session_search": {
         "description": "Search and recall past conversations with summarization",
         "tools": ["session_search"],
+        "includes": []
+    },
+
+    "userenv": {
+        "description": "Manage per-platform runtime env vars for the current user",
+        "tools": ["userenv"],
         "includes": []
     },
     

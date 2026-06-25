@@ -993,6 +993,22 @@ def _resolve_container_task_id(task_id: Optional[str]) -> str:
     """
     if task_id and task_id in _task_env_overrides:
         return task_id
+
+    try:
+        env_type = (_get_env_config().get("env_type") or "").strip().lower()
+    except Exception:
+        env_type = (os.getenv("TERMINAL_ENV", "local") or "local").strip().lower()
+
+    if env_type == "local":
+        try:
+            from tools.user_env_runtime import get_current_user_env_identity
+
+            identity = get_current_user_env_identity()
+            if identity is not None and identity.user_id:
+                return identity.runtime_scope_key
+        except Exception:
+            pass
+
     return "default"
 
 
