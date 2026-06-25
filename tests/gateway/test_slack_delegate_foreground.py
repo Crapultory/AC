@@ -242,6 +242,32 @@ class TestSlackDelegateForegroundRouteState:
         input_adapter.exit_foreground()
 
     @pytest.mark.asyncio
+    async def test_delegate_ai_delta_output_is_filtered_from_slack_send(self, adapter):
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="C456",
+            thread_ts="1717171717.000301",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        runtime["output"].emit(
+            "delegate",
+            "ai_delta",
+            "partial chunk",
+            session_id="delegate-session-delta",
+        )
+        await asyncio.sleep(0)
+
+        route = adapter._get_delegate_route(
+            channel_id="C456",
+            thread_ts="1717171717.000301",
+        )
+        assert route is not None
+        assert route.session_id == "delegate-session-delta"
+        adapter.send.assert_not_called()
+        input_adapter.exit_foreground()
+
+    @pytest.mark.asyncio
     async def test_delegate_tool_call_output_uses_tool_progress_style(self, adapter):
         runtime = adapter.build_delegate_foreground_runtime(
             channel_id="C456",

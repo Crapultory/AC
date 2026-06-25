@@ -457,11 +457,13 @@ def _exit_delegate_foreground(input_adapter) -> None:
 def _format_aegis_source_header(parent_agent) -> str:
     raw_user_id = getattr(parent_agent, "_user_id", "")
     raw_user_name = getattr(parent_agent, "_user_name", "")
+    raw_platform = getattr(parent_agent, "platform", "")
     user_id = raw_user_id.strip() if isinstance(raw_user_id, str) else ""
     user_name = raw_user_name.strip() if isinstance(raw_user_name, str) else ""
+    platform = raw_platform.strip() if isinstance(raw_platform, str) else ""
     if not user_id and not user_name:
         return ""
-    source_data = {"platform": "aegis"}
+    source_data = {"platform": platform}
     if user_id:
         source_data["uid"] = user_id
     if user_name:

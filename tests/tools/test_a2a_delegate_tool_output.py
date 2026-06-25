@@ -584,33 +584,37 @@ def test_a2a_mode_cancelled_task_is_reported_as_interrupted_and_clears_parent_ha
 
 
 @pytest.mark.parametrize(
-    ("user_id", "user_name", "expected_source"),
+    ("platform", "user_id", "user_name", "expected_source"),
     [
         (
+            "aegis",
             "user-42",
             "alice",
             '<source>{"platform":"aegis","uid":"user-42","uname":"alice"}</source>\n\n',
         ),
         (
+            "cli",
             "user-42",
             "",
-            '<source>{"platform":"aegis","uid":"user-42"}</source>\n\n',
+            '<source>{"platform":"cli","uid":"user-42"}</source>\n\n',
         ),
         (
+            None,
             "",
             "alice",
-            '<source>{"platform":"aegis","uname":"alice"}</source>\n\n',
+            '<source>{"platform":"","uname":"alice"}</source>\n\n',
         ),
     ],
 )
 def test_a2a_mode_prefixes_aegis_source_identity_on_forwarded_messages(
     monkeypatch,
+    platform,
     user_id,
     user_name,
     expected_source,
 ):
     parent = _make_parent()
-    parent.platform = "cli"
+    parent.platform = platform
     parent._user_id = user_id
     parent._user_name = user_name
     A2A_REGISTRY["remote"] = {

@@ -281,6 +281,8 @@ class _SlackDelegateOutputAdapter:
                     metadata=metadata,
                 )
             return
+        if source == "delegate" and event_type == "ai_delta":
+            return
         if source == "delegate" and event_type == "tool_call":
             rendered = self._format_delegate_tool_call_content(content)
             if rendered:
