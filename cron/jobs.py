@@ -14,6 +14,7 @@ import threading
 import os
 import re
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 from pathlib import Path
 from hermes_constants import get_hermes_home
@@ -48,8 +49,80 @@ ONESHOT_GRACE_SECONDS = 120
 # Fields on a cron job that must never change after creation. ``id`` is used
 # as a filesystem path component under ``OUTPUT_DIR``; allowing it to be
 # updated lets an unsafe value (``../escape``, absolute path, nested) leak
-# into output writes/deletes.
-_IMMUTABLE_JOB_FIELDS = frozenset({"id"})
+# into output writes/deletes. ``identify`` is the job ownership record and
+# must stay stable after creation.
+_IMMUTABLE_JOB_FIELDS = frozenset({"id", "identify"})
+
+
+@dataclass(frozen=True)
+class CronJobIdentity:
+    platform: str
+    user_id: str
+    user_name: str
+
+
+def _clean_identity_component(value: Any) -> str:
+    return str(value or "").strip()
+
+
+def build_job_identify(platform: Any, user_id: Any, user_name: Any) -> Dict[str, str] | None:
+    """Build the persisted cron job identity object."""
+    platform_text = _clean_identity_component(platform)
+    user_id_text = _clean_identity_component(user_id)
+    user_name_text = _clean_identity_component(user_name)
+    if not platform_text or not user_id_text:
+        return None
+    return {
+        "platform": platform_text,
+        "user_id": user_id_text,
+        "user_name": user_name_text,
+    }
+
+
+def parse_job_identify(raw: Any) -> CronJobIdentity | None:
+    """Parse and validate a persisted cron job identity object."""
+    if not isinstance(raw, dict):
+        return None
+    if not all(key in raw for key in ("platform", "user_id", "user_name")):
+        return None
+    if not all(isinstance(raw.get(key), str) for key in ("platform", "user_id", "user_name")):
+        return None
+    platform_text = _clean_identity_component(raw.get("platform"))
+    user_id_text = _clean_identity_component(raw.get("user_id"))
+    user_name_text = _clean_identity_component(raw.get("user_name"))
+    if not platform_text or not user_id_text:
+        return None
+    return CronJobIdentity(
+        platform=platform_text,
+        user_id=user_id_text,
+        user_name=user_name_text,
+    )
+
+
+def job_visible_to_identity(job: Dict[str, Any], current_identity: Any) -> bool:
+    """Return True when *job* is visible to *current_identity*.
+
+    Public jobs (no ``identify``) are always visible. Malformed ``identify``
+    values are treated as not visible to avoid accidentally exposing a
+    misconfigured private job.
+    """
+    identify_raw = job.get("identify")
+    if identify_raw is None:
+        return True
+
+    job_identity = parse_job_identify(identify_raw)
+    if job_identity is None or current_identity is None:
+        return False
+
+    current_platform = _clean_identity_component(getattr(current_identity, "platform", ""))
+    current_user_id = _clean_identity_component(getattr(current_identity, "user_id", ""))
+    if not current_platform or not current_user_id:
+        return False
+
+    return (
+        job_identity.platform == current_platform
+        and job_identity.user_id == current_user_id
+    )
 
 
 def _job_output_dir(job_id: str) -> Path:
@@ -152,6 +225,14 @@ def _normalize_job_record(job: Dict[str, Any]) -> Dict[str, Any]:
 
     profile = _coerce_job_text(normalized.get("profile")).strip()
     normalized["profile"] = profile or None
+
+    identify = normalized.get("identify")
+    if identify is not None and parse_job_identify(identify) is not None:
+        normalized["identify"] = build_job_identify(
+            identify.get("platform"),
+            identify.get("user_id"),
+            identify.get("user_name"),
+        )
 
     return normalized
 
@@ -546,6 +627,7 @@ def create_job(
     workdir: Optional[str] = None,
     profile: Optional[str] = None,
     no_agent: bool = False,
+    identify: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Create a new cron job.
@@ -595,6 +677,9 @@ def create_job(
                 and deliver its stdout directly. Empty stdout = silent (no
                 delivery). Requires ``script`` to be set. Ideal for classic
                 watchdogs and periodic alerts that don't need LLM reasoning.
+        identify: Optional persisted ownership identity. When present, only the
+                creating user (matched by ``platform + user_id``) should see
+                the job through user-scoped tool flows.
 
     Returns:
         The created job dict
@@ -630,6 +715,15 @@ def create_job(
     normalized_workdir = _normalize_workdir(workdir)
     normalized_profile = _normalize_profile(profile)
     normalized_no_agent = bool(no_agent)
+    normalized_identify = None
+    if identify is not None:
+        normalized_identify = build_job_identify(
+            identify.get("platform"),
+            identify.get("user_id"),
+            identify.get("user_name"),
+        )
+        if normalized_identify is None:
+            raise ValueError("identify must include non-empty platform and user_id")
 
     # no_agent jobs are meaningless without a script — the script IS the job.
     # Surface this as a clear ValueError at create time so bad configs never
@@ -681,6 +775,7 @@ def create_job(
         # Delivery configuration
         "deliver": deliver,
         "origin": origin,  # Tracks where job was created for "origin" delivery
+        "identify": normalized_identify,
         "enabled_toolsets": normalized_toolsets,
         "workdir": normalized_workdir,
         "profile": normalized_profile,

@@ -302,6 +302,176 @@ class TestUnifiedCronjobTool:
         assert updated["job"]["provider"] == "openrouter"
         assert updated["job"]["base_url"] is None
 
+    def test_create_persists_current_user_identity(self):
+        from cron.jobs import get_job
+        from tools.user_env_runtime import (
+            reset_current_user_env_identity,
+            set_current_user_env_identity,
+        )
+
+        token = set_current_user_env_identity("slack", "u1", "alice")
+        try:
+            created = json.loads(
+                cronjob(
+                    action="create",
+                    prompt="Check server status",
+                    schedule="every 1h",
+                    name="Server Check",
+                )
+            )
+        finally:
+            reset_current_user_env_identity(token)
+
+        stored = get_job(created["job_id"])
+        assert stored is not None
+        assert stored["identify"] == {
+            "platform": "slack",
+            "user_id": "u1",
+            "user_name": "alice",
+        }
+
+    def test_create_without_user_identity_keeps_identify_empty(self):
+        from cron.jobs import get_job
+
+        created = json.loads(
+            cronjob(
+                action="create",
+                prompt="Check server status",
+                schedule="every 1h",
+                name="Server Check",
+            )
+        )
+
+        stored = get_job(created["job_id"])
+        assert stored is not None
+        assert stored.get("identify") is None
+
+    def test_list_only_shows_owned_and_public_jobs(self):
+        from cron.jobs import create_job
+        from tools.user_env_runtime import (
+            reset_current_user_env_identity,
+            set_current_user_env_identity,
+        )
+
+        create_job(prompt="public", schedule="every 1h", name="Public")
+        create_job(
+            prompt="alice-only",
+            schedule="every 1h",
+            name="Alice Only",
+            identify={"platform": "slack", "user_id": "u1", "user_name": "alice"},
+        )
+        create_job(
+            prompt="bob-only",
+            schedule="every 1h",
+            name="Bob Only",
+            identify={"platform": "slack", "user_id": "u2", "user_name": "bob"},
+        )
+
+        token = set_current_user_env_identity("slack", "u1", "alice")
+        try:
+            listing = json.loads(cronjob(action="list"))
+        finally:
+            reset_current_user_env_identity(token)
+
+        assert listing["success"] is True
+        assert [job["name"] for job in listing["jobs"]] == ["Public", "Alice Only"]
+
+    def test_list_without_identity_only_shows_public_jobs(self):
+        from cron.jobs import create_job
+
+        create_job(prompt="public", schedule="every 1h", name="Public")
+        create_job(
+            prompt="alice-only",
+            schedule="every 1h",
+            name="Alice Only",
+            identify={"platform": "slack", "user_id": "u1", "user_name": "alice"},
+        )
+
+        listing = json.loads(cronjob(action="list"))
+
+        assert listing["success"] is True
+        assert [job["name"] for job in listing["jobs"]] == ["Public"]
+
+    def test_cross_user_operation_returns_not_found(self):
+        from tools.user_env_runtime import (
+            reset_current_user_env_identity,
+            set_current_user_env_identity,
+        )
+
+        owner = set_current_user_env_identity("slack", "u1", "alice")
+        try:
+            created = json.loads(
+                cronjob(
+                    action="create",
+                    prompt="Check server status",
+                    schedule="every 1h",
+                    name="Alice Only",
+                )
+            )
+        finally:
+            reset_current_user_env_identity(owner)
+
+        other = set_current_user_env_identity("slack", "u2", "bob")
+        try:
+            paused = json.loads(cronjob(action="pause", job_id=created["job_id"]))
+        finally:
+            reset_current_user_env_identity(other)
+
+        assert paused["success"] is False
+        assert "not found" in paused["error"].lower()
+
+    def test_operation_without_identity_cannot_access_identified_job(self):
+        from cron.jobs import create_job
+
+        private_job = create_job(
+            prompt="alice-only",
+            schedule="every 1h",
+            name="Alice Only",
+            identify={"platform": "slack", "user_id": "u1", "user_name": "alice"},
+        )
+
+        paused = json.loads(cronjob(action="pause", job_id=private_job["id"]))
+
+        assert paused["success"] is False
+        assert "not found" in paused["error"].lower()
+
+    def test_context_from_must_reference_visible_jobs(self):
+        from cron.jobs import create_job
+        from tools.user_env_runtime import (
+            reset_current_user_env_identity,
+            set_current_user_env_identity,
+        )
+
+        create_job(
+            prompt="bob-only",
+            schedule="every 1h",
+            name="Bob Only",
+            identify={"platform": "slack", "user_id": "u2", "user_name": "bob"},
+        )
+
+        token = set_current_user_env_identity("slack", "u1", "alice")
+        try:
+            created = json.loads(
+                cronjob(
+                    action="create",
+                    prompt="Check server status",
+                    schedule="every 1h",
+                    name="Alice Job",
+                )
+            )
+            updated = json.loads(
+                cronjob(
+                    action="update",
+                    job_id=created["job_id"],
+                    context_from=["Bob Only"],
+                )
+            )
+        finally:
+            reset_current_user_env_identity(token)
+
+        assert updated["success"] is False
+        assert "not found" in updated["error"].lower()
+
     def test_create_skill_backed_job(self):
         result = json.loads(
             cronjob(

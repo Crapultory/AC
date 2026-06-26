@@ -21,7 +21,9 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 
 from cron.jobs import (
     AmbiguousJobReference,
+    build_job_identify,
     create_job,
+    job_visible_to_identity,
     list_jobs,
     parse_schedule,
     pause_job,
@@ -244,6 +246,47 @@ def _origin_from_env() -> Optional[Dict[str, str]]:
             "thread_id": thread_id,
         }
     return None
+
+
+def _current_cron_user_identity():
+    try:
+        from tools.user_env_runtime import get_current_user_env_identity
+    except Exception:
+        return None
+    return get_current_user_env_identity()
+
+
+def _current_job_identify() -> Optional[Dict[str, str]]:
+    identity = _current_cron_user_identity()
+    if identity is None:
+        return None
+    return build_job_identify(identity.platform, identity.user_id, identity.user_name)
+
+
+def _visible_cron_jobs(*, include_disabled: bool) -> List[Dict[str, Any]]:
+    jobs = list_jobs(include_disabled=include_disabled)
+    identity = _current_cron_user_identity()
+    if identity is None:
+        return [job for job in jobs if job.get("identify") is None]
+    return [job for job in jobs if job_visible_to_identity(job, identity)]
+
+
+def _resolve_visible_job_ref(ref: str, *, include_disabled: bool = True) -> Optional[Dict[str, Any]]:
+    if not ref:
+        return None
+
+    visible_jobs = _visible_cron_jobs(include_disabled=include_disabled)
+    for job in visible_jobs:
+        if job.get("id") == ref:
+            return job
+
+    ref_lower = ref.lower()
+    matches = [job for job in visible_jobs if (job.get("name") or "").lower() == ref_lower]
+    if not matches:
+        return None
+    if len(matches) > 1:
+        raise AmbiguousJobReference(ref, matches)
+    return matches[0]
 
 
 def _repeat_display(job: Dict[str, Any]) -> str:
@@ -477,10 +520,9 @@ def cronjob(
 
             # Validate context_from references existing jobs
             if context_from:
-                from cron.jobs import get_job as _get_job
                 refs = [context_from] if isinstance(context_from, str) else context_from
                 for ref_id in refs:
-                    if not _get_job(ref_id):
+                    if not _resolve_visible_job_ref(ref_id, include_disabled=True):
                         return tool_error(
                             f"context_from job '{ref_id}' not found. "
                             "Use cronjob(action='list') to see available jobs.",
@@ -494,6 +536,7 @@ def cronjob(
                 repeat=repeat,
                 deliver=_normalize_deliver_param(deliver),
                 origin=_origin_from_env(),
+                identify=_current_job_identify(),
                 skills=canonical_skills,
                 model=_normalize_optional_job_value(model),
                 provider=_normalize_optional_job_value(provider),
@@ -523,14 +566,14 @@ def cronjob(
             )
 
         if normalized == "list":
-            jobs = [_format_job(job) for job in list_jobs(include_disabled=include_disabled)]
+            jobs = [_format_job(job) for job in _visible_cron_jobs(include_disabled=include_disabled)]
             return json.dumps({"success": True, "count": len(jobs), "jobs": jobs}, indent=2)
 
         if not job_id:
             return tool_error(f"job_id is required for action '{normalized}'", success=False)
 
         try:
-            job = resolve_job_ref(job_id)
+            job = _resolve_visible_job_ref(job_id, include_disabled=True)
         except AmbiguousJobReference as exc:
             return json.dumps(
                 {
@@ -622,9 +665,8 @@ def cronjob(
                 else:
                     refs = [str(j).strip() for j in context_from if str(j).strip()]
                 if refs:
-                    from cron.jobs import get_job as _get_job
                     for ref_id in refs:
-                        if not _get_job(ref_id):
+                        if not _resolve_visible_job_ref(ref_id, include_disabled=True):
                             return tool_error(
                                 f"context_from job '{ref_id}' not found. "
                                 "Use cronjob(action='list') to see available jobs.",
