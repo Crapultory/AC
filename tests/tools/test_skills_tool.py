@@ -1105,21 +1105,7 @@ Do the legacy thing.
 
 
 class TestSkillViewCollisionDetection:
-    """Regression tests for skill_view name collision handling.
-
-    When a skill name resolves to multiple paths across the local skills
-    dir and external_dirs, skill_view must refuse to guess. Silent
-    shadowing — where ``/skills`` shows the local version but
-    ``skill_view`` loads the external one — is the bug class this guards
-    against. Reproduces with `skills.external_dirs` registered in
-    config.yaml and a same-name skill nested under a category locally.
-
-    Adapted from a regression suite originally proposed by @polkn in PR
-    #6136 (which used local-first precedence). The collision-refusal
-    behavior preserves the same protection without silently picking a
-    side, and gives the user an actionable hint (use the categorized
-    path) to recover.
-    """
+    """Regression tests for skill_view same-name collision handling."""
 
     def _patch_dirs(self, local_dir, external_dirs):
         """Patch SKILLS_DIR (module-level) and get_external_skills_dirs at source."""
@@ -1132,8 +1118,7 @@ class TestSkillViewCollisionDetection:
         )
 
     def test_nested_local_collides_with_top_level_external(self, tmp_path):
-        """The original bug scenario: nested local + top-level external,
-        same name. Now refuses with both paths surfaced."""
+        """Bare-name collisions return the last collected match."""
         local_dir = tmp_path / "local"
         external_dir = tmp_path / "external"
         local_dir.mkdir()
@@ -1152,18 +1137,11 @@ class TestSkillViewCollisionDetection:
             raw = skill_view("explore-codebase")
 
         result = json.loads(raw)
-        assert result["success"] is False
-        assert "Ambiguous skill name 'explore-codebase'" in result["error"]
-        assert "matches" in result
-        assert len(result["matches"]) == 2
-        # Both paths surfaced
-        assert any("foundations/runtime" in p for p in result["matches"])
-        assert any("external" in p for p in result["matches"])
-        assert "hint" in result
+        assert result["success"] is True
+        assert "EXTERNAL VERSION" in result["content"]
 
     def test_top_level_local_collides_with_external(self, tmp_path):
-        """Top-level local + top-level external with the same name also
-        refuses — same-name shadowing is ambiguous regardless of nesting."""
+        """Top-level local + external collisions also pick the last match."""
         local_dir = tmp_path / "local"
         external_dir = tmp_path / "external"
         local_dir.mkdir()
@@ -1177,9 +1155,8 @@ class TestSkillViewCollisionDetection:
             raw = skill_view("shared-name")
 
         result = json.loads(raw)
-        assert result["success"] is False
-        assert "Ambiguous" in result["error"]
-        assert len(result["matches"]) == 2
+        assert result["success"] is True
+        assert "EXTERNAL VERSION" in result["content"]
 
     def test_collision_resolvable_via_categorized_path(self, tmp_path):
         """User can recover from a collision by passing the full
@@ -1224,8 +1201,7 @@ class TestSkillViewCollisionDetection:
         assert "EXTERNAL BODY" in result["content"]
 
     def test_two_externals_same_name_also_refuse(self, tmp_path):
-        """Collision detection is symmetric — two external dirs with
-        same-name skills also trigger the refusal."""
+        """Two external dirs with the same name resolve to the last match."""
         local_dir = tmp_path / "local"
         ext_a = tmp_path / "ext_a"
         ext_b = tmp_path / "ext_b"
@@ -1241,9 +1217,8 @@ class TestSkillViewCollisionDetection:
             raw = skill_view("pr")
 
         result = json.loads(raw)
-        assert result["success"] is False
-        assert "Ambiguous" in result["error"]
-        assert len(result["matches"]) == 2
+        assert result["success"] is True
+        assert "EXT_B VERSION" in result["content"]
 
     def test_local_only_skill_loads_normally(self, tmp_path):
         """Sanity: a single local skill (no external collision) loads

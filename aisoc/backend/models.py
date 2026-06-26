@@ -51,6 +51,10 @@ class CronJobUpdate(BaseModel):
     updates: dict
 
 
+class CronJobRawUpdate(BaseModel):
+    job: dict
+
+
 class SkillToggleRequest(BaseModel):
     name: str
     enabled: bool

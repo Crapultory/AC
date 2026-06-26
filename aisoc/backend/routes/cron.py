@@ -6,7 +6,7 @@ import math
 
 from fastapi import APIRouter, HTTPException
 
-from aisoc.backend.models import CronJobCreate, CronJobUpdate
+from aisoc.backend.models import CronJobCreate, CronJobRawUpdate, CronJobUpdate
 from aisoc.backend.services import cron_service
 
 
@@ -87,6 +87,13 @@ def build_cron_router() -> APIRouter:
     @router.put("/jobs/{job_id}")
     async def update_job(job_id: str, body: CronJobUpdate, profile: str | None = None):
         job = cron_service.update_job(job_id, body.updates, profile=_job_profile(profile))
+        if not job:
+            raise HTTPException(status_code=404, detail="Job not found")
+        return job
+
+    @router.put("/jobs/{job_id}/raw")
+    async def update_job_raw(job_id: str, body: CronJobRawUpdate, profile: str | None = None):
+        job = cron_service.update_job_raw(job_id, body.job, profile=_job_profile(profile))
         if not job:
             raise HTTPException(status_code=404, detail="Job not found")
         return job

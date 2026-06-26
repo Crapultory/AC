@@ -11,6 +11,7 @@ from hermes_state import SessionDB
 
 
 _CRON_PROFILE_LOCK = threading.RLock()
+_RAW_DETAIL_RESPONSE_ONLY_FIELDS = frozenset({"profile_name", "hermes_home", "is_default_profile"})
 
 
 def _profile_to_dict(profile_obj: Any) -> dict[str, Any]:
@@ -184,6 +185,60 @@ def update_job(job_id: str, updates: dict, profile: str | None = None):
     if not selected:
         return None
     return _call_cron_for_profile(selected, "update_job", job_id, updates)
+
+
+def _normalize_raw_identify(value: Any) -> dict[str, str] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise HTTPException(status_code=400, detail="identify must be an object or null")
+
+    from cron.jobs import build_job_identify, parse_job_identify
+
+    normalized = build_job_identify(
+        value.get("platform"),
+        value.get("user_id"),
+        value.get("user_name"),
+    )
+    if normalized is None or parse_job_identify(normalized) is None:
+        raise HTTPException(
+            status_code=400,
+            detail="identify must include string platform, user_id, and user_name fields",
+        )
+    return normalized
+
+
+def update_job_raw(job_id: str, job: dict[str, Any], profile: str | None = None):
+    if not isinstance(job, dict):
+        raise HTTPException(status_code=400, detail="job must be a JSON object")
+
+    current = get_job(job_id, profile=profile)
+    if not current:
+        return None
+
+    provided_id = job.get("id")
+    if provided_id is not None and str(provided_id) != str(current.get("id") or job_id):
+        raise HTTPException(status_code=400, detail="Cron job id cannot be changed via raw update")
+
+    sanitized = dict(job)
+    for field in _RAW_DETAIL_RESPONSE_ONLY_FIELDS:
+        sanitized.pop(field, None)
+
+    current_profile = current.get("profile")
+    if "profile" in sanitized and sanitized.get("profile") != current_profile:
+        raise HTTPException(status_code=400, detail="Cron job profile cannot be changed via raw update")
+
+    if "identify" in sanitized:
+        sanitized["identify"] = _normalize_raw_identify(sanitized.get("identify"))
+
+    current_clean = {k: v for k, v in current.items() if k not in _RAW_DETAIL_RESPONSE_ONLY_FIELDS}
+    updates = {
+        key: value
+        for key, value in sanitized.items()
+        if current_clean.get(key) != value or key not in current_clean
+    }
+
+    return update_job(job_id, updates, profile=profile)
 
 
 def pause_job(job_id: str, profile: str | None = None):

@@ -968,29 +968,12 @@ def skill_view(
         if len(candidates) > 1:
             paths = [str(smd) for _, smd in candidates]
             logging.getLogger(__name__).warning(
-                "Skill name collision for '%s': %d candidates — %s",
+                "Skill name collision for '%s': %d candidates — selecting last match: %s",
                 name, len(candidates), "; ".join(paths),
-            )
-            return json.dumps(
-                {
-                    "success": False,
-                    "error": (
-                        f"Ambiguous skill name '{name}': {len(candidates)} skills "
-                        "match across your local skills dir and external_dirs. "
-                        "Refusing to guess — load one explicitly by its categorized path."
-                    ),
-                    "matches": paths,
-                    "hint": (
-                        "Pass the full relative path instead of the bare name "
-                        "(e.g., 'category/skill-name'), or rename one of the "
-                        "colliding skills so each name is unique."
-                    ),
-                },
-                ensure_ascii=False,
             )
 
         if candidates:
-            skill_dir, skill_md = candidates[0]
+            skill_dir, skill_md = candidates[-1]
 
         if not skill_md or not skill_md.exists():
             available = [s["name"] for s in _sort_skills(_find_all_skills())[:20]]

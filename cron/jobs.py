@@ -49,9 +49,8 @@ ONESHOT_GRACE_SECONDS = 120
 # Fields on a cron job that must never change after creation. ``id`` is used
 # as a filesystem path component under ``OUTPUT_DIR``; allowing it to be
 # updated lets an unsafe value (``../escape``, absolute path, nested) leak
-# into output writes/deletes. ``identify`` is the job ownership record and
-# must stay stable after creation.
-_IMMUTABLE_JOB_FIELDS = frozenset({"id", "identify"})
+# into output writes/deletes.
+_IMMUTABLE_JOB_FIELDS = frozenset({"id"})
 
 
 @dataclass(frozen=True)
@@ -876,6 +875,22 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
                 updates["profile"] = None
             else:
                 updates["profile"] = _normalize_profile(_profile)
+
+        if "identify" in updates:
+            _identify = updates["identify"]
+            if _identify is None:
+                updates["identify"] = None
+            elif isinstance(_identify, dict):
+                normalized_identify = build_job_identify(
+                    _identify.get("platform"),
+                    _identify.get("user_id"),
+                    _identify.get("user_name"),
+                )
+                if normalized_identify is None:
+                    raise ValueError("identify must include non-empty platform and user_id")
+                updates["identify"] = normalized_identify
+            else:
+                raise ValueError("identify must be an object or null")
 
         updated = _apply_skill_fields({**job, **updates})
         schedule_changed = "schedule" in updates
