@@ -1614,7 +1614,11 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
     """
     from tools.user_env_runtime import bind_current_user_env_identity
 
-    with bind_current_user_env_identity(agent.platform, agent._user_id, agent._user_name):
+    with bind_current_user_env_identity(
+        getattr(agent, "_user_env_platform", None) or agent.platform,
+        agent._user_id,
+        agent._user_name,
+    ):
         # Check plugin hooks for a block directive before executing anything.
         block_message: Optional[str] = None
         if not pre_tool_block_checked:

@@ -5,6 +5,7 @@ import pytest
 from datetime import datetime, timedelta, timezone
 
 from cron.jobs import (
+    build_job_identify,
     parse_duration,
     parse_schedule,
     compute_next_run,
@@ -20,6 +21,8 @@ from cron.jobs import (
     mark_job_run,
     advance_next_run,
     get_due_jobs,
+    job_visible_to_identity,
+    parse_job_identify,
     save_job_output,
 )
 
@@ -268,6 +271,20 @@ class TestJobCRUD:
         job = create_job(prompt="Test", schedule="30m")
         assert job["deliver"] == "local"
 
+    def test_create_job_stores_identify_object(self, tmp_cron_dir):
+        job = create_job(
+            prompt="Test",
+            schedule="30m",
+            identify={"platform": "slack", "user_id": "u1", "user_name": "alice"},
+        )
+        fetched = get_job(job["id"])
+        assert fetched is not None
+        assert fetched["identify"] == {
+            "platform": "slack",
+            "user_id": "u1",
+            "user_name": "alice",
+        }
+
 
 class TestUpdateJob:
     def test_update_name(self, tmp_cron_dir):
@@ -324,6 +341,55 @@ class TestUpdateJob:
         # Original job still resolvable, no rename happened.
         assert get_job(job["id"]) is not None
         assert get_job("../escape") is None
+
+    def test_update_rejects_identify_change(self, tmp_cron_dir):
+        job = create_job(prompt="Original", schedule="every 1h")
+
+        with pytest.raises(ValueError, match="identify"):
+            update_job(
+                job["id"],
+                {"identify": {"platform": "slack", "user_id": "u1", "user_name": "alice"}},
+            )
+
+
+class TestJobIdentityHelpers:
+    def test_build_job_identify_returns_normalized_object(self):
+        assert build_job_identify(" slack ", " u1 ", " alice ") == {
+            "platform": "slack",
+            "user_id": "u1",
+            "user_name": "alice",
+        }
+
+    def test_parse_job_identify_rejects_malformed_objects(self):
+        assert parse_job_identify(None) is None
+        assert parse_job_identify("slack/u1/alice") is None
+        assert parse_job_identify({"platform": "slack"}) is None
+        assert parse_job_identify({"platform": "slack", "user_id": 1, "user_name": "alice"}) is None
+
+    def test_job_visible_to_identity_allows_public_and_same_platform_user_id(self):
+        identity = parse_job_identify(
+            {"platform": "slack", "user_id": "u1", "user_name": "alice-renamed"}
+        )
+        assert identity is not None
+
+        public_job = {"id": "public", "identify": None}
+        owned_job = {
+            "id": "owned",
+            "identify": {"platform": "slack", "user_id": "u1", "user_name": "alice"},
+        }
+        foreign_job = {
+            "id": "foreign",
+            "identify": {"platform": "slack", "user_id": "u2", "user_name": "bob"},
+        }
+        malformed_job = {
+            "id": "malformed",
+            "identify": {"platform": "slack", "user_id": "u1"},
+        }
+
+        assert job_visible_to_identity(public_job, identity) is True
+        assert job_visible_to_identity(owned_job, identity) is True
+        assert job_visible_to_identity(foreign_job, identity) is False
+        assert job_visible_to_identity(malformed_job, identity) is False
 
 
 class TestPauseResumeJob:

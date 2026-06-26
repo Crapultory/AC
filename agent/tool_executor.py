@@ -873,7 +873,11 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
             try:
                 from tools.user_env_runtime import bind_current_user_env_identity
 
-                with bind_current_user_env_identity(agent.platform, agent._user_id, agent._user_name):
+                with bind_current_user_env_identity(
+                    getattr(agent, "_user_env_platform", None) or agent.platform,
+                    agent._user_id,
+                    agent._user_name,
+                ):
                     function_result = _ra().handle_function_call(
                         function_name, function_args, effective_task_id,
                         tool_call_id=tool_call.id,
@@ -898,7 +902,11 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
             try:
                 from tools.user_env_runtime import bind_current_user_env_identity
 
-                with bind_current_user_env_identity(agent.platform, agent._user_id, agent._user_name):
+                with bind_current_user_env_identity(
+                    getattr(agent, "_user_env_platform", None) or agent.platform,
+                    agent._user_id,
+                    agent._user_name,
+                ):
                     function_result = _ra().handle_function_call(
                         function_name, function_args, effective_task_id,
                         tool_call_id=tool_call.id,
