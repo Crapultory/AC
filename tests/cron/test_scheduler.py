@@ -3,6 +3,7 @@
 import json
 import logging
 import os
+import sys
 from unittest.mock import AsyncMock, patch, MagicMock
 
 import pytest
@@ -2597,3 +2598,95 @@ class TestSendMediaTimeoutCancelsFuture:
         # 2. Second file still got dispatched — one timeout doesn't abort the batch
         adapter.send_video.assert_called_once()
         assert adapter.send_video.call_args[1]["video_path"] == str(fast.resolve())
+
+
+class TestRunJobUserIdentity:
+    def _install_agent_stubs(self, monkeypatch, observed: dict):
+        import cron.scheduler as sched
+
+        class FakeAgent:
+            def __init__(self, **kwargs):
+                observed["agent_init_kwargs"] = kwargs
+                observed["agent_platform_after_init"] = kwargs.get("platform")
+                observed["agent_user_id_after_init"] = kwargs.get("user_id")
+                observed["agent_user_name_after_init"] = kwargs.get("user_name")
+                self.platform = kwargs.get("platform")
+                self._user_id = kwargs.get("user_id")
+                self._user_name = kwargs.get("user_name")
+
+            def run_conversation(self, *_a, **_kw):
+                observed["user_env_platform_during_run"] = getattr(
+                    self, "_user_env_platform", None
+                )
+                return {"final_response": "done", "messages": []}
+
+            def get_activity_summary(self):
+                return {"seconds_since_activity": 0.0}
+
+            def close(self):
+                observed["closed"] = True
+
+        fake_mod = type(sys)("run_agent")
+        fake_mod.AIAgent = FakeAgent
+        monkeypatch.setitem(sys.modules, "run_agent", fake_mod)
+
+        from hermes_cli import runtime_provider as runtime_provider
+
+        monkeypatch.setattr(
+            runtime_provider,
+            "resolve_runtime_provider",
+            lambda **_kw: {
+                "provider": "test",
+                "api_key": "test-key",
+                "base_url": "http://test.local",
+                "api_mode": "chat_completions",
+            },
+        )
+
+        monkeypatch.setattr(sched, "_build_job_prompt", lambda job, prerun_script=None: "hi")
+        monkeypatch.setattr(sched, "_resolve_origin", lambda job: None)
+        monkeypatch.setattr(sched, "_resolve_delivery_target", lambda job: None)
+        monkeypatch.setattr(sched, "_resolve_cron_enabled_toolsets", lambda job, cfg: None)
+        monkeypatch.setenv("HERMES_CRON_TIMEOUT", "0")
+
+    def test_run_job_restores_user_identity_from_identify(self, monkeypatch):
+        import cron.scheduler as sched
+
+        observed: dict = {}
+        self._install_agent_stubs(monkeypatch, observed)
+
+        job = {
+            "id": "abc123",
+            "name": "owned-job",
+            "prompt": "hi",
+            "schedule_display": "manual",
+            "identify": {"platform": "slack", "user_id": "u1", "user_name": "alice"},
+        }
+
+        success, _output, response, error = sched.run_job(job)
+
+        assert success is True, f"run_job failed: error={error!r} response={response!r}"
+        assert observed["agent_platform_after_init"] == "cron"
+        assert observed["agent_user_id_after_init"] == "u1"
+        assert observed["agent_user_name_after_init"] == "alice"
+        assert observed["user_env_platform_during_run"] == "slack"
+
+    def test_run_job_rejects_malformed_identify(self, monkeypatch):
+        import cron.scheduler as sched
+
+        observed: dict = {}
+        self._install_agent_stubs(monkeypatch, observed)
+
+        job = {
+            "id": "abc123",
+            "name": "owned-job",
+            "prompt": "hi",
+            "schedule_display": "manual",
+            "identify": {"platform": "slack", "user_id": "u1"},
+        }
+
+        success, _output, _response, error = sched.run_job(job)
+
+        assert success is False
+        assert error is not None
+        assert "identify" in error.lower()

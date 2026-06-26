@@ -1388,6 +1388,16 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
     if prompt is None:
         logger.info("Job '%s': script produced no output, skipping AI call.", job_name)
         return True, "", SILENT_MARKER, None
+
+    from cron.jobs import parse_job_identify
+
+    identify_raw = job.get("identify")
+    job_identity = None
+    if identify_raw is not None:
+        job_identity = parse_job_identify(identify_raw)
+        if job_identity is None:
+            return False, "", "", f"Invalid cron job identify payload for job '{job_id}'"
+
     origin = _resolve_origin(job)
     _cron_session_id = f"cron_{job_id}_{_hermes_now().strftime('%Y%m%d_%H%M%S')}"
 
@@ -1651,10 +1661,14 @@ def _run_job_impl(job: dict) -> tuple[bool, str, str, Optional[str]]:
             load_soul_identity=True,
             skip_memory=True,  # Cron system prompts would corrupt user representations
             platform="cron",
+            user_id=job_identity.user_id if job_identity is not None else None,
+            user_name=job_identity.user_name if job_identity is not None else None,
             session_id=_cron_session_id,
             session_db=_session_db,
         )
-        
+        if job_identity is not None:
+            agent._user_env_platform = job_identity.platform
+
         # Run the agent with an *inactivity*-based timeout: the job can run
         # for hours if it's actively calling tools / receiving stream tokens,
         # but a hung API call or stuck tool with no activity for the configured

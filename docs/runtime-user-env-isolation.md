@@ -8,6 +8,7 @@ It covers:
 - identity binding for tool execution
 - persistent user env storage
 - `userenv` tool behavior
+- cron job identity persistence and visibility
 - local terminal runtime isolation
 - lifecycle and resource characteristics
 - known boundaries and compatibility behavior
@@ -29,6 +30,14 @@ The current design uses two separate keys with different purposes:
 `user_name` is no longer part of the storage partition key. Instead, it is
 persisted as the reserved env variable `CURRENT_USER_NAME` inside the stored
 payload for that user.
+
+For cron jobs, there is an additional persisted ownership record:
+
+- **cron job identify**: JSON object with `platform`, `user_id`, `user_name`
+
+This is not part of the user env storage key. It is used only for cron job
+ownership filtering and for restoring the correct runtime identity when a cron
+job runs later without a live messaging session.
 
 ## Data Model
 
@@ -59,6 +68,26 @@ Properties:
 - `user_name` is stored as `CURRENT_USER_NAME` in the value object.
 - Different platforms with the same `user_id` remain isolated.
 
+Cron jobs store ownership separately in `jobs.json`:
+
+```json
+{
+  "id": "abc123deadbe",
+  "name": "Daily report",
+  "identify": {
+    "platform": "slack",
+    "user_id": "u123",
+    "user_name": "alice"
+  }
+}
+```
+
+Properties:
+
+- `identify.platform + identify.user_id` define cron job ownership.
+- `identify.user_name` is informational and preserved for compatibility.
+- username changes do not change env partitioning or cron ownership.
+
 ## Identity Binding
 
 The runtime identity is carried through tool execution with `ContextVar`.
@@ -87,6 +116,58 @@ Binding flow:
 4. Worker threads inherit the same context through `propagate_context_to_thread(...)`.
 
 This is the isolation boundary for all user-scoped env reads.
+
+## Cron Job Identity and Visibility
+
+Primary implementation:
+
+- `cron/jobs.py`
+- `tools/cronjob_tools.py`
+- `cron/scheduler.py`
+
+Cron jobs are different from live gateway turns:
+
+- creation happens in a live user context
+- execution happens later in scheduler context
+- scheduler context has no inbound messaging user by default
+
+To bridge that gap, cron jobs persist the creating user's identity in the job
+record as:
+
+- `identify.platform`
+- `identify.user_id`
+- `identify.user_name`
+
+### Visibility rules in `cronjob`
+
+The user-facing `cronjob` tool applies identity filtering on top of the shared
+cron store.
+
+Rules:
+
+- jobs with no `identify` are treated as public / legacy and remain visible
+- jobs with valid `identify` are visible only when `platform + user_id` match
+  the current runtime user
+- jobs with malformed `identify` are treated as not visible
+- direct operations (`update`, `pause`, `resume`, `remove`, `run`) resolve
+  only within the current visible set
+- `context_from` references are also limited to the current visible set
+
+Important boundary:
+
+- the shared storage layer in `cron/jobs.py` is still global
+- filtering is enforced in the `cronjob` tool path
+- CLI and backend/admin callers that use `cron.jobs` directly keep their
+  existing global view unless they add their own filtering
+
+### Immutability
+
+`identify` is immutable after creation.
+
+This prevents:
+
+- cross-user ownership transfer by update
+- accidental drift between cron ownership and userenv partitioning
 
 ## Storage Semantics
 
@@ -185,6 +266,54 @@ This guarantees:
 - no cross-user persistence in the snapshot
 - same-user updates take effect immediately
 - same-user deletions take effect immediately
+
+## Cron Runtime Restoration
+
+Primary implementation:
+
+- `cron/scheduler.py`
+- `agent/tool_executor.py`
+- `agent/agent_runtime_helpers.py`
+
+When a cron job runs, there is no live messaging session to populate
+`HERMES_SESSION_USER_ID` / `HERMES_SESSION_USER_NAME`.
+
+Current behavior:
+
+1. Scheduler reads `job["identify"]`.
+2. If missing, the job runs with no user-scoped env identity, preserving legacy
+   behavior.
+3. If present and valid, scheduler passes `user_id` and `user_name` into
+   `AIAgent`.
+4. Scheduler also sets an internal runtime-only field:
+   - `agent._user_env_platform = identify["platform"]`
+5. Tool execution binds user env identity using:
+   - `_user_env_platform` when present
+   - otherwise `agent.platform`
+
+This is necessary because cron jobs still deliberately run with:
+
+- `agent.platform == "cron"`
+
+That preserves cron-specific behavior for:
+
+- skill/platform gating
+- delivery semantics
+- TTS / messaging decisions
+- other code paths that distinguish scheduler runs from live chat turns
+
+Without `_user_env_platform`, tool/userenv binding would incorrectly load env
+under `platform="cron"` instead of the original messaging platform such as
+`slack` or `feishu`.
+
+### Malformed `identify`
+
+If `identify` exists but is structurally invalid:
+
+- the job is not treated as public
+- user-facing `cronjob` visibility hides it
+- scheduler fails the run with a clear error instead of silently dropping back
+  to an empty env
 
 ## Local Environment Isolation
 
@@ -318,6 +447,28 @@ The user-scoped cache key change applies only to the local terminal backend.
 Other backends keep their existing reuse semantics unless they explicitly adopt
 the same isolation strategy later.
 
+### Cron `no_agent` jobs
+
+`no_agent=True` cron jobs are intentionally outside the current userenv restore
+path.
+
+They:
+
+- execute a script subprocess directly
+- do not construct `AIAgent`
+- do not pass through `bind_current_user_env_identity(...)`
+
+So this design currently covers:
+
+- cron jobs that execute through the normal agent/tool path
+
+It does not currently cover:
+
+- script-only `no_agent` jobs
+
+If user-scoped env is needed for `no_agent` jobs later, that requires a
+separate subprocess env overlay design in the script runner.
+
 ## Operational Notes
 
 When debugging user env issues, check these in order:
@@ -333,6 +484,9 @@ Useful source files:
 - `tools/user_env_store.py`
 - `tools/user_env_runtime.py`
 - `tools/userenv_tool.py`
+- `tools/cronjob_tools.py`
+- `cron/jobs.py`
+- `cron/scheduler.py`
 - `tools/terminal_tool.py`
 - `tools/environments/base.py`
 - `tools/environments/local.py`
@@ -343,9 +497,11 @@ The current runtime user env design uses:
 
 - `platform.user_id` for persistence
 - `CURRENT_USER_NAME` inside the stored payload
+- cron `identify` objects for delayed scheduler ownership and identity restore
 - `local::{platform}::{user_id}` for local runtime instance isolation
 - `ContextVar` for request-local identity propagation
 - execution-time overlay plus snapshot cleanup for local shell reuse
 
-This gives stable same-user reuse, avoids cross-user leakage, and keeps the
-local backend lightweight enough for multi-user gateway operation.
+This gives stable same-user reuse, avoids cross-user leakage in both live turns
+and agent-backed cron runs, and keeps the local backend lightweight enough for
+multi-user gateway operation.

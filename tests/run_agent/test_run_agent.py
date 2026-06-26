@@ -2557,6 +2557,35 @@ class TestConcurrentToolExecution:
             )
             assert result == "result"
 
+    def test_invoke_tool_uses_user_env_platform_override(self, agent):
+        """Tool userenv binding should prefer agent._user_env_platform over agent.platform."""
+        from tools.user_env_runtime import get_current_user_env_identity
+
+        agent.platform = "cron"
+        agent._user_id = "u1"
+        agent._user_name = "alice"
+        agent._user_env_platform = "slack"
+
+        def _capture_identity(*_args, **_kwargs):
+            identity = get_current_user_env_identity()
+            assert identity is not None
+            return json.dumps(
+                {
+                    "platform": identity.platform,
+                    "user_id": identity.user_id,
+                    "user_name": identity.user_name,
+                }
+            )
+
+        with patch("run_agent.handle_function_call", side_effect=_capture_identity):
+            result = json.loads(agent._invoke_tool("web_search", {"q": "test"}, "task-1"))
+
+        assert result == {
+            "platform": "slack",
+            "user_id": "u1",
+            "user_name": "alice",
+        }
+
     def test_sequential_tool_callbacks_fire_in_order(self, agent):
         tool_call = _mock_tool_call(name="web_search", arguments='{"query":"hello"}', call_id="c1")
         mock_msg = _mock_assistant_msg(content="", tool_calls=[tool_call])
