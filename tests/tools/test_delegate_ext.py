@@ -124,6 +124,10 @@ class _FakeA2AClient:
         self.sent_requests.append(request)
         plan = self.turn_plans[self.turn_index]
         self.turn_index += 1
+        if "events" in plan:
+            for event in plan["events"]:
+                yield event
+            return
         yield _FakeA2AEvent(task=plan["initial_task"])
 
     async def get_task(self, request):
@@ -1110,10 +1114,10 @@ class TestDelegateExtIntegration:
 
 
 class TestA2ADelegateSession:
-    def test_default_poll_interval_is_200ms(self):
+    def test_default_poll_interval_is_one_second(self):
         session = _A2ADelegateSession("http://agent.local")
 
-        assert session.poll_interval == 0.2
+        assert session.poll_interval == 1
 
     @pytest.mark.asyncio
     async def test_send_turn_reuses_context_and_emits_tool_metadata(self):
@@ -1230,4 +1234,172 @@ class TestA2ADelegateSession:
             ("delegate", "tool_call", 'web_search {"q":"cats"}', "ctx-1"),
             ("delegate", "ai_delta", "second reply", "ctx-1"),
             ("delegate", "ai", "second reply", "ctx-1"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_final_poll_rewrite_does_not_emit_duplicate_ai_delta(self):
+        task_id = str(uuid4())
+        fake_client = _FakeA2AClient(
+            [
+                {
+                    "initial_task": _make_a2a_task(
+                        task_id=task_id,
+                        context_id="ctx-1",
+                        state=TaskState.TASK_STATE_SUBMITTED,
+                    ),
+                    "polls": [
+                        _make_a2a_task(
+                            task_id=task_id,
+                            context_id="ctx-1",
+                            state=TaskState.TASK_STATE_WORKING,
+                            text="Exa search returned recent results.",
+                            role=Role.ROLE_AGENT,
+                        ),
+                        _make_a2a_task(
+                            task_id=task_id,
+                            context_id="ctx-1",
+                            state=TaskState.TASK_STATE_COMPLETED,
+                            text="Rocket intro. Exa search returned recent results.",
+                            role=Role.ROLE_AGENT,
+                        ),
+                    ],
+                }
+            ]
+        )
+        sink = []
+
+        class _Output:
+            def emit(self, source, event_type, content, session_id=None):
+                sink.append((source, event_type, content, session_id))
+
+        session = _A2ADelegateSession(
+            "http://agent.local",
+            output=_Output(),
+            poll_interval=0,
+            timeout=1,
+        )
+        session._client = fake_client
+        session._http_client = _FakeAsyncHTTPClient()
+
+        result = await session.send_turn("search")
+        await session.close()
+
+        assert result["final_response"] == "Rocket intro. Exa search returned recent results."
+        assert sink == [
+            ("delegate", "ai_delta", "Exa search returned recent results.", "ctx-1"),
+            ("delegate", "ai", "Rocket intro. Exa search returned recent results.", "ctx-1"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_final_poll_prefix_extension_emits_only_suffix_delta(self):
+        task_id = str(uuid4())
+        fake_client = _FakeA2AClient(
+            [
+                {
+                    "initial_task": _make_a2a_task(
+                        task_id=task_id,
+                        context_id="ctx-1",
+                        state=TaskState.TASK_STATE_SUBMITTED,
+                    ),
+                    "polls": [
+                        _make_a2a_task(
+                            task_id=task_id,
+                            context_id="ctx-1",
+                            state=TaskState.TASK_STATE_WORKING,
+                            text="partial",
+                            role=Role.ROLE_AGENT,
+                        ),
+                        _make_a2a_task(
+                            task_id=task_id,
+                            context_id="ctx-1",
+                            state=TaskState.TASK_STATE_COMPLETED,
+                            text="partial final",
+                            role=Role.ROLE_AGENT,
+                        ),
+                    ],
+                }
+            ]
+        )
+        sink = []
+
+        class _Output:
+            def emit(self, source, event_type, content, session_id=None):
+                sink.append((source, event_type, content, session_id))
+
+        session = _A2ADelegateSession(
+            "http://agent.local",
+            output=_Output(),
+            poll_interval=0,
+            timeout=1,
+        )
+        session._client = fake_client
+        session._http_client = _FakeAsyncHTTPClient()
+
+        result = await session.send_turn("search")
+        await session.close()
+
+        assert result["final_response"] == "partial final"
+        assert sink == [
+            ("delegate", "ai_delta", "partial", "ctx-1"),
+            ("delegate", "ai_delta", " final", "ctx-1"),
+            ("delegate", "ai", "partial final", "ctx-1"),
+        ]
+
+    @pytest.mark.asyncio
+    async def test_send_message_final_event_rewrite_does_not_emit_duplicate_ai_delta(self):
+        task_id = str(uuid4())
+        fake_client = _FakeA2AClient(
+            [
+                {
+                    "initial_task": _make_a2a_task(
+                        task_id=task_id,
+                        context_id="ctx-1",
+                        state=TaskState.TASK_STATE_SUBMITTED,
+                    ),
+                    "events": [
+                        _FakeA2AEvent(
+                            task=_make_a2a_task(
+                                task_id=task_id,
+                                context_id="ctx-1",
+                                state=TaskState.TASK_STATE_WORKING,
+                                text="Exa search returned recent results.",
+                                role=Role.ROLE_AGENT,
+                            )
+                        ),
+                        _FakeA2AEvent(
+                            task=_make_a2a_task(
+                                task_id=task_id,
+                                context_id="ctx-1",
+                                state=TaskState.TASK_STATE_COMPLETED,
+                                text="Rocket intro. Exa search returned recent results.",
+                                role=Role.ROLE_AGENT,
+                            )
+                        ),
+                    ],
+                    "polls": [],
+                }
+            ]
+        )
+        sink = []
+
+        class _Output:
+            def emit(self, source, event_type, content, session_id=None):
+                sink.append((source, event_type, content, session_id))
+
+        session = _A2ADelegateSession(
+            "http://agent.local",
+            output=_Output(),
+            poll_interval=0,
+            timeout=1,
+        )
+        session._client = fake_client
+        session._http_client = _FakeAsyncHTTPClient()
+
+        result = await session.send_turn("search")
+        await session.close()
+
+        assert result["final_response"] == "Rocket intro. Exa search returned recent results."
+        assert sink == [
+            ("delegate", "ai_delta", "Exa search returned recent results.", "ctx-1"),
+            ("delegate", "ai", "Rocket intro. Exa search returned recent results.", "ctx-1"),
         ]
