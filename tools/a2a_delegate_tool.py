@@ -897,7 +897,7 @@ class _A2ADelegateSession:
         headers: dict[str, str] | None = None,
         output=None,
         timeout: float = 60.0,
-        poll_interval: float = 0.05,
+        poll_interval: float = 1,
         session_id: str | None = None,
     ) -> None:
         self.base_url = _normalize_a2a_base_url(base_url)

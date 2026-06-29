@@ -1110,6 +1110,11 @@ class TestDelegateExtIntegration:
 
 
 class TestA2ADelegateSession:
+    def test_default_poll_interval_is_200ms(self):
+        session = _A2ADelegateSession("http://agent.local")
+
+        assert session.poll_interval == 0.2
+
     @pytest.mark.asyncio
     async def test_send_turn_reuses_context_and_emits_tool_metadata(self):
         first_task_id = str(uuid4())
