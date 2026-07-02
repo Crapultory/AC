@@ -68,6 +68,7 @@ def adapter():
     slack_adapter._running = True
     slack_adapter.handle_message = AsyncMock()
     slack_adapter.send = AsyncMock(return_value=SendResult(success=True, message_id="msg-1"))
+    slack_adapter.edit_message = AsyncMock(return_value=SendResult(success=True, message_id="msg-1"))
     slack_adapter._resolve_user_name = AsyncMock(return_value="testuser")
     slack_adapter._fetch_thread_context = AsyncMock(return_value="")
     slack_adapter._fetch_thread_parent_text = AsyncMock(return_value=None)
@@ -211,7 +212,7 @@ class TestSlackDelegateForegroundRouteState:
         input_adapter.exit_foreground()
 
     @pytest.mark.asyncio
-    async def test_delegate_ai_output_reuses_normal_slack_send(self, adapter):
+    async def test_delegate_ai_output_is_filtered_from_slack_send(self, adapter):
         runtime = adapter.build_delegate_foreground_runtime(
             channel_id="C456",
             thread_ts="1717171717.000301",
@@ -233,16 +234,12 @@ class TestSlackDelegateForegroundRouteState:
         )
         assert route is not None
         assert route.session_id == "delegate-session-2"
-        adapter.send.assert_awaited_once()
-        assert adapter.send.await_args.kwargs["chat_id"] == "C456"
-        assert adapter.send.await_args.kwargs["metadata"] == {
-            "thread_id": "1717171717.000301",
-        }
-        assert adapter.send.await_args.kwargs["content"] == "child final answer"
+        adapter.send.assert_not_called()
         input_adapter.exit_foreground()
 
     @pytest.mark.asyncio
-    async def test_delegate_ai_delta_output_is_filtered_from_slack_send(self, adapter):
+    async def test_delegate_ai_delta_output_reuses_normal_slack_send(self, adapter):
+        adapter._delegate_stream_edit_interval = 0.01
         runtime = adapter.build_delegate_foreground_runtime(
             channel_id="C456",
             thread_ts="1717171717.000301",
@@ -264,7 +261,299 @@ class TestSlackDelegateForegroundRouteState:
         )
         assert route is not None
         assert route.session_id == "delegate-session-delta"
-        adapter.send.assert_not_called()
+        adapter.send.assert_awaited_once()
+        assert adapter.send.await_args.kwargs["chat_id"] == "C456"
+        assert adapter.send.await_args.kwargs["metadata"] == {
+            "thread_id": "1717171717.000301",
+        }
+        assert adapter.send.await_args.kwargs["content"] == "partial chunk"
+        input_adapter.exit_foreground()
+
+    @pytest.mark.asyncio
+    async def test_delegate_ai_delta_subsequent_chunks_edit_existing_message(self, adapter):
+        adapter._delegate_stream_edit_interval = 0.01
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="C456",
+            thread_ts="1717171717.000301",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        runtime["output"].emit(
+            "delegate",
+            "ai_delta",
+            "partial",
+            session_id="delegate-session-delta",
+        )
+        await asyncio.sleep(0)
+        runtime["output"].emit(
+            "delegate",
+            "ai_delta",
+            " chunk",
+            session_id="delegate-session-delta",
+        )
+        await asyncio.sleep(0.05)
+
+        adapter.send.assert_awaited_once()
+        adapter.edit_message.assert_awaited_once()
+        assert adapter.edit_message.await_args.kwargs["chat_id"] == "C456"
+        assert adapter.edit_message.await_args.kwargs["message_id"] == "msg-1"
+        assert adapter.edit_message.await_args.kwargs["content"] == "partial chunk"
+        input_adapter.exit_foreground()
+
+    @pytest.mark.asyncio
+    async def test_delegate_ai_delta_rolls_over_when_message_exceeds_limit(self, adapter):
+        adapter._delegate_stream_edit_interval = 0.01
+        adapter.MAX_MESSAGE_LENGTH = 10
+        send_ids = iter(["msg-1", "msg-2"])
+        adapter.send = AsyncMock(
+            side_effect=lambda *args, **kwargs: SendResult(
+                success=True,
+                message_id=next(send_ids),
+            )
+        )
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="C456",
+            thread_ts="1717171717.000301",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        runtime["output"].emit(
+            "delegate",
+            "ai_delta",
+            "12345",
+            session_id="delegate-session-delta",
+        )
+        await asyncio.sleep(0)
+        runtime["output"].emit(
+            "delegate",
+            "ai_delta",
+            "67890abc",
+            session_id="delegate-session-delta",
+        )
+        await asyncio.sleep(0.05)
+
+        assert adapter.send.await_count == 2
+        assert adapter.send.await_args_list[0].kwargs["content"] == "12345"
+        assert adapter.edit_message.await_args.kwargs["content"] == "1234567890"
+        assert adapter.send.await_args_list[1].kwargs["content"] == "abc"
+        input_adapter.exit_foreground()
+
+    @pytest.mark.asyncio
+    async def test_delegate_ai_delta_edits_newest_message_after_rollover(self, adapter):
+        adapter._delegate_stream_edit_interval = 0.01
+        adapter.MAX_MESSAGE_LENGTH = 10
+        send_ids = iter(["msg-1", "msg-2"])
+        adapter.send = AsyncMock(
+            side_effect=lambda *args, **kwargs: SendResult(
+                success=True,
+                message_id=next(send_ids),
+            )
+        )
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="C456",
+            thread_ts="1717171717.000301",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        runtime["output"].emit("delegate", "ai_delta", "12345", session_id="delegate-session-delta")
+        await asyncio.sleep(0)
+        runtime["output"].emit("delegate", "ai_delta", "67890abc", session_id="delegate-session-delta")
+        await asyncio.sleep(0.05)
+        runtime["output"].emit("delegate", "ai_delta", "def", session_id="delegate-session-delta")
+        await asyncio.sleep(0.05)
+
+        assert adapter.send.await_count == 2
+        assert adapter.edit_message.await_args_list[-1].kwargs["message_id"] == "msg-2"
+        assert adapter.edit_message.await_args_list[-1].kwargs["content"] == "abcdef"
+        input_adapter.exit_foreground()
+
+    @pytest.mark.asyncio
+    async def test_delegate_foreground_user_message_starts_new_ai_delta_message(self, adapter):
+        adapter._delegate_stream_edit_interval = 0.01
+        send_ids = iter(["msg-1", "msg-2"])
+        adapter.send = AsyncMock(
+            side_effect=lambda *args, **kwargs: SendResult(
+                success=True,
+                message_id=next(send_ids),
+            )
+        )
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="D123",
+            thread_ts="1717171717.000301",
+            user_id="U_USER",
+            chat_type="dm",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        runtime["output"].emit("delegate", "ai_delta", "first", session_id="delegate-session-delta")
+        await asyncio.sleep(0)
+        runtime["output"].emit("delegate", "ai_delta", " answer", session_id="delegate-session-delta")
+        await asyncio.sleep(0.05)
+
+        assert adapter.send.await_count == 1
+        assert adapter.edit_message.await_args.kwargs["content"] == "first answer"
+
+        adapter.send.reset_mock()
+        adapter.edit_message.reset_mock()
+        await adapter._handle_slack_message(
+            _make_event(
+                "new task",
+                channel="D123",
+                channel_type="im",
+                ts="1717171717.000302",
+                thread_ts="1717171717.000301",
+                user="U_USER",
+            )
+        )
+        assert input_adapter.read_line() == "new task"
+
+        runtime["output"].emit("delegate", "ai_delta", "second", session_id="delegate-session-delta")
+        await asyncio.sleep(0)
+
+        adapter.send.assert_awaited_once()
+        adapter.edit_message.assert_not_called()
+        assert adapter.send.await_args.kwargs["content"] == "second"
+        input_adapter.exit_foreground()
+
+    @pytest.mark.asyncio
+    async def test_delegate_ai_delta_clears_stream_state_when_route_released(self, adapter):
+        adapter._delegate_stream_edit_interval = 0.01
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="C456",
+            thread_ts="1717171717.000301",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        runtime["output"].emit(
+            "delegate",
+            "ai_delta",
+            "hello",
+            session_id="delegate-session-delta",
+        )
+        await asyncio.sleep(0)
+        input_adapter.exit_foreground()
+        adapter.send.reset_mock()
+        adapter.edit_message.reset_mock()
+
+        second_runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="C456",
+            thread_ts="1717171717.000301",
+        )
+        second_input_adapter = second_runtime["input_factory"]()
+        assert second_input_adapter.enter_foreground() is True
+
+        second_runtime["output"].emit(
+            "delegate",
+            "ai_delta",
+            "world",
+            session_id="delegate-session-delta-2",
+        )
+        await asyncio.sleep(0)
+
+        adapter.send.assert_awaited_once()
+        adapter.edit_message.assert_not_called()
+        assert adapter.send.await_args.kwargs["content"] == "world"
+        second_input_adapter.exit_foreground()
+
+    @pytest.mark.asyncio
+    async def test_delegate_ai_delta_falls_back_to_send_when_edit_fails(self, adapter):
+        adapter._delegate_stream_edit_interval = 0.01
+        adapter.edit_message = AsyncMock(
+            return_value=SendResult(success=False, error="edit failed")
+        )
+        send_ids = iter(["msg-1", "msg-2"])
+        adapter.send = AsyncMock(
+            side_effect=lambda *args, **kwargs: SendResult(
+                success=True,
+                message_id=next(send_ids),
+            )
+        )
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="C456",
+            thread_ts="1717171717.000301",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        runtime["output"].emit("delegate", "ai_delta", "a", session_id="delegate-session-delta")
+        await asyncio.sleep(0)
+        runtime["output"].emit("delegate", "ai_delta", "b", session_id="delegate-session-delta")
+        await asyncio.sleep(0.05)
+
+        assert adapter.send.await_count == 2
+        adapter.edit_message.assert_awaited_once()
+        assert adapter.send.await_args_list[1].kwargs["content"] == "b"
+        input_adapter.exit_foreground()
+
+    @pytest.mark.asyncio
+    async def test_delegate_ai_delta_retryable_edit_failure_keeps_aggregated_state(self, adapter):
+        adapter._delegate_stream_edit_interval = 0.01
+        adapter.edit_message = AsyncMock(
+            side_effect=[
+                SendResult(success=False, error="temporary", retryable=True),
+                SendResult(success=True, message_id="msg-1"),
+            ]
+        )
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="C456",
+            thread_ts="1717171717.000301",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        runtime["output"].emit("delegate", "ai_delta", "a", session_id="delegate-session-delta")
+        await asyncio.sleep(0)
+        runtime["output"].emit("delegate", "ai_delta", "b", session_id="delegate-session-delta")
+        await asyncio.sleep(0.05)
+        runtime["output"].emit("delegate", "ai_delta", "c", session_id="delegate-session-delta")
+        await asyncio.sleep(0.05)
+
+        adapter.send.assert_awaited_once()
+        assert adapter.edit_message.await_count == 2
+        assert adapter.edit_message.await_args_list[-1].kwargs["content"] == "abc"
+        input_adapter.exit_foreground()
+
+    @pytest.mark.asyncio
+    async def test_delegate_tool_call_starts_a_new_ai_delta_message_segment(self, adapter):
+        adapter._delegate_stream_edit_interval = 1.0
+        send_ids = iter(["msg-1", "tool-msg", "msg-2"])
+        adapter.send = AsyncMock(
+            side_effect=lambda *args, **kwargs: SendResult(
+                success=True,
+                message_id=next(send_ids),
+            )
+        )
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="C456",
+            thread_ts="1717171717.000302",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        runtime["output"].emit("delegate", "ai_delta", "hello", session_id="delegate-session-3")
+        await asyncio.sleep(0)
+        runtime["output"].emit("delegate", "ai_delta", " there", session_id="delegate-session-3")
+        await asyncio.sleep(0)
+        runtime["output"].emit(
+            "delegate",
+            "tool_call",
+            'web_search {"q":"cats"}',
+            session_id="delegate-session-3",
+        )
+        await asyncio.sleep(0)
+        runtime["output"].emit("delegate", "ai_delta", "world", session_id="delegate-session-3")
+        await asyncio.sleep(0)
+
+        assert adapter.send.await_count == 3
+        assert adapter.send.await_args_list[0].kwargs["content"] == "hello"
+        assert adapter.edit_message.await_args.kwargs["content"] == "hello there"
+        assert "web_search" in adapter.send.await_args_list[1].kwargs["content"]
+        assert adapter.send.await_args_list[2].kwargs["content"] == "world"
         input_adapter.exit_foreground()
 
     @pytest.mark.asyncio

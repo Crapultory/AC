@@ -1613,6 +1613,10 @@ select:focus {
   font-size: calc(12px * var(--density-scale));
 }
 
+.cron-raw-editor {
+  min-height: min(60vh, 620px);
+}
+
 .cron-session-messages {
   margin-top: 0;
 }
@@ -1631,10 +1635,6 @@ select:focus {
   padding: 0;
   font-size: calc(18px * var(--density-scale));
   line-height: 1;
-}
-
-.cron-raw-modal-body pre {
-  margin: 0;
 }
 
 .skills-workbench-page {

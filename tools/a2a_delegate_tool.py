@@ -897,7 +897,7 @@ class _A2ADelegateSession:
         headers: dict[str, str] | None = None,
         output=None,
         timeout: float = 60.0,
-        poll_interval: float = 0.05,
+        poll_interval: float = 1,
         session_id: str | None = None,
     ) -> None:
         self.base_url = _normalize_a2a_base_url(base_url)
@@ -1115,11 +1115,14 @@ class _A2ADelegateSession:
                 if not self.context_id:
                     self.context_id = getattr(last_task, "context_id", None) or self.context_id
                 self.task_id = getattr(last_task, "id", None) or self.task_id
-                self._emit_text_deltas(
+                state = _a2a_field(getattr(last_task, "status", None), "state", None)
+                is_final = state in _a2a_final_task_states()
+                self._emit_task_text_delta(
                     last_task,
                     session_id=getattr(last_task, "context_id", None) or self.context_id,
+                    is_final=is_final,
                 )
-                if _a2a_field(getattr(last_task, "status", None), "state", None) in _a2a_final_task_states():
+                if is_final:
                     return last_task
 
         if not got_response:
@@ -1138,12 +1141,14 @@ class _A2ADelegateSession:
                 _a2a_task_messages(current_task),
                 session_id=getattr(current_task, "context_id", None) or self.context_id,
             )
-            self._emit_text_deltas(
+            state = _a2a_field(getattr(current_task, "status", None), "state", None)
+            is_final = state in _a2a_final_task_states()
+            self._emit_task_text_delta(
                 current_task,
                 session_id=getattr(current_task, "context_id", None) or self.context_id,
+                is_final=is_final,
             )
-            state = _a2a_field(getattr(current_task, "status", None), "state", None)
-            if state in _a2a_final_task_states():
+            if is_final:
                 return current_task
             if time.monotonic() >= deadline:
                 raise TimeoutError(
@@ -1151,6 +1156,23 @@ class _A2ADelegateSession:
                 )
             await asyncio.sleep(self.poll_interval)
             current_task = await self._client.get_task(GetTaskRequest(id=current_task.id))
+
+    def _emit_task_text_delta(
+        self,
+        task,
+        *,
+        session_id: str | None,
+        is_final: bool,
+    ) -> None:
+        if not is_final:
+            self._emit_text_deltas(task, session_id=session_id)
+            return
+
+        final_text = _a2a_task_text(task)
+        if not self._streamed_assistant_text or final_text.startswith(self._streamed_assistant_text):
+            self._emit_text_deltas(task, session_id=session_id)
+        elif final_text:
+            self._set_last_assistant_text(final_text)
 
     def _emit_tool_messages(self, messages: list[Any], *, session_id: str | None) -> None:
         for message in messages:

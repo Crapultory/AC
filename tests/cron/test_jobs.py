@@ -342,13 +342,36 @@ class TestUpdateJob:
         assert get_job(job["id"]) is not None
         assert get_job("../escape") is None
 
-    def test_update_rejects_identify_change(self, tmp_cron_dir):
+    def test_update_allows_identify_change(self, tmp_cron_dir):
+        job = create_job(prompt="Original", schedule="every 1h")
+
+        updated = update_job(
+            job["id"],
+            {"identify": {"platform": "slack", "user_id": "u1", "user_name": "alice"}},
+        )
+
+        assert updated is not None
+        assert updated["identify"] == {
+            "platform": "slack",
+            "user_id": "u1",
+            "user_name": "alice",
+        }
+
+        fetched = get_job(job["id"])
+        assert fetched is not None
+        assert fetched["identify"] == {
+            "platform": "slack",
+            "user_id": "u1",
+            "user_name": "alice",
+        }
+
+    def test_update_rejects_invalid_identify_change(self, tmp_cron_dir):
         job = create_job(prompt="Original", schedule="every 1h")
 
         with pytest.raises(ValueError, match="identify"):
             update_job(
                 job["id"],
-                {"identify": {"platform": "slack", "user_id": "u1", "user_name": "alice"}},
+                {"identify": {"platform": "slack", "user_name": "alice"}},
             )
 
 

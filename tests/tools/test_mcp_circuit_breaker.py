@@ -250,3 +250,161 @@ def test_circuit_breaker_cleared_on_reconnect(monkeypatch, tmp_path):
         )
     finally:
         _cleanup(mcp_tool, "srv")
+
+
+def test_half_open_probe_on_dead_session_requests_reconnect(monkeypatch, tmp_path):
+    """A half-open probe against a dead session should request reconnect."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    from tools import mcp_tool
+    from tools.mcp_tool import _make_tool_handler
+
+    server = _install_stub_server(mcp_tool, "srv", None)
+    server.session = None
+    monkeypatch.setattr(mcp_tool, "_mcp_loop", None)
+
+    try:
+        mcp_tool._server_error_counts["srv"] = mcp_tool._CIRCUIT_BREAKER_THRESHOLD
+        fake_now = [1000.0]
+
+        def _fake_monotonic():
+            return fake_now[0]
+
+        monkeypatch.setattr(mcp_tool.time, "monotonic", _fake_monotonic)
+        mcp_tool._server_breaker_opened_at["srv"] = fake_now[0]
+        cooldown = getattr(mcp_tool, "_CIRCUIT_BREAKER_COOLDOWN_SEC", 60.0)
+
+        fake_now[0] += cooldown + 1.0
+
+        handler = _make_tool_handler("srv", "tool1", 10.0)
+        result = handler({})
+        parsed = json.loads(result)
+
+        assert "reconnect" in parsed.get("error", "").lower(), parsed
+        server._reconnect_event.set.assert_called_once()
+    finally:
+        _cleanup(mcp_tool, "srv")
+
+
+def test_half_open_dead_session_recovers_after_reconnect(monkeypatch, tmp_path):
+    """A dead session should recover after reconnect repopulates session."""
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    from tools import mcp_tool
+    from tools.mcp_tool import _make_tool_handler
+
+    async def _call_tool_success(*a, **kw):
+        result = MagicMock()
+        result.isError = False
+        block = MagicMock()
+        block.text = "ok"
+        result.content = [block]
+        result.structuredContent = None
+        return result
+
+    server = _install_stub_server(mcp_tool, "srv", _call_tool_success)
+    server.session = None
+    monkeypatch.setattr(mcp_tool, "_mcp_loop", None)
+    mcp_tool._ensure_mcp_loop()
+
+    try:
+        mcp_tool._server_error_counts["srv"] = mcp_tool._CIRCUIT_BREAKER_THRESHOLD
+        fake_now = [1000.0]
+        monkeypatch.setattr(mcp_tool.time, "monotonic", lambda: fake_now[0])
+        mcp_tool._server_breaker_opened_at["srv"] = fake_now[0]
+        cooldown = getattr(mcp_tool, "_CIRCUIT_BREAKER_COOLDOWN_SEC", 60.0)
+        fake_now[0] += cooldown + 1.0
+
+        handler = _make_tool_handler("srv", "tool1", 10.0)
+
+        parsed = json.loads(handler({}))
+        assert "reconnect" in parsed.get("error", "").lower(), parsed
+
+        live = MagicMock()
+        live.call_tool = _call_tool_success
+        server.session = live
+        mcp_tool._reset_server_error("srv")
+
+        fake_now[0] += cooldown + 1.0
+
+        parsed = json.loads(handler({}))
+        assert parsed.get("result") == "ok", parsed
+    finally:
+        _cleanup(mcp_tool, "srv")
+
+
+def test_run_loop_parks_instead_of_exiting_then_revives(monkeypatch, tmp_path):
+    """The run loop should park after retry exhaustion and revive on reconnect."""
+    import asyncio
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+
+    from tools import mcp_tool
+    from tools.mcp_tool import MCPServerTask
+
+    monkeypatch.setattr(mcp_tool, "_MAX_RECONNECT_RETRIES", 2)
+
+    _real_sleep = asyncio.sleep
+
+    async def _fast_sleep(_delay, *a, **kw):
+        await _real_sleep(0)
+
+    monkeypatch.setattr(mcp_tool.asyncio, "sleep", _fast_sleep)
+
+    state = {"transport_calls": 0, "deregistered": 0, "revived": False}
+
+    async def _scenario():
+        class _Task(MCPServerTask):
+            def _is_http(self):
+                return False
+
+            def _deregister_tools(self):
+                state["deregistered"] += 1
+                self._registered_tool_names = []
+
+            async def _run_stdio(self, config):
+                state["transport_calls"] += 1
+                if state["transport_calls"] == 1:
+                    self.session = object()
+                    self._ready.set()
+                    self.session = None
+                    raise RuntimeError("subprocess died")
+                if state["revived"]:
+                    self.session = object()
+                    self._ready.set()
+                    await self._wait_for_lifecycle_event()
+                    return
+                raise RuntimeError("still down")
+
+        task = _Task("srv")
+        task._registered_tool_names = ["srv__tool"]
+
+        run_task = asyncio.ensure_future(task.run({"command": "x"}))
+
+        for _ in range(500):
+            await _real_sleep(0)
+            if state["deregistered"] >= 1:
+                break
+        await _real_sleep(0)
+        assert not run_task.done(), "run loop exited instead of parking"
+        assert state["deregistered"] >= 1, "tools not deregistered on park"
+
+        state["revived"] = True
+        before = state["transport_calls"]
+        task._reconnect_event.set()
+        for _ in range(500):
+            await _real_sleep(0)
+            if state["transport_calls"] > before:
+                break
+        assert state["transport_calls"] > before, (
+            "parked task did not re-enter transport on reconnect signal"
+        )
+
+        task._shutdown_event.set()
+        task._reconnect_event.set()
+        try:
+            await asyncio.wait_for(run_task, timeout=2)
+        except (asyncio.TimeoutError, asyncio.CancelledError, Exception):
+            run_task.cancel()
+
+    asyncio.run(_scenario())

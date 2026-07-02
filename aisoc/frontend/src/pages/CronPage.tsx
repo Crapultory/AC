@@ -201,6 +201,11 @@ export function CronPage() {
   const [savePending, setSavePending] = useState(false);
   const [saveError, setSaveError] = useState("");
   const [saveSuccess, setSaveSuccess] = useState("");
+  const [rawDetailEditor, setRawDetailEditor] = useState("{}");
+  const [rawDetailDirty, setRawDetailDirty] = useState(false);
+  const [rawSavePending, setRawSavePending] = useState(false);
+  const [rawSaveError, setRawSaveError] = useState("");
+  const [rawSaveSuccess, setRawSaveSuccess] = useState("");
   const [actionError, setActionError] = useState("");
   const [pendingAction, setPendingAction] = useState("");
   const [createModalOpen, setCreateModalOpen] = useState(false);
@@ -225,6 +230,21 @@ export function CronPage() {
   useEffect(() => {
     jobsPageRef.current = jobsPage;
   }, [jobsPage]);
+
+  function syncDetailEditors(payload: Record<string, unknown>) {
+    setDetail(payload);
+    setDetailEditor(JSON.stringify(buildEditableCronUpdates(payload), null, 2));
+    setRawDetailEditor(JSON.stringify(payload, null, 2));
+    setDetailDirty(false);
+    setRawDetailDirty(false);
+  }
+
+  function handleRawEditorValueChange(nextValue: string) {
+    setRawDetailEditor(nextValue);
+    setRawDetailDirty(true);
+    setRawSaveError("");
+    setRawSaveSuccess("");
+  }
 
   async function loadJobs(page: number = jobsPageRef.current) {
     setLoading(true);
@@ -312,23 +332,26 @@ export function CronPage() {
     }
   }
 
-  async function loadJobDetail(rawId: string) {
+  async function loadJobDetail(rawId: string, options?: { closeRawModal?: boolean }) {
     const requestId = ++detailRequestIdRef.current;
     setDetailLoading(true);
     setDetailError("");
     setDetail(null);
-    setRawDetailModalOpen(false);
+    if (options?.closeRawModal !== false) {
+      setRawDetailModalOpen(false);
+    }
     setSaveError("");
     setSaveSuccess("");
+    setRawSaveError("");
+    setRawSaveSuccess("");
     setDetailDirty(false);
+    setRawDetailDirty(false);
     try {
       const payload = await fetchJSON<Record<string, unknown>>(
         `/api/cron/jobs/${encodeURIComponent(rawId)}`,
       );
       if (!isLatestCronDetailRequest(requestId, detailRequestIdRef.current)) return;
-      setDetail(payload);
-      const editable = buildEditableCronUpdates(payload);
-      setDetailEditor(JSON.stringify(editable, null, 2));
+      syncDetailEditors(payload);
     } catch {
       if (!isLatestCronDetailRequest(requestId, detailRequestIdRef.current)) return;
       setDetail(null);
@@ -422,12 +445,11 @@ export function CronPage() {
         method: "PUT",
         body: JSON.stringify({ updates: parsed }),
       });
-      setDetailDirty(false);
-      setSaveSuccess("Cron job updated.");
       await loadJobs();
       if (selectedJobIdRef.current === selectedJobId) {
         await Promise.all([loadJobHistory(selectedJobId), loadJobDetail(selectedJobId)]);
       }
+      setSaveSuccess("Cron job updated.");
     } catch (error) {
       if (error instanceof SyntaxError) {
         setSaveError(`Invalid JSON: ${error.message}`);
@@ -436,6 +458,44 @@ export function CronPage() {
       }
     } finally {
       setSavePending(false);
+    }
+  }
+
+  async function saveRawDetail() {
+    if (!selectedJobId) return;
+    setRawSavePending(true);
+    setRawSaveError("");
+    setRawSaveSuccess("");
+    try {
+      const parsed = JSON.parse(rawDetailEditor) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        setRawSaveError("Raw detail payload must be a JSON object.");
+        return;
+      }
+      const confirmed = window.confirm(
+        "Save raw cron detail JSON? This directly edits the underlying job record and may affect scheduling, delivery targets, and runtime behavior.",
+      );
+      if (!confirmed) return;
+      await fetchJSON(`/api/cron/jobs/${encodeURIComponent(selectedJobId)}/raw`, {
+        method: "PUT",
+        body: JSON.stringify({ job: parsed }),
+      });
+      await loadJobs();
+      if (selectedJobIdRef.current === selectedJobId) {
+        await Promise.all([
+          loadJobHistory(selectedJobId),
+          loadJobDetail(selectedJobId, { closeRawModal: false }),
+        ]);
+      }
+      setRawSaveSuccess("Cron job raw detail updated.");
+    } catch (error) {
+      if (error instanceof SyntaxError) {
+        setRawSaveError(`Invalid JSON: ${error.message}`);
+      } else {
+        setRawSaveError("Failed to update raw cron job detail.");
+      }
+    } finally {
+      setRawSavePending(false);
     }
   }
 
@@ -875,7 +935,44 @@ export function CronPage() {
               </button>
             </div>
             <div className="cron-raw-modal-body">
-              <pre>{JSON.stringify(detail, null, 2)}</pre>
+              <div className="cron-detail-editor-wrap">
+                <p className="subtle-copy">
+                  Directly editing the raw job record can change scheduling, delivery targets, and runtime behavior.
+                </p>
+                <textarea
+                  id="cron-raw-editor"
+                  className="cron-detail-editor cron-raw-editor"
+                  value={rawDetailEditor}
+                  onChange={(event) => handleRawEditorValueChange(event.target.value)}
+                  onInput={(event) => handleRawEditorValueChange((event.target as HTMLTextAreaElement).value)}
+                  rows={20}
+                />
+                <div className="button-row cron-action-zone">
+                  <button
+                    type="button"
+                    onClick={() => void saveRawDetail()}
+                    disabled={rawSavePending || !rawDetailDirty}
+                  >
+                    {rawSavePending ? "Saving..." : "Save Raw JSON"}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost-button"
+                    disabled={rawSavePending}
+                    onClick={() => {
+                      if (!detail) return;
+                      setRawDetailEditor(JSON.stringify(detail, null, 2));
+                      setRawDetailDirty(false);
+                      setRawSaveError("");
+                      setRawSaveSuccess("");
+                    }}
+                  >
+                    Reset
+                  </button>
+                </div>
+                {rawSaveError ? <p className="error-text">{rawSaveError}</p> : null}
+                {rawSaveSuccess ? <p>{rawSaveSuccess}</p> : null}
+              </div>
             </div>
           </div>
         </div>
