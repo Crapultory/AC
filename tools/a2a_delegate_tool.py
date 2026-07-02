@@ -33,14 +33,17 @@ logger = logging.getLogger(__name__)
 DEFAULT_AGENT_MODE = "a2a"
 DEFAULT_TOOLSETS = ["hermes-cli"]
 DEFAULT_MAX_ITERATIONS = 90
+_DELEGATE_FOREGROUND_INPUT_TIMEOUT_SECONDS = 25 * 60
 A2A_REGISTRY: Dict[str, Dict[str, Any]] = {}
 A2A_CONTEXT = ""
 _ACTIVE_A2A_SESSION_ATTR = "_active_a2a_delegate_session"
 _ACTIVE_A2A_SESSION_LOCK_ATTR = "_active_a2a_delegate_session_lock"
 _A2A_STOP_MESSAGE = "已按用户请求停止当前 A2A 委托，无需重试。"
+_A2A_INPUT_TIMEOUT_MESSAGE = "waitting user input timeout,close remote session, do not retry"
 _A2A_CANCEL_STATUS_NOOP = "noop"
 _A2A_CANCEL_STATUS_SENT = "sent"
 _A2A_CANCEL_STATUS_COMPLETED = "completed"
+_DELEGATE_INPUT_TIMEOUT = object()
 
 
 A2A_LIST_SCHEMA = {
@@ -419,13 +422,43 @@ def _emit_delegate_event(
         emit(source, event_type, content)
 
 
-def _read_delegate_input(input_adapter) -> str | None:
+def _read_delegate_input(input_adapter, timeout: float | None = None):
     if input_adapter is None:
         return None
     read_line = getattr(input_adapter, "read_line", None)
     if callable(read_line):
-        return read_line()
+        if timeout is None:
+            return read_line()
+        try:
+            line = read_line(timeout=timeout)
+        except TypeError as exc:
+            if "timeout" not in str(exc):
+                raise
+            line = read_line()
+        if line is None and _delegate_input_timed_out(input_adapter):
+            return _DELEGATE_INPUT_TIMEOUT
+        return line
     return None
+
+
+def _delegate_input_timed_out(input_adapter) -> bool:
+    timed_out = getattr(input_adapter, "last_read_timed_out", None)
+    if callable(timed_out):
+        try:
+            return bool(timed_out())
+        except Exception:
+            return False
+    return bool(getattr(input_adapter, "_last_read_timed_out", False))
+
+
+def _touch_parent_activity_for_delegate_input(parent_agent) -> None:
+    touch = getattr(parent_agent, "_touch_activity", None)
+    if not callable(touch):
+        return
+    try:
+        touch("a2a_delegate: received foreground input")
+    except Exception:
+        pass
 
 
 def _strip_recursive_delegate_tool(child) -> None:
@@ -1462,13 +1495,30 @@ def _run_local_delegate(
         total_api_calls = int(last_result.get("api_calls", 0) or 0)
 
         while True:
-            next_message = _read_delegate_input(input)
+            next_message = _read_delegate_input(
+                input,
+                timeout=_DELEGATE_FOREGROUND_INPUT_TIMEOUT_SECONDS,
+            )
+            if next_message is _DELEGATE_INPUT_TIMEOUT:
+                _emit_delegate_event(
+                    output,
+                    "delegate",
+                    "status",
+                    "input timeout,return to main",
+                    session_id=_effective_child_session_id(),
+                )
+                return _finish_loop(
+                    last_result=last_result,
+                    loop_exit_reason="input_timeout",
+                    api_calls=total_api_calls,
+                )
             if next_message is None:
                 return _finish_loop(
                     last_result=last_result,
                     loop_exit_reason="input_closed",
                     api_calls=total_api_calls,
                 )
+            assert isinstance(next_message, str)
             stripped = next_message.strip()
             if stripped in {"/main", "/exit"}:
                 _emit_delegate_event(
@@ -1483,6 +1533,7 @@ def _run_local_delegate(
                     loop_exit_reason="main_command",
                     api_calls=total_api_calls,
                 )
+            _touch_parent_activity_for_delegate_input(parent_agent)
             last_result = _run_single_turn(stripped)
             total_api_calls += int(last_result.get("api_calls", 0) or 0)
     except Exception as exc:
@@ -1682,7 +1733,31 @@ def _run_a2a_delegate(
                 )
 
             while True:
-                next_message = await asyncio.to_thread(_read_delegate_input, input)
+                next_message = await asyncio.to_thread(
+                    _read_delegate_input,
+                    input,
+                    _DELEGATE_FOREGROUND_INPUT_TIMEOUT_SECONDS,
+                )
+                if next_message is _DELEGATE_INPUT_TIMEOUT:
+                    _emit_delegate_event(
+                        output,
+                        "delegate",
+                        "status",
+                        "input timeout",
+                        session_id=getattr(session, "context_id", None),
+                    )
+                    return _build_a2a_payload(
+                        success=True,
+                        goal=goal,
+                        agent_name=agent_name,
+                        entry=entry,
+                        session=session,
+                        is_loop=is_loop,
+                        loop_exit_reason="input_timeout",
+                        duration_seconds=time.monotonic() - start,
+                        final_response=_A2A_INPUT_TIMEOUT_MESSAGE,
+                        completed=last_result.get("state") == _a2a_completed_state(),
+                    )
                 if next_message is None:
                     return _build_a2a_payload(
                         success=True,
@@ -1697,6 +1772,7 @@ def _run_a2a_delegate(
                         completed=last_result.get("state") == _a2a_completed_state(),
                     )
 
+                assert isinstance(next_message, str)
                 stripped = next_message.strip()
                 if stripped in {"/main", "/exit"}:
                     _emit_delegate_event(
@@ -1719,6 +1795,7 @@ def _run_a2a_delegate(
                         completed=last_result.get("state") == _a2a_completed_state(),
                     )
 
+                _touch_parent_activity_for_delegate_input(parent_agent)
                 last_result = await session.send_turn(
                     _decorate_a2a_user_message(stripped, parent_agent),
                     is_delegate_output=is_delegate_output,

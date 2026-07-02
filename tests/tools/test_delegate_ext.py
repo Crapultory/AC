@@ -978,6 +978,90 @@ class TestDelegateExt:
         assert child.run_conversation.call_count == 2
 
     @patch("run_agent.AIAgent")
+    def test_loop_mode_times_out_waiting_for_followup_input(self, mock_agent_cls):
+        parent = _make_mock_parent()
+
+        class _Input:
+            def __init__(self):
+                self.timeouts = []
+                self._last_read_timed_out = False
+
+            def read_line(self, timeout=None):
+                self.timeouts.append(timeout)
+                self._last_read_timed_out = timeout is not None
+                return None
+
+        child = MagicMock()
+        child.run_conversation.return_value = {
+            "final_response": "first",
+            "completed": True,
+            "api_calls": 1,
+        }
+        mock_agent_cls.return_value = child
+        input_adapter = _Input()
+
+        result = json.loads(
+            a2a_delegate(
+                goal="start",
+                type="local",
+                is_loop=True,
+                input=input_adapter,
+                parent_agent=parent,
+            )
+        )
+
+        assert result["success"] is True
+        assert result["final_response"] == "first"
+        assert result["loop_exit_reason"] == "input_timeout"
+        assert child.run_conversation.call_count == 1
+        assert input_adapter.timeouts == [25 * 60]
+
+    @patch("run_agent.AIAgent")
+    def test_loop_mode_touches_parent_activity_before_forwarding_followup(self, mock_agent_cls):
+        parent = _make_mock_parent()
+        observed = []
+
+        def _touch_activity(desc):
+            observed.append(("touch", desc))
+
+        parent._touch_activity = _touch_activity
+
+        class _Input:
+            def __init__(self, values):
+                self._values = iter(values)
+
+            def read_line(self, timeout=None):
+                del timeout
+                return next(self._values)
+
+        child = MagicMock()
+
+        def _run_conversation(user_message, **kwargs):
+            del kwargs
+            observed.append(("run", user_message))
+            return {"final_response": f"child:{user_message}", "completed": True, "api_calls": 1}
+
+        child.run_conversation.side_effect = _run_conversation
+        mock_agent_cls.return_value = child
+
+        result = json.loads(
+            a2a_delegate(
+                goal="start",
+                type="local",
+                is_loop=True,
+                input=_Input(["follow up", "/main"]),
+                parent_agent=parent,
+            )
+        )
+
+        assert result["loop_exit_reason"] == "main_command"
+        assert observed == [
+            ("run", "start"),
+            ("touch", "a2a_delegate: received foreground input"),
+            ("run", "follow up"),
+        ]
+
+    @patch("run_agent.AIAgent")
     def test_exit_command_matches_main_in_loop_mode(self, mock_agent_cls):
         parent = _make_mock_parent()
 
