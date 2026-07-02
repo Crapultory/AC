@@ -7,6 +7,7 @@ from collections.abc import Callable
 import inspect
 import json
 import logging
+import re as _re
 
 from a2a.helpers.proto_helpers import new_task_from_user_message
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -23,6 +24,12 @@ from aisoc.backend.agent_runtime import (
     default_agent_factory,
     load_conversation_history,
 )
+
+from tools.user_env_runtime import (
+    set_current_user_env_identity,
+    reset_current_user_env_identity,
+)
+from gateway.session_context import set_session_vars, clear_session_vars
 
 from .converter import a2a_to_text, history_to_a2a, text_to_message
 
@@ -88,6 +95,34 @@ class HermesA2AExecutor(AgentExecutor):
             self._cancel_events[task.id] = cancel_event
 
         user_input = a2a_to_text(context.message)
+
+        # ── 解析 <source> 前缀（字段灵活，不假设字段数量）─────────────────────
+        _source_meta: dict = {}
+        _src_m = _re.match(r"^<source>(\{.*?\})</source>\s*\n*", user_input, _re.DOTALL)
+        if _src_m:
+            try:
+                _source_meta = json.loads(_src_m.group(1))
+            except (json.JSONDecodeError, ValueError):
+                pass
+            user_input = user_input[_src_m.end():]  # 剥离前缀，LLM 只看干净正文
+
+        _src_platform = _source_meta.get("platform", "")
+        _src_uid      = _source_meta.get("uid", "")
+        _src_uname    = _source_meta.get("uname", "")
+
+        # ── 路径 A：直接绑定 userenv ContextVar（userenv tool 的优先读取路径）──
+        _identity_token = None
+        if _src_uid:
+            _identity_token = set_current_user_env_identity(_src_platform, _src_uid, _src_uname)
+
+        # ── 路径 B：绑定 HERMES_SESSION_* ContextVar（SOUL.md / session context）
+        _session_tokens = set_session_vars(
+            platform=_src_platform,
+            chat_id=_source_meta.get("channel", ""),
+            user_id=_src_uid,
+            user_name=_src_uname,
+        )
+
         await updater.start_work()
 
         if user_input == "__input_required__":
@@ -114,6 +149,43 @@ class HermesA2AExecutor(AgentExecutor):
             return
 
         agent = await self._get_agent(task.context_id)
+        agent._pending_source_meta = _source_meta  # per-request 注入，供 _run_agent_conversation 使用
+
+        # ── 路径 C：构建 Session Context Prompt，动态注入 agent.ephemeral_system_prompt ──
+        # build_session_context_prompt() 的输出会在每次 API call 时拼入 effective_system，
+        # 让 LLM 能实时感知来源平台、用户身份等上下文（而不只是工具层的 ContextVar）。
+        _context_prompt: str | None = None
+        if _src_platform:
+            try:
+                from gateway.session import (
+                    SessionSource,
+                    SessionContext,
+                    build_session_context_prompt,
+                )
+                from gateway.config import Platform
+
+                _source_obj = SessionSource(
+                    platform=Platform(_src_platform),
+                    chat_id=_source_meta.get("channel", ""),
+                    user_id=_src_uid,
+                    user_name=_src_uname,
+                )
+                _session_ctx_obj = SessionContext(
+                    source=_source_obj,
+                    connected_platforms=[Platform(_src_platform)],
+                    home_channels={},
+                )
+                _context_prompt = build_session_context_prompt(_session_ctx_obj)
+            except Exception:
+                logger.debug(
+                    "executor: failed to build session context prompt for platform=%r uid=%r",
+                    _src_platform,
+                    _src_uid,
+                    exc_info=True,
+                )
+                _context_prompt = None
+        agent._pending_context_prompt = _context_prompt  # 传给 _run_agent_conversation
+
         history = load_conversation_history(
             agent,
             getattr(agent, "session_id", None) or task.context_id,
@@ -151,6 +223,9 @@ class HermesA2AExecutor(AgentExecutor):
             )
             return
         finally:
+            if _identity_token is not None:
+                reset_current_user_env_identity(_identity_token)
+            clear_session_vars(_session_tokens)
             async with self._lock:
                 self._cancel_events.pop(task.id, None)
 
@@ -330,6 +405,30 @@ class HermesA2AExecutor(AgentExecutor):
         tool_start_callback=None,
         tool_complete_callback=None,
     ) -> dict[str, object]:
+        # ── 临时注入 agent 身份属性（tool_executor.py L876/L906 从 agent 属性读 userenv 分区键）
+        src = getattr(agent, "_pending_source_meta", {})
+        _uid  = src.get("uid", "")
+        _uname = src.get("uname", "")
+        _plat  = src.get("platform", "")
+        _old_uid      = getattr(agent, "_user_id", "")
+        _old_uname    = getattr(agent, "_user_name", "")
+        _old_plat     = getattr(agent, "_user_env_platform", self._CALLBACK_MISSING)
+        _old_platform = getattr(agent, "platform", self._CALLBACK_MISSING)
+        if _uid:
+            agent._user_id           = _uid
+            agent._user_name         = _uname
+            agent._user_env_platform = _plat  # tool_executor L877 优先读此属性，fallback agent.platform
+        if _plat:
+            agent.platform           = _plat  # 同步覆盖 agent.platform，确保 _format_aegis_source_header 读到真实来源平台
+
+        # ── 路径 C：临时覆写 ephemeral_system_prompt，让 LLM 每次都能看到实时 Session Context ──
+        # agent.ephemeral_system_prompt 在每次 API call 前实时拼入 effective_system（不走
+        # _cached_system_prompt 缓存），因此每次请求覆写都会立即生效，结束后还原，对下一次请求无污染。
+        _context_prompt = getattr(agent, "_pending_context_prompt", None)
+        _old_ephemeral = getattr(agent, "ephemeral_system_prompt", None)
+        if _context_prompt:
+            agent.ephemeral_system_prompt = _context_prompt
+
         kwargs: dict[str, object] = {}
         if stream_callback is not None:
             kwargs["stream_callback"] = stream_callback
@@ -348,6 +447,30 @@ class HermesA2AExecutor(AgentExecutor):
                 **kwargs,
             )
         finally:
+            # 恢复 agent 身份属性
+            if _uid:
+                agent._user_id   = _old_uid
+                agent._user_name = _old_uname
+                if _old_plat is self._CALLBACK_MISSING:
+                    try:
+                        delattr(agent, "_user_env_platform")
+                    except Exception:
+                        pass
+                else:
+                    agent._user_env_platform = _old_plat
+            # 恢复 agent.platform
+            if _plat:
+                if _old_platform is self._CALLBACK_MISSING:
+                    try:
+                        delattr(agent, "platform")
+                    except Exception:
+                        pass
+                else:
+                    agent.platform = _old_platform
+            # 恢复 ephemeral_system_prompt
+            if _context_prompt:
+                agent.ephemeral_system_prompt = _old_ephemeral
+            # 恢复原有回调属性
             if old_tool_start is self._CALLBACK_MISSING:
                 try:
                     delattr(agent, "tool_start_callback")
