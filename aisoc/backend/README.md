@@ -182,6 +182,7 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 - `GET /jobs/{job_id}/history`
 - `POST /jobs`
 - `PUT /jobs/{job_id}`
+- `PUT /jobs/{job_id}/raw`
 - `POST /jobs/{job_id}/pause`
 - `POST /jobs/{job_id}/resume`
 - `POST /jobs/{job_id}/trigger`

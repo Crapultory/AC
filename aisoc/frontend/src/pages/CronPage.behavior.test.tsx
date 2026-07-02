@@ -378,4 +378,259 @@ describe("CronPage behavior", () => {
       expect(text).toContain("hello from cron_b");
     });
   });
+
+  it("edits raw detail json, confirms save, and refreshes detail", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    let rawSaveCount = 0;
+
+    fetchJSONMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === "/api/cron/jobs?page=1&page_size=12") {
+        return Promise.resolve(
+          jobsPage([{ id: "job-a", name: "Job A", paused: false, profile: "default" }], 1, 1, 1),
+        ) as Promise<unknown>;
+      }
+      if (url === "/api/cron/jobs/job-a/history") {
+        return Promise.resolve([]) as Promise<unknown>;
+      }
+      if (url === "/api/cron/jobs/job-a" && (!init || !init.method || init.method === "GET")) {
+        if (rawSaveCount === 0) {
+          return Promise.resolve({
+            id: "job-a",
+            name: "Job A",
+            prompt: "before prompt",
+            profile: "default",
+            profile_name: "default",
+            hermes_home: "/tmp/default",
+            is_default_profile: true,
+          }) as Promise<unknown>;
+        }
+        return Promise.resolve({
+          id: "job-a",
+          name: "Job A updated",
+          prompt: "after prompt",
+          profile: "default",
+          profile_name: "default",
+          hermes_home: "/tmp/default",
+          is_default_profile: true,
+        }) as Promise<unknown>;
+      }
+      if (url === "/api/cron/jobs/job-a/raw" && init?.method === "PUT") {
+        rawSaveCount += 1;
+        expect(confirmSpy).toHaveBeenCalled();
+        expect(init.body).toBe(
+          JSON.stringify({
+            job: {
+              id: "job-a",
+              name: "Job A updated",
+              prompt: "after prompt",
+              profile: "default",
+              profile_name: "default",
+              hermes_home: "/tmp/default",
+              is_default_profile: true,
+            },
+          }),
+        );
+        return Promise.resolve({
+          id: "job-a",
+          name: "Job A updated",
+          prompt: "after prompt",
+          profile: "default",
+        }) as Promise<unknown>;
+      }
+      throw new Error(`Unexpected URL in test: ${url}`);
+    });
+
+    await mountCronPage();
+
+    await waitForAssert(() => {
+      expect((containerRef as HTMLElement).textContent || "").toContain("Job A");
+    });
+
+    const row = findJobRow(containerRef as HTMLElement, "Job A");
+    const detailButton = findActionButton(row, "Open detail");
+
+    await act(async () => {
+      detailButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    await waitForAssert(() => {
+      expect((containerRef as HTMLElement).textContent || "").toContain("Editable Updates JSON");
+    });
+
+    const rawButton = findActionButton(containerRef as HTMLElement, "Raw JSON");
+    await act(async () => {
+      rawButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    const rawEditor = (containerRef as HTMLElement).querySelector<HTMLTextAreaElement>("#cron-raw-editor");
+    expect(rawEditor).not.toBeNull();
+
+    await act(async () => {
+      rawEditor!.value = JSON.stringify({
+        id: "job-a",
+        name: "Job A updated",
+        prompt: "after prompt",
+        profile: "default",
+        profile_name: "default",
+        hermes_home: "/tmp/default",
+        is_default_profile: true,
+      }, null, 2);
+      rawEditor!.dispatchEvent(new Event("input", { bubbles: true }));
+      rawEditor!.dispatchEvent(new Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    const saveButton = findActionButton(containerRef as HTMLElement, "Save Raw JSON");
+    await act(async () => {
+      saveButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    await waitForAssert(() => {
+      const text = (containerRef as HTMLElement).textContent || "";
+      expect(text).toContain("Job A updated");
+      expect(text).toContain("Cron job raw detail updated.");
+    });
+
+    confirmSpy.mockRestore();
+  });
+
+  it("does not save raw detail json when confirmation is cancelled", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(false);
+
+    fetchJSONMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === "/api/cron/jobs?page=1&page_size=12") {
+        return Promise.resolve(
+          jobsPage([{ id: "job-a", name: "Job A", paused: false, profile: "default" }], 1, 1, 1),
+        ) as Promise<unknown>;
+      }
+      if (url === "/api/cron/jobs/job-a/history") {
+        return Promise.resolve([]) as Promise<unknown>;
+      }
+      if (url === "/api/cron/jobs/job-a" && (!init || !init.method || init.method === "GET")) {
+        return Promise.resolve({
+          id: "job-a",
+          name: "Job A",
+          prompt: "before prompt",
+          profile: "default",
+          profile_name: "default",
+          hermes_home: "/tmp/default",
+          is_default_profile: true,
+        }) as Promise<unknown>;
+      }
+      if (url === "/api/cron/jobs/job-a/raw" && init?.method === "PUT") {
+        throw new Error("raw save should not be called when confirmation is cancelled");
+      }
+      throw new Error(`Unexpected URL in test: ${url}`);
+    });
+
+    await mountCronPage();
+
+    await waitForAssert(() => {
+      expect((containerRef as HTMLElement).textContent || "").toContain("Job A");
+    });
+
+    const row = findJobRow(containerRef as HTMLElement, "Job A");
+    const detailButton = findActionButton(row, "Open detail");
+
+    await act(async () => {
+      detailButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    const rawButton = findActionButton(containerRef as HTMLElement, "Raw JSON");
+    await act(async () => {
+      rawButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    const rawEditor = (containerRef as HTMLElement).querySelector<HTMLTextAreaElement>("#cron-raw-editor");
+    expect(rawEditor).not.toBeNull();
+
+    await act(async () => {
+      rawEditor!.value = JSON.stringify({ id: "job-a", name: "Job A updated", profile: "default" }, null, 2);
+      rawEditor!.dispatchEvent(new Event("input", { bubbles: true }));
+      rawEditor!.dispatchEvent(new Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    const saveButton = findActionButton(containerRef as HTMLElement, "Save Raw JSON");
+    await act(async () => {
+      saveButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    expect(confirmSpy).toHaveBeenCalled();
+    confirmSpy.mockRestore();
+  });
+
+  it("shows client-side error for invalid raw detail json", async () => {
+    fetchJSONMock.mockImplementation((url: string, init?: RequestInit) => {
+      if (url === "/api/cron/jobs?page=1&page_size=12") {
+        return Promise.resolve(
+          jobsPage([{ id: "job-a", name: "Job A", paused: false, profile: "default" }], 1, 1, 1),
+        ) as Promise<unknown>;
+      }
+      if (url === "/api/cron/jobs/job-a/history") {
+        return Promise.resolve([]) as Promise<unknown>;
+      }
+      if (url === "/api/cron/jobs/job-a" && (!init || !init.method || init.method === "GET")) {
+        return Promise.resolve({
+          id: "job-a",
+          name: "Job A",
+          prompt: "before prompt",
+          profile: "default",
+          profile_name: "default",
+          hermes_home: "/tmp/default",
+          is_default_profile: true,
+        }) as Promise<unknown>;
+      }
+      if (url === "/api/cron/jobs/job-a/raw" && init?.method === "PUT") {
+        throw new Error("raw save should not be called when json is invalid");
+      }
+      throw new Error(`Unexpected URL in test: ${url}`);
+    });
+
+    await mountCronPage();
+
+    await waitForAssert(() => {
+      expect((containerRef as HTMLElement).textContent || "").toContain("Job A");
+    });
+
+    const row = findJobRow(containerRef as HTMLElement, "Job A");
+    const detailButton = findActionButton(row, "Open detail");
+
+    await act(async () => {
+      detailButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    const rawButton = findActionButton(containerRef as HTMLElement, "Raw JSON");
+    await act(async () => {
+      rawButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    const rawEditor = (containerRef as HTMLElement).querySelector<HTMLTextAreaElement>("#cron-raw-editor");
+    expect(rawEditor).not.toBeNull();
+
+    await act(async () => {
+      rawEditor!.value = "{";
+      rawEditor!.dispatchEvent(new Event("input", { bubbles: true }));
+      rawEditor!.dispatchEvent(new Event("change", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    const saveButton = findActionButton(containerRef as HTMLElement, "Save Raw JSON");
+    await act(async () => {
+      saveButton.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+      await Promise.resolve();
+    });
+
+    await waitForAssert(() => {
+      expect((containerRef as HTMLElement).textContent || "").toContain("Invalid JSON");
+    });
+  });
 });

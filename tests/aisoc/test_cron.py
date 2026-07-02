@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from aisoc.backend.services import cron_service
 
+
 def auth_headers(token: str = "test-token") -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
@@ -209,3 +210,44 @@ def test_create_cron_job_accepts_extended_payload_fields(test_client, monkeypatc
 
     assert response.status_code == 200
     assert captured == {"profile": "default", **payload}
+
+
+def test_raw_cron_job_update_route_uses_runtime_profile(test_client, monkeypatch) -> None:
+    monkeypatch.setattr(cron_service, "get_runtime_profile_name", lambda: "worker_alpha")
+
+    observed: dict[str, object] = {}
+
+    def _update_raw(job_id: str, job: dict, profile: str | None = None):
+        observed["job_id"] = job_id
+        observed["job"] = job
+        observed["profile"] = profile
+        return {"id": job_id, **job, "profile": profile}
+
+    monkeypatch.setattr(cron_service, "update_job_raw", _update_raw)
+
+    response = test_client.put(
+        "/api/cron/jobs/job-1/raw",
+        headers=auth_headers(),
+        json={"job": {"name": "renamed", "identify": None}},
+    )
+
+    assert response.status_code == 200
+    assert observed == {
+        "job_id": "job-1",
+        "job": {"name": "renamed", "identify": None},
+        "profile": "worker_alpha",
+    }
+
+
+def test_raw_cron_job_update_route_returns_not_found(test_client, monkeypatch) -> None:
+    monkeypatch.setattr(cron_service, "get_runtime_profile_name", lambda: "default")
+    monkeypatch.setattr(cron_service, "update_job_raw", lambda job_id, job, profile=None: None)
+
+    response = test_client.put(
+        "/api/cron/jobs/missing/raw",
+        headers=auth_headers(),
+        json={"job": {"name": "renamed"}},
+    )
+
+    assert response.status_code == 404
+    assert response.json() == {"detail": "Job not found"}
