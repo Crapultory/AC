@@ -180,6 +180,41 @@ class TestSlackDelegateForegroundRouteState:
 
         input_adapter.exit_foreground()
 
+    def test_delegate_input_timeout_returns_none_without_input(self, adapter):
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="D123",
+            thread_ts="1717171717.000250",
+        )
+        input_adapter = runtime["input_factory"]()
+
+        assert input_adapter.enter_foreground() is True
+        assert input_adapter.read_line(timeout=0.001) is None
+        input_adapter.exit_foreground()
+
+    def test_delegate_input_timeout_returns_pushed_line(self, adapter):
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="D123",
+            thread_ts="1717171717.000260",
+        )
+        input_adapter = runtime["input_factory"]()
+
+        assert input_adapter.enter_foreground() is True
+        assert input_adapter.push_line("follow up") is True
+        assert input_adapter.read_line(timeout=0.001) == "follow up"
+        input_adapter.exit_foreground()
+
+    def test_delegate_input_timeout_returns_none_after_close(self, adapter):
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="D123",
+            thread_ts="1717171717.000270",
+        )
+        input_adapter = runtime["input_factory"]()
+
+        assert input_adapter.enter_foreground() is True
+        input_adapter.close()
+        assert input_adapter.read_line(timeout=0.001) is None
+        input_adapter.exit_foreground()
+
     @pytest.mark.asyncio
     async def test_delegate_output_emit_targets_same_slack_thread(self, adapter):
         runtime = adapter.build_delegate_foreground_runtime(

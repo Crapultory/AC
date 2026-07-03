@@ -579,6 +579,27 @@ def test_input_adapter_reads_pushed_lines_until_closed() -> None:
     assert observed == ["child followup", None]
 
 
+def test_input_adapter_timeout_returns_none_without_input() -> None:
+    adapter = ExtCliInputAdapter()
+
+    assert adapter.read_line(timeout=0.001) is None
+
+
+def test_input_adapter_timeout_returns_pushed_line() -> None:
+    adapter = ExtCliInputAdapter()
+
+    assert adapter.push_line("child followup") is True
+    assert adapter.read_line(timeout=0.001) == "child followup"
+
+
+def test_input_adapter_timeout_returns_none_after_close() -> None:
+    adapter = ExtCliInputAdapter()
+
+    adapter.close()
+
+    assert adapter.read_line(timeout=0.001) is None
+
+
 def test_sync_failures_use_prefixed_error_output(monkeypatch) -> None:
     output = StringIO()
     inputs = iter(["hello", "/exit"])

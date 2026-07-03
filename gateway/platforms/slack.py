@@ -121,6 +121,7 @@ class _SlackDelegateInputAdapter:
         self._lines: list[str] = []
         self._closed = False
         self._waiting_for_input = False
+        self._last_read_timed_out = False
 
     @property
     def channel_id(self) -> str:
@@ -153,12 +154,23 @@ class _SlackDelegateInputAdapter:
             self._condition.notify_all()
             return True
 
-    def read_line(self) -> str | None:
+    def read_line(self, timeout: float | None = None) -> str | None:
         with self._condition:
+            self._last_read_timed_out = False
+            deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
             while not self._lines and not self._closed:
                 self._waiting_for_input = True
                 self._condition.notify_all()
-                self._condition.wait()
+                if deadline is None:
+                    self._condition.wait()
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._waiting_for_input = False
+                    self._last_read_timed_out = True
+                    self._condition.notify_all()
+                    return None
+                self._condition.wait(timeout=remaining)
             self._waiting_for_input = False
             if self._lines:
                 line = self._lines.pop(0)
@@ -175,6 +187,10 @@ class _SlackDelegateInputAdapter:
     def is_waiting_for_input(self) -> bool:
         with self._condition:
             return self._waiting_for_input
+
+    def last_read_timed_out(self) -> bool:
+        with self._condition:
+            return self._last_read_timed_out
 
     def wait_for_state_change(self, timeout: float | None = None) -> None:
         with self._condition:

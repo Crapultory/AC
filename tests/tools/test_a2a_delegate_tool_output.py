@@ -51,8 +51,10 @@ class _OutputSink:
 class _Input:
     def __init__(self, values):
         self._values = iter(values)
+        self.timeouts = []
 
-    def read_line(self):
+    def read_line(self, timeout=None):
+        self.timeouts.append(timeout)
         return next(self._values)
 
 
@@ -662,6 +664,114 @@ def test_a2a_mode_prefixes_aegis_source_identity_on_forwarded_messages(
     assert captured["texts"] == [
         f"{expected_source}test remote",
         f"{expected_source}follow up",
+    ]
+
+
+def test_a2a_mode_loop_times_out_waiting_for_followup_input(monkeypatch):
+    parent = _make_parent()
+    A2A_REGISTRY["remote"] = {
+        "name": "remote",
+        "url": "http://agent.local",
+        "available": True,
+        "capabilities": ["streaming"],
+        "agent_card": {"supported_interfaces": [{"url": "http://agent.local/a2a"}]},
+        "agent_card_name": "Remote Agent",
+        "error": None,
+    }
+    captured = {"closed": False}
+
+    class _FakeSession:
+        def __init__(self, base_url, *, output=None, timeout=60.0, poll_interval=0.05, session_id=None):
+            del base_url, output, timeout, poll_interval
+            self.context_id = session_id
+
+        async def send_turn(self, text: str, *, is_delegate_output: bool = True):
+            del text, is_delegate_output
+            return {
+                "final_response": "remote:first",
+                "state": TaskState.TASK_STATE_COMPLETED,
+                "state_name": "completed",
+            }
+
+        async def close(self):
+            captured["closed"] = True
+
+    input_adapter = _Input([None])
+    input_adapter._last_read_timed_out = True
+    monkeypatch.setattr("tools.a2a_delegate_tool._A2ADelegateSession", _FakeSession)
+
+    result = json.loads(
+        a2a_delegate(
+            goal="test remote",
+            type="a2a",
+            agent_name="remote",
+            is_loop=True,
+            input=input_adapter,
+            parent_agent=parent,
+        )
+    )
+
+    assert result["success"] is True
+    assert result["final_response"] == "等待用户任务输入超时，结束 remote 会话。"
+    assert result["loop_exit_reason"] == "input_timeout"
+    assert result["completed"] is True
+    assert input_adapter.timeouts == [25 * 60]
+    assert captured["closed"] is True
+
+
+def test_a2a_mode_loop_touches_parent_activity_before_forwarding_followup(monkeypatch):
+    parent = _make_parent()
+    observed = []
+
+    def _touch_activity(desc):
+        observed.append(("touch", desc))
+
+    parent._touch_activity = _touch_activity
+    A2A_REGISTRY["remote"] = {
+        "name": "remote",
+        "url": "http://agent.local",
+        "available": True,
+        "capabilities": ["streaming"],
+        "agent_card": {"supported_interfaces": [{"url": "http://agent.local/a2a"}]},
+        "agent_card_name": "Remote Agent",
+        "error": None,
+    }
+
+    class _FakeSession:
+        def __init__(self, base_url, *, output=None, timeout=60.0, poll_interval=0.05, session_id=None):
+            del base_url, output, timeout, poll_interval
+            self.context_id = session_id
+
+        async def send_turn(self, text: str, *, is_delegate_output: bool = True):
+            del is_delegate_output
+            observed.append(("send", text))
+            return {
+                "final_response": f"remote:{text}",
+                "state": TaskState.TASK_STATE_COMPLETED,
+                "state_name": "completed",
+            }
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr("tools.a2a_delegate_tool._A2ADelegateSession", _FakeSession)
+
+    result = json.loads(
+        a2a_delegate(
+            goal="test remote",
+            type="a2a",
+            agent_name="remote",
+            is_loop=True,
+            input=_Input(["follow up", "/main"]),
+            parent_agent=parent,
+        )
+    )
+
+    assert result["loop_exit_reason"] == "main_command"
+    assert observed == [
+        ("send", "test remote"),
+        ("touch", "a2a_delegate: received foreground input"),
+        ("send", "follow up"),
     ]
 
 
