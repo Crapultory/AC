@@ -133,6 +133,47 @@ async def _wait_for_route(adapter, *, channel_id: str, thread_ts: str, timeout: 
 
 
 class TestSlackDelegateForegroundRouteState:
+    @pytest.mark.asyncio
+    async def test_edit_message_marks_network_errors_retryable(self):
+        config = PlatformConfig(enabled=True, token="xoxb-fake-token")
+        slack_adapter = SlackAdapter(config)
+        slack_adapter._app = MagicMock()
+        slack_adapter._app.client = AsyncMock()
+        slack_adapter._app.client.chat_update = AsyncMock(
+            side_effect=RuntimeError("ConnectError: network down")
+        )
+
+        result = await slack_adapter.edit_message(
+            chat_id="C456",
+            message_id="msg-1",
+            content="updated",
+        )
+
+        assert result.success is False
+        assert result.retryable is True
+
+    @pytest.mark.asyncio
+    async def test_edit_message_marks_rate_limit_errors_retryable(self):
+        class _SlackRateLimitError(Exception):
+            response = {"status_code": 429, "error": "ratelimited"}
+
+        config = PlatformConfig(enabled=True, token="xoxb-fake-token")
+        slack_adapter = SlackAdapter(config)
+        slack_adapter._app = MagicMock()
+        slack_adapter._app.client = AsyncMock()
+        slack_adapter._app.client.chat_update = AsyncMock(
+            side_effect=_SlackRateLimitError("ratelimited")
+        )
+
+        result = await slack_adapter.edit_message(
+            chat_id="C456",
+            message_id="msg-1",
+            content="updated",
+        )
+
+        assert result.success is False
+        assert result.retryable is True
+
     def test_delegate_input_enter_and_exit_updates_thread_route(self, adapter):
         runtime = adapter.build_delegate_foreground_runtime(
             channel_id="D123",
@@ -496,12 +537,13 @@ class TestSlackDelegateForegroundRouteState:
         second_input_adapter.exit_foreground()
 
     @pytest.mark.asyncio
-    async def test_delegate_ai_delta_falls_back_to_send_when_edit_fails(self, adapter):
-        adapter._delegate_stream_edit_interval = 0.01
+    async def test_delegate_ai_delta_batches_after_nonretryable_edit_failure(self, adapter):
+        adapter._delegate_stream_edit_interval = 0.05
+        adapter._delegate_stream_buffer_threshold = 100
         adapter.edit_message = AsyncMock(
             return_value=SendResult(success=False, error="edit failed")
         )
-        send_ids = iter(["msg-1", "msg-2"])
+        send_ids = iter(["msg-1", "msg-2", "msg-3"])
         adapter.send = AsyncMock(
             side_effect=lambda *args, **kwargs: SendResult(
                 success=True,
@@ -518,11 +560,45 @@ class TestSlackDelegateForegroundRouteState:
         runtime["output"].emit("delegate", "ai_delta", "a", session_id="delegate-session-delta")
         await asyncio.sleep(0)
         runtime["output"].emit("delegate", "ai_delta", "b", session_id="delegate-session-delta")
-        await asyncio.sleep(0.05)
+        await asyncio.sleep(0.06)
 
         assert adapter.send.await_count == 2
         adapter.edit_message.assert_awaited_once()
         assert adapter.send.await_args_list[1].kwargs["content"] == "b"
+
+        runtime["output"].emit("delegate", "ai_delta", "c", session_id="delegate-session-delta")
+        await asyncio.sleep(0)
+        runtime["output"].emit("delegate", "ai_delta", "d", session_id="delegate-session-delta")
+        await asyncio.sleep(0.01)
+
+        assert adapter.send.await_count == 2
+
+        await asyncio.sleep(0.06)
+
+        assert adapter.send.await_count == 3
+        assert adapter.send.await_args_list[2].kwargs["content"] == "cd"
+        input_adapter.exit_foreground()
+
+    @pytest.mark.asyncio
+    async def test_delegate_ai_final_flushes_pending_delta_without_duplicate_final(self, adapter):
+        adapter._delegate_stream_edit_interval = 1.0
+        runtime = adapter.build_delegate_foreground_runtime(
+            channel_id="C456",
+            thread_ts="1717171717.000301",
+        )
+        input_adapter = runtime["input_factory"]()
+        assert input_adapter.enter_foreground() is True
+
+        runtime["output"].emit("delegate", "ai_delta", "hello", session_id="delegate-session-delta")
+        await asyncio.sleep(0)
+        runtime["output"].emit("delegate", "ai_delta", " there", session_id="delegate-session-delta")
+        await asyncio.sleep(0)
+        runtime["output"].emit("delegate", "ai", "hello there", session_id="delegate-session-delta")
+        await asyncio.sleep(0)
+
+        adapter.send.assert_awaited_once()
+        adapter.edit_message.assert_awaited_once()
+        assert adapter.edit_message.await_args.kwargs["content"] == "hello there"
         input_adapter.exit_foreground()
 
     @pytest.mark.asyncio

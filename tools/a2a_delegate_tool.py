@@ -1262,6 +1262,10 @@ def _resolve_a2a_entry(agent_name: Optional[str]) -> tuple[Optional[dict[str, An
     if entry is None:
         loaded = _load_a2a_registry(force_refresh=True)
         entry = loaded.get(name)
+    elif not entry.get("available", False):
+        # Stale unavailable entry — refresh to pick up services that started after registry load
+        loaded = _load_a2a_registry(force_refresh=True)
+        entry = loaded.get(name)
     if entry is None:
         available = ", ".join(sorted(loaded)) if loaded else "(none configured)"
         return None, f"Unknown a2a agent {name!r}. Available names: {available}."

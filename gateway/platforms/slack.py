@@ -314,6 +314,13 @@ class _SlackDelegateOutputAdapter:
             )
         metadata = self._delegate_metadata()
         if source == "delegate" and event_type == "ai":
+            route_key = self._delegate_route_key()
+            if route_key:
+                await self._adapter.handle_delegate_stream_segment_break(
+                    route_key=route_key,
+                    chat_id=self._channel_id,
+                    metadata=metadata,
+                )
             return
         if source == "delegate" and event_type == "ai_delta":
             rendered = str(content or "")
@@ -1630,7 +1637,8 @@ class SlackAdapter(BasePlatformAdapter):
                 e,
                 exc_info=True,
             )
-            return SendResult(success=False, error=str(e))
+            retryable = self._is_retryable_slack_edit_error(e)
+            return SendResult(success=False, error=str(e), retryable=retryable)
 
     async def update_blocks(
         self,
@@ -1911,6 +1919,7 @@ class SlackAdapter(BasePlatformAdapter):
         )
         if result.success:
             state.pending_text = ""
+            state.last_flush_ts = time.monotonic()
             if result.message_id:
                 state.message_id = str(result.message_id)
 
@@ -2056,20 +2065,12 @@ class SlackAdapter(BasePlatformAdapter):
         state = self._get_delegate_stream_state(route_key)
         assert state.lock is not None
         async with state.lock:
-            if not state.can_edit:
-                state.pending_text = str(content or "")
-                await self._send_delegate_stream_fallback(
-                    state=state,
-                    chat_id=chat_id,
-                    content=state.pending_text,
-                    metadata=metadata,
-                )
-                return
+            rendered = str(content or "")
+            if state.can_edit:
+                state.accumulated_text += rendered
+            state.pending_text += rendered
 
-            state.accumulated_text += str(content or "")
-            state.pending_text += str(content or "")
-
-            if not state.current_groups:
+            if state.can_edit and not state.current_groups:
                 await self._flush_delegate_stream_locked(
                     state=state,
                     chat_id=chat_id,
@@ -2107,6 +2108,42 @@ class SlackAdapter(BasePlatformAdapter):
                         delay=max(0.0, interval - elapsed),
                     )
                 )
+
+    @staticmethod
+    def _is_retryable_slack_edit_error(exc: Exception) -> bool:
+        error_text = str(exc)
+        if BasePlatformAdapter._is_retryable_error(error_text):
+            return True
+
+        response = getattr(exc, "response", None)
+        status_code = getattr(response, "status_code", None)
+        response_error = ""
+        if response is not None and hasattr(response, "get"):
+            try:
+                status_code = status_code or response.get("status_code")
+            except Exception:
+                pass
+            try:
+                response_error = str(response.get("error") or "")
+            except Exception:
+                response_error = ""
+
+        try:
+            status_int = int(status_code) if status_code is not None else 0
+        except (TypeError, ValueError):
+            status_int = 0
+        if status_int in {429, 500, 502, 503, 504}:
+            return True
+
+        lowered_error = response_error.lower()
+        return lowered_error in {
+            "ratelimited",
+            "rate_limited",
+            "internal_error",
+            "fatal_error",
+            "service_unavailable",
+            "request_timeout",
+        }
 
     async def handle_delegate_stream_segment_break(
         self,
