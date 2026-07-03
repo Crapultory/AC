@@ -164,26 +164,58 @@ class HermesA2AExecutor(AgentExecutor):
                 )
                 from gateway.config import Platform
 
+                # ── Platform 容错：aegis / aisoc-a2a 等 A2A 来源不在枚举中，
+                #    用 try/except 降级到 API_SERVER（保证类型合法），
+                #    同时保留原始字符串供后续替换真实来源名。
+                try:
+                    _plat_enum = Platform(_src_platform)
+                    _plat_is_fallback = False
+                except (ValueError, KeyError):
+                    logger.warning(
+                        "executor path-C: unknown platform %r, "
+                        "falling back to API_SERVER for type safety. "
+                        "Session context will reflect original platform name.",
+                        _src_platform,
+                    )
+                    _plat_enum = Platform.API_SERVER
+                    _plat_is_fallback = True
+
                 _source_obj = SessionSource(
-                    platform=Platform(_src_platform),
+                    platform=_plat_enum,
                     chat_id=_source_meta.get("channel", ""),
                     user_id=_src_uid,
                     user_name=_src_uname,
                 )
                 _session_ctx_obj = SessionContext(
                     source=_source_obj,
-                    connected_platforms=[Platform(_src_platform)],
+                    connected_platforms=[_plat_enum],
                     home_channels={},
                 )
                 _context_prompt = build_session_context_prompt(_session_ctx_obj)
-            except Exception:
-                logger.debug(
-                    "executor: failed to build session context prompt for platform=%r uid=%r",
+
+                # fallback 场景：把 prompt 里 API_SERVER 生成的"Source: API"
+                # 替换成真实来源名，避免语义丢失。
+                if _plat_is_fallback and _context_prompt:
+                    _context_prompt = _context_prompt.replace(
+                        "**Source:** API",
+                        f"**Source:** {_src_platform} (A2A)",
+                    )
+
+            except Exception as e:
+                logger.warning(
+                    "executor path-C: failed to build session context prompt "
+                    "for platform=%r uid=%r, falling back to minimal context. error=%s",
                     _src_platform,
                     _src_uid,
-                    exc_info=True,
+                    e,
                 )
-                _context_prompt = None
+                # 兜底：手动构造最小 context，确保 _context_prompt 不为 None，
+                # LLM 始终能感知来源平台和用户身份。
+                _context_prompt = (
+                    f"**Source:** {_src_platform} (A2A)\n"
+                    f"**User:** {_src_uname}\n"
+                    f"**User ID:** {_src_uid}\n"
+                )
         agent._pending_context_prompt = _context_prompt  # 传给 _run_agent_conversation
 
         history = load_conversation_history(
