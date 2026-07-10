@@ -16669,6 +16669,57 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _clear_delegate_foreground_runtime_bindings(agent: Any) -> None:
+        try:
+            agent._delegate_ext_output_adapter = None
+            agent._delegate_ext_input_factory = None
+        except Exception:
+            pass
+
+    def _bind_delegate_foreground_runtime_for_turn(
+        self,
+        agent: Any,
+        source: SessionSource,
+        *,
+        event_message_id: Optional[str] = None,
+    ) -> None:
+        self._clear_delegate_foreground_runtime_bindings(agent)
+        adapter = getattr(self, "adapters", {}).get(source.platform)
+        if adapter is None:
+            adapter = getattr(self, "adapters", {}).get(str(source.platform))
+        builder = getattr(adapter, "build_delegate_foreground_runtime", None)
+        if not callable(builder):
+            return
+
+        thread_ts = source.thread_id
+        platform_value = getattr(source.platform, "value", source.platform)
+        if (
+            not thread_ts
+            and str(platform_value).lower() == "slack"
+            and str(source.chat_type or "").lower() == "dm"
+        ):
+            extra = getattr(getattr(adapter, "config", None), "extra", {}) or {}
+            if extra.get("dm_top_level_threads_as_sessions", True):
+                thread_ts = event_message_id
+
+        try:
+            runtime = builder(
+                channel_id=source.chat_id,
+                thread_ts=thread_ts,
+                user_id=getattr(source, "user_id", None),
+                chat_type=getattr(source, "chat_type", None),
+            )
+        except Exception:
+            logger.debug("Could not build delegate foreground runtime", exc_info=True)
+            return
+        if not isinstance(runtime, dict):
+            return
+        agent._delegate_ext_output_adapter = runtime.get("output")
+        agent._delegate_ext_input_factory = runtime.get("input_factory")
+
+    # ------------------------------------------------------------------
+
     async def _run_agent(
         self,
         message: str,
@@ -18062,6 +18113,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         )
                         self._enforce_agent_cache_cap()
                 logger.debug("Created new agent for session %s (sig=%s)", session_key, _sig)
+
+            self._bind_delegate_foreground_runtime_for_turn(
+                agent,
+                source,
+                event_message_id=event_message_id,
+            )
 
             # Per-message state — callbacks and reasoning config change every
             # turn and must not be baked into the cached agent constructor.

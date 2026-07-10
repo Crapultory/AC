@@ -1316,6 +1316,8 @@ def _build_child_agent(
         ephemeral_system_prompt=child_prompt,
         log_prefix=f"[subagent-{task_index}]",
         platform="subagent",
+        user_id=getattr(parent_agent, "_user_id", None),
+        user_name=getattr(parent_agent, "_user_name", None),
         skip_context_files=True,
         skip_memory=True,
         clarify_callback=None,
@@ -1331,6 +1333,7 @@ def _build_child_agent(
         iteration_budget=None,  # fresh budget per subagent
     )
     child._print_fn = getattr(parent_agent, "_print_fn", None)
+    child._user_env_platform = getattr(parent_agent, "_user_env_platform", None) or getattr(parent_agent, "platform", None)
     # Now the child exists, its session id can ride on every relayed event
     # (including the spawn_requested below — first emit happens after this).
     child_session_ref["session_id"] = getattr(child, "session_id", "") or ""

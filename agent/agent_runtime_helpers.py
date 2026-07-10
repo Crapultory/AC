@@ -57,7 +57,7 @@ def _ra():
 
 
 AGENT_RUNTIME_POST_HOOK_TOOL_NAMES = frozenset(
-    {"todo", "session_search", "memory", "clarify", "read_terminal", "delegate_task"}
+    {"todo", "session_search", "memory", "clarify", "read_terminal", "delegate_task", "a2a_delegate"}
 )
 
 
@@ -2262,6 +2262,9 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
     elif function_name == "delegate_task":
         def _execute(next_args: dict) -> Any:
             return _finish_agent_tool(agent._dispatch_delegate_task(next_args), next_args)
+    elif function_name == "a2a_delegate":
+        def _execute(next_args: dict) -> Any:
+            return _finish_agent_tool(agent._dispatch_a2a_delegate(next_args), next_args)
     else:
         def _execute(next_args: dict) -> Any:
             return _ra().handle_function_call(
@@ -2280,10 +2283,18 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
 
     from hermes_cli.middleware import run_tool_execution_middleware
 
+    def _execute_with_user_env(next_args: dict) -> Any:
+        try:
+            from tools.user_env_runtime import bind_current_user_env_identity_from_agent
+        except Exception:
+            return _execute(next_args)
+        with bind_current_user_env_identity_from_agent(agent):
+            return _execute(next_args)
+
     return run_tool_execution_middleware(
         function_name,
         function_args,
-        lambda next_args: _execute(next_args if isinstance(next_args, dict) else function_args),
+        lambda next_args: _execute_with_user_env(next_args if isinstance(next_args, dict) else function_args),
         original_args=function_args,
         task_id=effective_task_id or "",
         session_id=getattr(agent, "session_id", "") or "",

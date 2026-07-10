@@ -10,6 +10,7 @@ import codecs
 import json
 import logging
 import os
+import re
 import select
 import shlex
 import subprocess
@@ -51,6 +52,38 @@ def set_activity_callback(cb: Callable[[str], None] | None) -> None:
 
 def _get_activity_callback() -> Callable[[str], None] | None:
     return getattr(_activity_callback_local, "callback", None)
+
+
+def _current_user_env_for_shell() -> dict[str, str]:
+    try:
+        from tools.user_env_runtime import get_current_user_env_values
+    except Exception:
+        return {}
+    try:
+        return get_current_user_env_values()
+    except Exception as exc:
+        logger.warning("Could not load current user env values for shell wrapper: %s", exc)
+        return {}
+
+
+def _is_shell_env_name(name: str) -> bool:
+    return bool(re.match(r"^[A-Za-z_][A-Za-z0-9_]*$", name))
+
+
+def _user_env_export_lines(env_values: dict[str, str]) -> list[str]:
+    lines: list[str] = []
+    for key, value in sorted(env_values.items()):
+        if _is_shell_env_name(key):
+            lines.append(f"export {key}={shlex.quote(str(value))}")
+    return lines
+
+
+def _user_env_unset_lines(env_values: dict[str, str]) -> list[str]:
+    lines: list[str] = []
+    for key in sorted(env_values):
+        if _is_shell_env_name(key):
+            lines.append(f"unset {key}")
+    return lines
 
 
 def touch_activity_if_due(
@@ -394,8 +427,13 @@ class BaseEnvironment(ABC):
         # static path is shlex-quoted (Windows/Git-Bash drive letters, spaces)
         # with ``$BASHPID`` left outside the quotes so it still expands.
         _snap_tmp = shlex.quote(self._snapshot_path + ".tmp.") + "$BASHPID"
+        user_env_values = _current_user_env_for_shell()
+        user_env_unsets = "\n".join(_user_env_unset_lines(user_env_values))
+        if user_env_unsets:
+            user_env_unsets += "\n"
         bootstrap = (
             f"umask 077\n"
+            f"{user_env_unsets}"
             f"export -p > {_snap_tmp}\n"
             # Dump function definitions, filtering out private (``_``-prefixed)
             # helpers — mainly bash-completion internals (``_git``, ``_make``…)
@@ -480,6 +518,7 @@ class BaseEnvironment(ABC):
         # writers never share a temp name and clobber each other before the mv.
         # Static path shlex-quoted (Windows/spaces); ``$BASHPID`` left to expand.
         _snap_tmp = shlex.quote(self._snapshot_path + ".tmp.") + "$BASHPID"
+        user_env_values = _current_user_env_for_shell()
 
         parts = []
 
@@ -500,12 +539,15 @@ class BaseEnvironment(ABC):
         # ``--`` keeps hyphen-prefixed directory names from being parsed as options.
         parts.append(f"builtin cd -- {quoted_cwd} || exit 126")
 
+        parts.extend(_user_env_export_lines(user_env_values))
+
         # Run the actual command
         parts.append(f"eval '{escaped}'")
         parts.append("__hermes_ec=$?")
         # Restrict Hermes metadata files without changing the user's command
         # umask. Snapshot files may contain env-carried secrets.
         parts.append("umask 077")
+        parts.extend(_user_env_unset_lines(user_env_values))
 
         # Re-dump env vars to snapshot (atomic replacement to avoid races).
         # Chain mv on the export succeeding so a failed/partial dump never

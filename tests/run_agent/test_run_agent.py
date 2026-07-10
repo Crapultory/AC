@@ -2886,6 +2886,67 @@ class TestConcurrentToolExecution:
         assert starts == [("c1", "web_search", {"query": "hello"})]
         assert completes == [("c1", "web_search", {"query": "hello"}, '{"success": true}')]
 
+    @pytest.mark.parametrize("quiet_mode", [True, False])
+    def test_sequential_registry_tool_binds_userenv_from_agent_without_session_env(
+        self,
+        agent,
+        monkeypatch,
+        tmp_path,
+        quiet_mode,
+    ):
+        """Cron-style prompt jobs clear gateway session env, so the
+        sequential registry-tool path must bind userenv identity from the
+        agent itself before calling handle_function_call().
+        """
+        tool_call = _mock_tool_call(name="web_search", arguments='{"q":"test"}', call_id="c1")
+        mock_msg = _mock_assistant_msg(content="", tool_calls=[tool_call])
+        messages = []
+
+        agent.quiet_mode = quiet_mode
+        agent._user_env_platform = "slack"
+        agent._user_id = "u123"
+        agent._user_name = "alice"
+
+        monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+        (tmp_path / "users.env.json").write_text(
+            json.dumps(
+                {
+                    "slack.u123": {
+                        "CURRENT_USER_NAME": "alice",
+                        "CUSTOM_TOKEN": "abc123",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+        for key in (
+            "HERMES_SESSION_PLATFORM",
+            "HERMES_SESSION_USER_ID",
+            "HERMES_SESSION_USER_NAME",
+        ):
+            monkeypatch.delenv(key, raising=False)
+
+        def _fake_handle_function_call(*_args, **_kwargs):
+            from tools.user_env_runtime import (
+                get_current_user_env_identity,
+                get_current_user_env_values,
+            )
+
+            identity = get_current_user_env_identity()
+            return json.dumps(
+                {
+                    "identity": identity.user_key if identity else None,
+                    "token": get_current_user_env_values().get("CUSTOM_TOKEN", "missing"),
+                }
+            )
+
+        with patch("run_agent.handle_function_call", side_effect=_fake_handle_function_call):
+            agent._execute_tool_calls_sequential(mock_msg, messages, "task-1")
+
+        assert len(messages) == 1
+        assert '"identity": "slack.u123"' in messages[0]["content"]
+        assert '"token": "abc123"' in messages[0]["content"]
+
     def test_sequential_browser_type_callbacks_redact_api_key(self, agent):
         secret = "sk-proj-ABCD1234567890EFGH"
         tool_call = _mock_tool_call(

@@ -250,6 +250,36 @@ class TestBuildJobPromptWithScript:
         assert "## Script Output" not in prompt
         assert "Simple job." in prompt
 
+    def test_script_output_injected_with_identify_userenv(self, cron_env):
+        from cron.jobs import build_job_identify
+        from cron.scheduler import _build_job_prompt
+
+        (cron_env / "users.env.json").write_text(
+            json.dumps(
+                {
+                    "slack.u123": {
+                        "CURRENT_USER_NAME": "alice",
+                        "CUSTOM_TOKEN": "abc123",
+                    }
+                }
+            ),
+            encoding="utf-8",
+        )
+
+        script = cron_env / "scripts" / "data.py"
+        script.write_text(
+            'import os\nprint(f"token={os.environ.get(\'CUSTOM_TOKEN\', \'missing\')}")\n'
+        )
+
+        job = {
+            "prompt": "Report any notable changes.",
+            "script": str(script),
+            "identify": build_job_identify("slack", "u123", "alice"),
+        }
+        prompt = _build_job_prompt(job)
+        assert "token=missing" not in prompt
+        assert "token=***" in prompt
+
 
 
 class TestCronjobToolScript:

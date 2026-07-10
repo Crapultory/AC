@@ -280,6 +280,42 @@ def test_run_job_no_agent_never_invokes_aiagent(hermes_env):
     ai_mock.assert_not_called()
 
 
+def test_run_job_no_agent_identify_loads_userenv_into_script_env(hermes_env):
+    """Cron no_agent scripts should see userenv values for the identified user."""
+    from cron.jobs import build_job_identify, create_job
+    from cron.scheduler import run_job
+
+    (hermes_env / "users.env.json").write_text(
+        json.dumps(
+            {
+                "slack.u123": {
+                    "CURRENT_USER_NAME": "alice",
+                    "CUSTOM_TOKEN": "abc123",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    script_path = hermes_env / "scripts" / "env.sh"
+    script_path.write_text("#!/bin/bash\necho \"${CUSTOM_TOKEN:-missing}\"\n")
+
+    job = create_job(
+        prompt=None,
+        schedule="every 5m",
+        script="env.sh",
+        no_agent=True,
+        deliver="local",
+        identify=build_job_identify("slack", "u123", "alice"),
+    )
+
+    success, _doc, final_response, error = run_job(job)
+
+    assert success is True
+    assert error is None
+    assert final_response.strip() == "abc123"
+
+
 # ---------------------------------------------------------------------------
 # _run_job_script: shell-script support
 # ---------------------------------------------------------------------------

@@ -5683,6 +5683,26 @@ class AIAgent:
             parent_agent=self,
         )
 
+    def _dispatch_a2a_delegate(self, function_args: dict) -> str:
+        """Single call site for a2a_delegate dispatch."""
+        from tools.a2a_delegate_tool import a2a_delegate as _a2a_delegate
+
+        input_adapter = None
+        input_factory = getattr(self, "_delegate_ext_input_factory", None)
+        if callable(input_factory):
+            input_adapter = input_factory()
+        return _a2a_delegate(
+            goal=function_args.get("goal"),
+            context=function_args.get("context"),
+            agent_name=function_args.get("agent_name"),
+            session_id=function_args.get("session_id"),
+            is_delegate_output=function_args.get("is_delegate_output", True),
+            is_loop=function_args.get("is_loop", False),
+            input=input_adapter,
+            output=getattr(self, "_delegate_ext_output_adapter", None),
+            parent_agent=self,
+        )
+
     def _invoke_tool(self, function_name: str, function_args: dict, effective_task_id: str,
                      tool_call_id: Optional[str] = None, messages: list = None,
                      pre_tool_block_checked: bool = False,

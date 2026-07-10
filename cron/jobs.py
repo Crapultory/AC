@@ -205,7 +205,7 @@ def _jobs_lock():
 # as a filesystem path component under ``OUTPUT_DIR``; allowing it to be
 # updated lets an unsafe value (``../escape``, absolute path, nested) leak
 # into output writes/deletes.
-_IMMUTABLE_JOB_FIELDS = frozenset({"id"})
+_IMMUTABLE_JOB_FIELDS = frozenset({"id", "identify"})
 
 
 def _job_output_dir(job_id: str) -> Path:
@@ -305,8 +305,57 @@ def _normalize_job_record(job: Dict[str, Any]) -> Dict[str, Any]:
     if not state:
         state = "scheduled" if normalized.get("enabled", True) else "paused"
     normalized["state"] = state
+    try:
+        normalized["identify"] = parse_job_identify(normalized.get("identify"))
+    except ValueError:
+        normalized["_identify_error"] = "malformed identify"
 
     return normalized
+
+
+def build_job_identify(platform: Any, user_id: Any, user_name: Any = "") -> Optional[Dict[str, str]]:
+    user_id_text = str(user_id or "").strip()
+    if not user_id_text:
+        return None
+    return {
+        "platform": str(platform or "").strip(),
+        "user_id": user_id_text,
+        "user_name": str(user_name or "").strip(),
+    }
+
+
+def parse_job_identify(value: Any) -> Optional[Dict[str, str]]:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("Cron job identify must be an object with platform, user_id, and user_name")
+    platform = value.get("platform")
+    user_id = value.get("user_id")
+    user_name = value.get("user_name", "")
+    if not isinstance(platform, str) or not isinstance(user_id, str) or not isinstance(user_name, str):
+        raise ValueError("Cron job identify fields platform, user_id, and user_name must be strings")
+    if not user_id.strip():
+        raise ValueError("Cron job identify.user_id is required")
+    return {
+        "platform": platform.strip(),
+        "user_id": user_id.strip(),
+        "user_name": user_name.strip(),
+    }
+
+
+def is_job_visible_to_identity(job: Dict[str, Any], identity: Any = None) -> bool:
+    try:
+        identify = parse_job_identify(job.get("identify"))
+    except ValueError:
+        return False
+    if identify is None:
+        return True
+    if identity is None:
+        return False
+    return (
+        identify.get("platform") == str(getattr(identity, "platform", "") or "").strip()
+        and identify.get("user_id") == str(getattr(identity, "user_id", "") or "").strip()
+    )
 
 
 def _secure_dir(path: Path):
@@ -911,6 +960,7 @@ def create_job(
     workdir: Optional[str] = None,
     no_agent: bool = False,
     attach_to_session: Optional[bool] = None,
+    identify: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Create a new cron job.
@@ -987,6 +1037,7 @@ def create_job(
     normalized_workdir = _normalize_workdir(workdir)
     normalized_no_agent = bool(no_agent)
     normalized_attach = attach_to_session if isinstance(attach_to_session, bool) else None
+    normalized_identify = parse_job_identify(identify)
 
     # no_agent jobs are meaningless without a script — the script IS the job.
     # Surface this as a clear ValueError at create time so bad configs never
@@ -1076,6 +1127,7 @@ def create_job(
         "origin": origin,  # Tracks where job was created for "origin" delivery
         "enabled_toolsets": normalized_toolsets,
         "workdir": normalized_workdir,
+        "identify": normalized_identify,
     }
     # Only persist attach_to_session when explicitly set, so existing jobs and
     # the common case stay byte-identical (absent key => fall back to the

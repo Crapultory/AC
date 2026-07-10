@@ -429,7 +429,7 @@ def build_tool_preview(tool_name: str, args: dict, max_len: int | None = None) -
         "vision_analyze": "question",
         "skill_view": "name", "skills_list": "category",
         "cronjob": "action",
-        "execute_code": "code", "delegate_task": "goal",
+        "execute_code": "code", "delegate_task": "goal", "a2a_delegate": "goal",
         "clarify": "question", "skill_manage": "name",
     }
 
@@ -580,6 +580,7 @@ _TOOL_VERBS: dict[str, str] = {
     "skills_list": "Listing skills",
     "skill_manage": "Updating skill",
     "delegate_task": "Delegating",
+    "a2a_delegate": "Delegating",
     "cronjob": "Scheduling",
     "clarify": "Asking",
     "memory": "Updating memory",
@@ -1428,6 +1429,8 @@ def get_cute_tool_message(
             count_label = task_count or len(tasks)
             return _wrap(f"┊ 🔀 delegate  {count_label}x: {_trunc(detail, 35)}  {dur}")
         return _wrap(f"┊ 🔀 delegate  {_trunc(args.get('goal', ''), 35)}  {dur}")
+    if tool_name == "a2a_delegate":
+        return _wrap(f"┊ A2A delegate {_trunc(args.get('goal', ''), 35)}  {dur}")
 
     preview = build_tool_preview(tool_name, args) or ""
     return _wrap(f"┊ ⚡ {tool_name[:9]:9} {_trunc(preview, 35)}  {dur}")
@@ -1436,5 +1439,4 @@ def get_cute_tool_message(
 # =========================================================================
 # Honcho session line (one-liner with clickable OSC 8 hyperlink)
 # =========================================================================
-
 

@@ -2010,7 +2010,40 @@ def _get_script_timeout() -> int:
     return _DEFAULT_SCRIPT_TIMEOUT
 
 
-def _run_job_script(script_path: str) -> tuple[bool, str]:
+def _job_user_env_values(identify: Optional[dict[str, str]] = None) -> dict[str, str]:
+    """Return the per-user env overlay for a cron job script subprocess."""
+    if identify:
+        try:
+            from cron.jobs import parse_job_identify
+            from tools.user_env_store import load_user_env
+
+            parsed = parse_job_identify(identify)
+            if parsed is None:
+                return {}
+            loaded = load_user_env(
+                parsed.get("platform"),
+                parsed.get("user_id"),
+                parsed.get("user_name"),
+            )
+            return dict(loaded.env)
+        except Exception as exc:
+            logger.warning("Could not load cron job user env values: %s", exc)
+            return {}
+
+    try:
+        from tools.user_env_runtime import get_current_user_env_values
+
+        return dict(get_current_user_env_values())
+    except Exception as exc:
+        logger.warning("Could not read current user env values: %s", exc)
+        return {}
+
+
+def _run_job_script(
+    script_path: str,
+    *,
+    identify: Optional[dict[str, str]] = None,
+) -> tuple[bool, str]:
     """Execute a cron job's data-collection script and capture its output.
 
     Scripts must reside within HERMES_HOME/scripts/.  Both relative and
@@ -2102,7 +2135,10 @@ def _run_job_script(script_path: str) -> tuple[bool, str]:
             text=True,
             timeout=script_timeout,
             cwd=str(path.parent),
-            env=_sanitize_subprocess_env(os.environ.copy()),
+            env=_sanitize_subprocess_env(
+                os.environ.copy(),
+                _job_user_env_values(identify),
+            ),
             **popen_kwargs,
         )
         stdout = (result.stdout or "").strip()
@@ -2187,7 +2223,10 @@ def _build_job_prompt(job: dict, prerun_script: Optional[tuple] = None) -> str:
         if prerun_script is not None:
             success, script_output = prerun_script
         else:
-            success, script_output = _run_job_script(script_path)
+            success, script_output = _run_job_script(
+                script_path,
+                identify=job.get("identify"),
+            )
         if success:
             if script_output:
                 prompt = (
@@ -2501,6 +2540,11 @@ def run_job(
     """
     job_id = job["id"]
     job_name = str(job.get("name") or job.get("prompt") or job_id or "cron job")
+    try:
+        from cron.jobs import parse_job_identify
+        job_identify = parse_job_identify(job.get("identify"))
+    except ValueError as exc:
+        raise RuntimeError(f"Cron job '{job_id}' has malformed identify: {exc}") from exc
 
     # ---------------------------------------------------------------
     # no_agent short-circuit — the script IS the job, no LLM involvement.
@@ -2540,7 +2584,7 @@ def run_job(
                 _prior_cwd = None
 
         try:
-            ok, output = _run_job_script(script_path)
+            ok, output = _run_job_script(script_path, identify=job_identify)
         finally:
             if _prior_cwd is not None:
                 try:
@@ -2629,7 +2673,7 @@ def run_job(
     prerun_script = None
     script_path = job.get("script")
     if script_path:
-        prerun_script = _run_job_script(script_path)
+        prerun_script = _run_job_script(script_path, identify=job_identify)
         _ran_ok, _script_output = prerun_script
         if _ran_ok and not _parse_wake_gate(_script_output):
             logger.info(
@@ -3069,10 +3113,14 @@ def run_job(
             skip_context_files=not bool(_job_workdir),
             load_soul_identity=True,
             skip_memory=True,  # Cron system prompts would corrupt user representations
-            platform="cron",
+            platform=(job_identify or {}).get("platform") or "cron",
+            user_id=(job_identify or {}).get("user_id"),
+            user_name=(job_identify or {}).get("user_name"),
             session_id=_cron_session_id,
             session_db=_session_db,
         )
+        if job_identify:
+            agent._user_env_platform = job_identify.get("platform") or "cron"
         
         # Run the agent with an *inactivity*-based timeout: the job can run
         # for hours if it's actively calling tools / receiving stream tokens,

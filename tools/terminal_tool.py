@@ -2072,6 +2072,14 @@ def terminal_tool(
         # every delegate_task child share one container; only task_ids with
         # a registered env override (RL benchmarks) get isolated sandboxes.
         effective_task_id = _resolve_container_task_id(task_id)
+        if env_type == "local":
+            try:
+                from tools.user_env_runtime import get_current_user_env_identity
+                identity = get_current_user_env_identity()
+            except Exception:
+                identity = None
+            if identity is not None:
+                effective_task_id = identity.runtime_scope_key
 
         # Check per-task overrides (set by environments like TerminalBench2Env)
         # before falling back to global env var config. ``resolve_task_overrides``

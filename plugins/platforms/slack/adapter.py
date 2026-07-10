@@ -14,6 +14,7 @@ import json
 import logging
 import os
 import re
+import threading
 import time
 from dataclasses import dataclass, field
 from typing import Dict, Optional, Any, Tuple, List
@@ -61,6 +62,7 @@ except ImportError:  # pragma: no cover - plugin loaded outside package context
 
 
 logger = logging.getLogger(__name__)
+DEFAULT_DELEGATE_STREAM_EDIT_INTERVAL = 3.0
 
 # ContextVar carrying the user_id of the slash-command invoker.
 # Set in _handle_slash_command, read in send() to match the correct
@@ -82,6 +84,176 @@ class _ThreadContextCache:
     fetched_at: float = field(default_factory=time.monotonic)
     message_count: int = 0
     parent_text: str = ""  # Raw text of the thread parent (for reply_to_text injection)
+
+
+@dataclass
+class _SlackDelegateRoute:
+    key: str
+    channel_id: str
+    thread_ts: Optional[str]
+    user_id: Optional[str]
+    chat_type: Optional[str]
+    input_adapter: Any
+
+
+@dataclass
+class _SlackDelegateStreamState:
+    accumulated_text: str = ""
+    pending_text: str = ""
+    message_id: Optional[str] = None
+    current_groups: List[str] = field(default_factory=list)
+    message_ids: List[str] = field(default_factory=list)
+    can_edit: bool = True
+    lock: Optional[asyncio.Lock] = None
+    last_flush_ts: float = 0.0
+    flush_task: Optional[asyncio.Task] = None
+
+
+class _SlackDelegateInputAdapter:
+    def __init__(self, adapter: "SlackAdapter", route: _SlackDelegateRoute):
+        self._adapter = adapter
+        self._route = route
+        self._condition = threading.Condition()
+        self._lines: List[str] = []
+        self._closed = False
+        self._waiting_for_input = False
+        self._last_read_timed_out = False
+
+    def enter_foreground(self) -> bool:
+        self._adapter._register_delegate_route(self._route)
+        return True
+
+    def exit_foreground(self) -> None:
+        self._adapter._unregister_delegate_route(self._route)
+
+    def push_line(self, text: str) -> bool:
+        with self._condition:
+            if self._closed:
+                return False
+            self._waiting_for_input = False
+            self._lines.append(str(text or ""))
+            self._condition.notify_all()
+            return True
+
+    def read_line(self, timeout=None):
+        with self._condition:
+            self._last_read_timed_out = False
+            deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
+            while not self._lines and not self._closed:
+                self._waiting_for_input = True
+                self._condition.notify_all()
+                if deadline is None:
+                    self._condition.wait()
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._waiting_for_input = False
+                    self._last_read_timed_out = True
+                    self._condition.notify_all()
+                    return None
+                self._condition.wait(timeout=remaining)
+            self._waiting_for_input = False
+            if self._lines:
+                line = self._lines.pop(0)
+                self._condition.notify_all()
+                return line
+            return None
+
+    def close(self) -> None:
+        with self._condition:
+            self._closed = True
+            self._waiting_for_input = False
+            self._condition.notify_all()
+        self.exit_foreground()
+
+    def last_read_timed_out(self) -> bool:
+        with self._condition:
+            return self._last_read_timed_out
+
+    def is_waiting_for_input(self) -> bool:
+        with self._condition:
+            return self._waiting_for_input
+
+
+class _SlackDelegateOutputAdapter:
+    def __init__(
+        self,
+        adapter: "SlackAdapter",
+        *,
+        channel_id: str,
+        thread_ts: Optional[str],
+        user_id: Optional[str] = None,
+        chat_type: Optional[str] = None,
+    ):
+        self._adapter = adapter
+        self._channel_id = channel_id
+        self._thread_ts = thread_ts
+        self._user_id = user_id
+        self._chat_type = chat_type
+
+    def emit(self, source, event_type, content, session_id=None) -> None:
+        self._adapter._schedule_delegate_output(
+            self._emit_async(str(source or ""), str(event_type or ""), str(content or ""), session_id=session_id)
+        )
+
+    def _route_key(self) -> str:
+        return self._adapter._delegate_route_key(
+            channel_id=self._channel_id,
+            thread_ts=self._thread_ts,
+            user_id=self._user_id,
+            chat_type=self._chat_type,
+        )
+
+    def _format_delegate_tool_call_content(self, content: str) -> str:
+        raw = str(content or "").strip()
+        if not raw:
+            return ""
+        tool_name, _sep, raw_args = raw.partition(" ")
+        tool_name = tool_name.strip() or "tool"
+        preview = " ".join(raw_args.strip().split())
+        if preview:
+            if len(preview) > 80:
+                preview = preview[:77] + "..."
+            return f"`tool` {tool_name}: {preview}"
+        return f"`tool` {tool_name}"
+
+    async def _emit_async(self, source: str, event_type: str, content: str, *, session_id=None) -> None:
+        del session_id
+        metadata = {"thread_id": self._thread_ts} if self._thread_ts else None
+        if source == "delegate" and event_type == "ai_delta":
+            if content:
+                await self._adapter.handle_delegate_ai_delta(
+                    route_key=self._route_key(),
+                    chat_id=self._channel_id,
+                    content=content,
+                    metadata=metadata,
+                )
+            return
+
+        if source == "delegate" and event_type == "ai":
+            await self._adapter.handle_delegate_stream_segment_break(
+                route_key=self._route_key(),
+                chat_id=self._channel_id,
+                metadata=metadata,
+            )
+            return
+
+        if source == "delegate" and event_type == "tool_call":
+            await self._adapter.handle_delegate_stream_segment_break(
+                route_key=self._route_key(),
+                chat_id=self._channel_id,
+                metadata=metadata,
+            )
+            rendered = self._format_delegate_tool_call_content(content)
+            if rendered:
+                await self._adapter.send(self._channel_id, rendered, metadata=metadata)
+            return
+
+        prefix = {
+            "status": "_delegate_",
+            "error": "`delegate error`",
+        }.get(event_type, f"`{event_type}`")
+        await self._adapter.send(self._channel_id, f"{prefix}: {content}", metadata=metadata)
 
 
 def check_slack_requirements() -> bool:
@@ -452,6 +624,7 @@ class SlackAdapter(BasePlatformAdapter):
         # Track pending approval message_ts → resolved flag to prevent
         # double-clicks on approval buttons.
         self._approval_resolved: Dict[str, bool] = {}
+        self._clarify_choices: Dict[str, List[str]] = {}
         # Track timestamps of messages sent by the bot so we can respond
         # to thread replies even without an explicit @mention.
         self._bot_message_ts: set = set()
@@ -486,6 +659,401 @@ class SlackAdapter(BasePlatformAdapter):
         self._socket_watchdog_task: Optional[asyncio.Task] = None
         self._socket_reconnect_lock = asyncio.Lock()
         self._socket_watchdog_interval_s = 15.0
+        self._delegate_routes: Dict[str, _SlackDelegateRoute] = {}
+        self._delegate_routes_lock = threading.RLock()
+        self._delegate_loop: Optional[asyncio.AbstractEventLoop] = None
+        self._delegate_stream_states: Dict[str, _SlackDelegateStreamState] = {}
+
+    def _delegate_route_key(
+        self,
+        *,
+        channel_id: str,
+        thread_ts: Optional[str],
+        user_id: Optional[str],
+        chat_type: Optional[str],
+    ) -> str:
+        try:
+            from gateway.session import build_session_key
+
+            source = self.build_source(
+                chat_id=channel_id,
+                chat_type=chat_type or "dm",
+                user_id=user_id,
+                thread_id=thread_ts,
+            )
+            return build_session_key(source)
+        except Exception:
+            return json.dumps(
+                {
+                    "platform": "slack",
+                    "channel_id": channel_id,
+                    "thread_ts": thread_ts,
+                    "user_id": user_id,
+                    "chat_type": chat_type,
+                },
+                sort_keys=True,
+            )
+
+    def _register_delegate_route(self, route: _SlackDelegateRoute) -> None:
+        with self._delegate_routes_lock:
+            self._delegate_routes[route.key] = route
+
+    def _unregister_delegate_route(self, route: _SlackDelegateRoute) -> None:
+        with self._delegate_routes_lock:
+            if self._delegate_routes.get(route.key) is route:
+                self._delegate_routes.pop(route.key, None)
+        self._clear_delegate_stream_state_by_key(route.key)
+
+    def _get_delegate_route(
+        self,
+        *,
+        channel_id: str,
+        thread_ts: Optional[str],
+        user_id: Optional[str] = None,
+        chat_type: Optional[str] = None,
+    ) -> Optional[_SlackDelegateRoute]:
+        key = self._delegate_route_key(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            chat_type=chat_type,
+        )
+        with self._delegate_routes_lock:
+            return self._delegate_routes.get(key)
+
+    def _schedule_delegate_output(self, coro) -> None:
+        loop = self._delegate_loop
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is not None and running is loop:
+            running.create_task(coro)
+            return
+        if loop is not None and loop.is_running():
+            asyncio.run_coroutine_threadsafe(coro, loop)
+            return
+        try:
+            asyncio.run(coro)
+        except RuntimeError:
+            logger.debug("[Slack] Could not schedule delegate output", exc_info=True)
+
+    def _delegate_stream_effective_limit(self) -> int:
+        try:
+            raw_limit = int(getattr(self, "MAX_MESSAGE_LENGTH", 39000) or 39000)
+        except Exception:
+            raw_limit = 39000
+        return max(1, raw_limit - (64 if raw_limit > 128 else 0))
+
+    def _delegate_stream_rendered_length(self, text: str) -> int:
+        try:
+            rendered = self.format_message(text)
+        except Exception:
+            rendered = text
+        try:
+            return self.message_len_fn(rendered)
+        except Exception:
+            return len(rendered)
+
+    def _split_delegate_stream_content(self, text: str) -> List[str]:
+        remaining = str(text or "")
+        if not remaining:
+            return []
+        limit = self._delegate_stream_effective_limit()
+        groups: List[str] = []
+        while remaining:
+            if self._delegate_stream_rendered_length(remaining) <= limit:
+                groups.append(remaining)
+                break
+            lo, hi = 1, len(remaining)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if self._delegate_stream_rendered_length(remaining[:mid]) <= limit:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            split_at = max(1, lo)
+            groups.append(remaining[:split_at])
+            remaining = remaining[split_at:]
+        return groups
+
+    def _get_delegate_stream_state(self, route_key: str) -> _SlackDelegateStreamState:
+        with self._delegate_routes_lock:
+            state = self._delegate_stream_states.get(route_key)
+            if state is None:
+                state = _SlackDelegateStreamState()
+                self._delegate_stream_states[route_key] = state
+        if state.lock is None:
+            state.lock = asyncio.Lock()
+        return state
+
+    @staticmethod
+    def _reset_delegate_stream_segment_locked(state: _SlackDelegateStreamState) -> None:
+        task = state.flush_task
+        if task is not None and not task.done():
+            task.cancel()
+        state.flush_task = None
+        state.accumulated_text = ""
+        state.pending_text = ""
+        state.message_id = None
+        state.current_groups = []
+        state.message_ids = []
+        state.can_edit = True
+        state.last_flush_ts = 0.0
+
+    def _clear_delegate_stream_state_by_key(self, route_key: Optional[str]) -> None:
+        if not route_key:
+            return
+        with self._delegate_routes_lock:
+            state = self._delegate_stream_states.pop(route_key, None)
+        if state is not None and state.flush_task is not None and not state.flush_task.done():
+            state.flush_task.cancel()
+
+    def _delegate_stream_edit_interval(self) -> float:
+        try:
+            return max(
+                0.0,
+                float(
+                    getattr(
+                        self,
+                        "_delegate_stream_edit_interval",
+                        DEFAULT_DELEGATE_STREAM_EDIT_INTERVAL,
+                    )
+                    or 0.0
+                ),
+            )
+        except Exception:
+            return DEFAULT_DELEGATE_STREAM_EDIT_INTERVAL
+
+    async def _flush_delegate_stream_after_delay(
+        self,
+        *,
+        route_key: str,
+        chat_id: str,
+        metadata: Optional[Dict[str, Any]],
+        delay: float,
+    ) -> None:
+        try:
+            if delay > 0:
+                await asyncio.sleep(delay)
+            state = self._delegate_stream_states.get(route_key)
+            if state is None or state.lock is None:
+                return
+            async with state.lock:
+                if state.flush_task is not asyncio.current_task():
+                    return
+                state.flush_task = None
+                await self._flush_delegate_stream_locked(
+                    state=state,
+                    chat_id=chat_id,
+                    metadata=metadata,
+                    route_key=route_key,
+                    force=True,
+                )
+        except asyncio.CancelledError:
+            return
+
+    async def _flush_delegate_stream_locked(
+        self,
+        *,
+        state: _SlackDelegateStreamState,
+        chat_id: str,
+        metadata: Optional[Dict[str, Any]],
+        route_key: Optional[str] = None,
+        force: bool = False,
+    ) -> None:
+        if not state.pending_text and state.message_id:
+            return
+        if state.message_id and state.pending_text and not force:
+            interval = self._delegate_stream_edit_interval()
+            elapsed = time.monotonic() - state.last_flush_ts
+            if elapsed < interval:
+                if route_key and (state.flush_task is None or state.flush_task.done()):
+                    state.flush_task = asyncio.create_task(
+                        self._flush_delegate_stream_after_delay(
+                            route_key=route_key,
+                            chat_id=chat_id,
+                            metadata=metadata,
+                            delay=interval - elapsed,
+                        )
+                    )
+                return
+        if state.flush_task is not None and not state.flush_task.done():
+            state.flush_task.cancel()
+            state.flush_task = None
+        groups = self._split_delegate_stream_content(state.accumulated_text)
+        if not groups:
+            return
+        if not state.message_id:
+            latest_message_id: Optional[str] = None
+            sent_groups: List[str] = []
+            message_ids: List[str] = []
+            for group in groups:
+                result = await self.send(chat_id, group, metadata=metadata)
+                if not result.success:
+                    return
+                latest_message_id = str(result.message_id) if result.message_id else latest_message_id
+                sent_groups.append(group)
+                if latest_message_id:
+                    message_ids.append(latest_message_id)
+            state.message_id = latest_message_id
+            state.current_groups = sent_groups[-1:] if sent_groups else []
+            state.message_ids = message_ids[-1:] if message_ids else []
+            state.accumulated_text = sent_groups[-1] if sent_groups else ""
+            state.pending_text = ""
+            state.last_flush_ts = time.monotonic()
+            return
+
+        if len(groups) == 1:
+            current_group = groups[0]
+            previous_text = state.current_groups[-1] if state.current_groups else ""
+            if current_group != previous_text and state.message_id:
+                result = await self.edit_message(chat_id, state.message_id, current_group)
+                if not result.success:
+                    result = await self.send(chat_id, state.pending_text, metadata=metadata)
+                    if result.success and result.message_id:
+                        state.message_id = str(result.message_id)
+                state.current_groups = [current_group]
+                state.accumulated_text = current_group
+                state.last_flush_ts = time.monotonic()
+            state.pending_text = ""
+            return
+
+        # Once a stream crosses Slack's single-message limit, send the split
+        # groups as separate messages and continue the segment from the last one.
+        latest_message_id: Optional[str] = state.message_id
+        if state.message_id:
+            edit_result = await self.edit_message(chat_id, state.message_id, groups[0])
+            if not edit_result.success:
+                return
+        for group in groups[1:]:
+            result = await self.send(chat_id, group, metadata=metadata)
+            if not result.success:
+                return
+            if result.message_id:
+                latest_message_id = str(result.message_id)
+        state.message_id = latest_message_id
+        state.current_groups = groups[-1:]
+        state.message_ids = [latest_message_id] if latest_message_id else []
+        state.accumulated_text = groups[-1]
+        state.pending_text = ""
+        state.last_flush_ts = time.monotonic()
+
+    async def handle_delegate_ai_delta(
+        self,
+        *,
+        route_key: str,
+        chat_id: str,
+        content: str,
+        metadata: Optional[Dict[str, Any]],
+    ) -> None:
+        state = self._get_delegate_stream_state(route_key)
+        assert state.lock is not None
+        async with state.lock:
+            rendered = str(content or "")
+            state.accumulated_text += rendered
+            state.pending_text += rendered
+            await self._flush_delegate_stream_locked(
+                state=state,
+                chat_id=chat_id,
+                metadata=metadata,
+                route_key=route_key,
+            )
+
+    async def handle_delegate_stream_segment_break(
+        self,
+        *,
+        route_key: str,
+        chat_id: str,
+        metadata: Optional[Dict[str, Any]],
+    ) -> None:
+        state = self._delegate_stream_states.get(route_key)
+        if state is None or state.lock is None:
+            return
+        async with state.lock:
+            await self._flush_delegate_stream_locked(
+                state=state,
+                chat_id=chat_id,
+                metadata=metadata,
+                route_key=route_key,
+                force=True,
+            )
+            self._reset_delegate_stream_segment_locked(state)
+
+    def build_delegate_foreground_runtime(
+        self,
+        *,
+        channel_id: str,
+        thread_ts: Optional[str],
+        user_id: Optional[str] = None,
+        chat_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        try:
+            self._delegate_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        key = self._delegate_route_key(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            chat_type=chat_type,
+        )
+        def _input_factory():
+            route = _SlackDelegateRoute(
+                key=key,
+                channel_id=channel_id,
+                thread_ts=thread_ts,
+                user_id=user_id,
+                chat_type=chat_type,
+                input_adapter=None,
+            )
+            input_adapter = _SlackDelegateInputAdapter(self, route)
+            route.input_adapter = input_adapter
+            return input_adapter
+
+        output_adapter = _SlackDelegateOutputAdapter(
+            self,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            chat_type=chat_type,
+        )
+        return {
+            "output": output_adapter,
+            "input_factory": _input_factory,
+            "metadata": {"thread_id": thread_ts} if thread_ts else None,
+        }
+
+    async def _maybe_route_delegate_foreground_message(
+        self,
+        *,
+        text: str,
+        channel_id: str,
+        thread_ts: Optional[str],
+        user_id: Optional[str],
+        chat_type: Optional[str],
+    ) -> bool:
+        route = self._get_delegate_route(
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            chat_type=chat_type,
+        )
+        if route is None:
+            return False
+        input_adapter = getattr(route, "input_adapter", None)
+        push_line = getattr(input_adapter, "push_line", None)
+        if not callable(push_line):
+            return False
+        if push_line(text):
+            await self.handle_delegate_stream_segment_break(
+                route_key=route.key,
+                chat_id=channel_id,
+                metadata={"thread_id": thread_ts} if thread_ts else None,
+            )
+            return True
+        self._unregister_delegate_route(route)
+        return False
 
     def _start_socket_mode_handler(self) -> None:
         """Start the Slack Socket Mode background task."""
@@ -953,6 +1521,10 @@ class SlackAdapter(BasePlatformAdapter):
 
     async def connect(self, *, is_reconnect: bool = False) -> bool:
         """Connect to Slack via Socket Mode."""
+        try:
+            self._delegate_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            self._delegate_loop = None
         if not SLACK_AVAILABLE:
             logger.error(
                 "[Slack] slack-bolt not installed. Run: pip install slack-bolt",
@@ -1184,6 +1756,13 @@ class SlackAdapter(BasePlatformAdapter):
                 "hermes_confirm_cancel",
             ):
                 self._app.action(_action_id)(self._handle_slash_confirm_action)
+
+            # Register clarify choice buttons. Choice buttons have dynamic
+            # action IDs (hermes_clarify_0, hermes_clarify_1, ...), so a
+            # narrow regex keeps this feature from becoming a catch-all handler.
+            self._app.action(re.compile(r"^hermes_clarify_"))(
+                self._handle_clarify_action
+            )
 
             # Register plugin-provided Block Kit action handlers.
             #
@@ -3175,6 +3754,22 @@ class SlackAdapter(BasePlatformAdapter):
             is_bot=bool(event.get("bot_id")) or event.get("subtype") == "bot_message",
         )
 
+        delegate_routed_text = text
+        delegate_command_text = (original_text or "").strip()
+        if bot_uid:
+            delegate_command_text = delegate_command_text.replace(f"<@{bot_uid}>", "").strip()
+        if delegate_command_text in {"/main", "/exit"}:
+            delegate_routed_text = delegate_command_text
+
+        if await self._maybe_route_delegate_foreground_message(
+            text=delegate_routed_text,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            chat_type=source.chat_type,
+        ):
+            return
+
         # Per-channel ephemeral prompt
         from gateway.platforms.base import (
             resolve_channel_prompt,
@@ -3403,6 +3998,96 @@ class SlackAdapter(BasePlatformAdapter):
             logger.error("[Slack] send_slash_confirm failed: %s", e, exc_info=True)
             return SendResult(success=False, error=str(e))
 
+    async def send_clarify(
+        self,
+        chat_id: str,
+        question: str,
+        choices: Optional[list],
+        clarify_id: str,
+        session_key: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> SendResult:
+        """Send a Slack Block Kit clarify prompt with choice buttons."""
+        if not self._app:
+            return SendResult(success=False, error="Not connected")
+
+        if not choices:
+            return await super().send_clarify(
+                chat_id=chat_id,
+                question=question,
+                choices=choices,
+                clarify_id=clarify_id,
+                session_key=session_key,
+                metadata=metadata,
+            )
+
+        try:
+            thread_ts = self._resolve_thread_ts(None, metadata)
+            normalized_choices = [str(choice) for choice in choices]
+            self._clarify_choices[str(clarify_id)] = normalized_choices
+
+            question_text = str(question or "Please choose an option.")
+            budget = 3000 - len(":question: **\n") - len("...")
+            rendered_question = (
+                question_text[:budget] + "..."
+                if len(question_text) > budget
+                else question_text
+            )
+            elements: List[Dict[str, Any]] = []
+            for index, choice in enumerate(normalized_choices):
+                label = str(choice).strip() or f"Option {index + 1}"
+                elements.append(
+                    {
+                        "type": "button",
+                        "text": {
+                            "type": "plain_text",
+                            "text": label[:75],
+                        },
+                        "action_id": f"hermes_clarify_{index}",
+                        "value": json.dumps(
+                            {"clarify_id": str(clarify_id), "index": index}
+                        ),
+                    }
+                )
+            elements.append(
+                {
+                    "type": "button",
+                    "text": {"type": "plain_text", "text": "Other (type answer)"},
+                    "action_id": "hermes_clarify_other",
+                    "value": json.dumps(
+                        {"clarify_id": str(clarify_id), "index": "other"}
+                    ),
+                }
+            )
+
+            blocks = [
+                {
+                    "type": "section",
+                    "text": {
+                        "type": "mrkdwn",
+                        "text": f":question: *{rendered_question}*",
+                    },
+                },
+                {"type": "actions", "elements": elements},
+            ]
+            kwargs: Dict[str, Any] = {
+                "channel": chat_id,
+                "text": f":question: {question_text[:100]}",
+                "blocks": blocks,
+            }
+            if thread_ts:
+                kwargs["thread_ts"] = thread_ts
+
+            result = await self._get_client(chat_id).chat_postMessage(**kwargs)
+            return SendResult(
+                success=True,
+                message_id=result.get("ts", ""),
+                raw_response=result,
+            )
+        except Exception as e:
+            logger.error("[Slack] send_clarify failed: %s", e, exc_info=True)
+            return SendResult(success=False, error=str(e))
+
     def _is_interactive_user_authorized(
         self,
         user_id: str,
@@ -3451,6 +4136,93 @@ class SlackAdapter(BasePlatformAdapter):
             return "*" in allowed_ids or normalized_user_id in allowed_ids
 
         return os.getenv("GATEWAY_ALLOW_ALL_USERS", "").lower() in {"true", "1", "yes"}
+
+    async def _handle_clarify_action(self, ack, body, action) -> None:
+        """Handle a Slack clarify button click."""
+        await ack()
+
+        message = body.get("message", {})
+        msg_ts = message.get("ts", "")
+        channel_id = body.get("channel", {}).get("id", "")
+        user = body.get("user", {})
+        user_name = user.get("name") or user.get("username") or "unknown"
+        user_id = user.get("id", "")
+
+        if not self._is_interactive_user_authorized(
+            user_id,
+            channel_id=channel_id,
+            user_name=user_name,
+        ):
+            logger.warning(
+                "[Slack] Unauthorized clarify click by %s (%s) - ignoring",
+                user_name,
+                user_id,
+            )
+            return
+
+        raw_value = action.get("value", "")
+        try:
+            payload = json.loads(raw_value)
+        except (json.JSONDecodeError, TypeError):
+            logger.warning("[Slack] Malformed clarify button value: %s", raw_value)
+            return
+
+        clarify_id = str(payload.get("clarify_id", ""))
+        index = payload.get("index")
+        client = self._get_client(channel_id) if channel_id else None
+
+        if index == "other":
+            try:
+                from tools.clarify_gateway import mark_awaiting_text
+
+                mark_awaiting_text(clarify_id)
+            except Exception as exc:
+                logger.error(
+                    "Failed to mark Slack clarify as awaiting text: %s",
+                    exc,
+                    exc_info=True,
+                )
+            if client and msg_ts and channel_id:
+                try:
+                    await client.chat_update(
+                        channel=channel_id,
+                        ts=msg_ts,
+                        text=f":pencil2: waiting for typed answer from {user_name}...",
+                        blocks=[],
+                    )
+                except Exception as exc:
+                    logger.warning(
+                        "[Slack] Failed to update clarify message: %s", exc
+                    )
+            return
+
+        choices = self._clarify_choices.pop(clarify_id, [])
+        try:
+            choice_text = choices[int(index)]
+        except (IndexError, TypeError, ValueError):
+            choice_text = str(index)
+
+        try:
+            from tools.clarify_gateway import resolve_gateway_clarify
+
+            resolve_gateway_clarify(clarify_id, choice_text)
+        except Exception as exc:
+            logger.error(
+                "Failed to resolve Slack clarify button: %s",
+                exc,
+                exc_info=True,
+            )
+
+        if client and msg_ts and channel_id:
+            try:
+                await client.chat_update(
+                    channel=channel_id,
+                    ts=msg_ts,
+                    text=f":white_check_mark: selected {choice_text} by {user_name}",
+                    blocks=[],
+                )
+            except Exception as exc:
+                logger.warning("[Slack] Failed to update clarify message: %s", exc)
 
     async def _handle_slash_confirm_action(self, ack, body, action) -> None:
         """Handle a slash-confirm button click from Block Kit."""

@@ -380,6 +380,12 @@ def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = Non
     # spawn path (process_registry.spawn_local builds env via this function).
     _inject_session_context_env(sanitized)
 
+    try:
+        from tools.user_env_runtime import get_current_user_env_values
+        sanitized.update(get_current_user_env_values())
+    except Exception as exc:
+        logger.warning("Could not inject current user env values: %s", exc)
+
     for _marker in _ACTIVE_VENV_MARKER_VARS:
         sanitized.pop(_marker, None)
 
@@ -827,6 +833,12 @@ def _make_run_env(env: dict) -> dict:
     # cross-session leak guard — strips _UNSET vars when a concurrent host is
     # engaged so a sibling session's os.environ mirror can't leak in).
     _inject_session_context_env(run_env)
+
+    try:
+        from tools.user_env_runtime import get_current_user_env_values
+        run_env.update(get_current_user_env_values())
+    except Exception as exc:
+        logger.warning("Could not inject current user env values: %s", exc)
 
     for _marker in _ACTIVE_VENV_MARKER_VARS:
         run_env.pop(_marker, None)

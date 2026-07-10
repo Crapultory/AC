@@ -138,6 +138,9 @@ LAZY_DEPS: dict[str, tuple[str, ...]] = {
     # ─── Image generation backends ─────────────────────────────────────────
     "image.fal": ("fal-client==0.13.1",),
 
+    # ─── Agent-to-Agent delegation ────────────────────────────────────────
+    "a2a.sdk": ("a2a-sdk==1.1.0",),
+
     # ─── Memory providers ──────────────────────────────────────────────────
     "memory.honcho": ("honcho-ai==2.0.1",),
     "memory.hindsight": ("hindsight-client==0.6.1",),

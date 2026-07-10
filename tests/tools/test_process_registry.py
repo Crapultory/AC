@@ -2,6 +2,7 @@
 
 import json
 import os
+import shlex
 import signal
 import subprocess
 import sys
@@ -63,6 +64,41 @@ def _wait_until(predicate, timeout: float = 5.0, interval: float = 0.05) -> bool
             return True
         time.sleep(interval)
     return False
+
+
+def test_spawn_local_injects_current_user_env(monkeypatch, tmp_path, registry):
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    (tmp_path / "users.env.json").write_text(
+        json.dumps(
+            {
+                "slack.u123": {
+                    "CURRENT_USER_NAME": "alice",
+                    "CUSTOM_TOKEN": "abc123",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    from tools.user_env_runtime import (
+        reset_current_user_env_identity,
+        set_current_user_env_identity,
+    )
+
+    token = set_current_user_env_identity("slack", "u123", "alice")
+    try:
+        session = registry.spawn_local(
+            f"{shlex.quote(sys.executable)} -c "
+            f"\"import os; print(os.environ.get('CUSTOM_TOKEN', 'missing'))\"",
+            cwd=str(tmp_path),
+        )
+        result = registry.wait(session.id, timeout=10)
+    finally:
+        reset_current_user_env_identity(token)
+
+    assert result["status"] == "exited"
+    assert result["exit_code"] == 0
+    assert result["output"].strip() == "abc123"
 
 
 def test_write_stdin_uses_str_for_windows_pty(monkeypatch, registry):
