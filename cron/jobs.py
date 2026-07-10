@@ -204,8 +204,9 @@ def _jobs_lock():
 # Fields on a cron job that must never change after creation. ``id`` is used
 # as a filesystem path component under ``OUTPUT_DIR``; allowing it to be
 # updated lets an unsafe value (``../escape``, absolute path, nested) leak
-# into output writes/deletes.
-_IMMUTABLE_JOB_FIELDS = frozenset({"id", "identify"})
+# into output writes/deletes. ``profile`` and ``profile_name`` are routing
+# metadata owned by the profile adapter, not persisted job-edit fields.
+_IMMUTABLE_JOB_FIELDS = frozenset({"id", "profile", "profile_name"})
 
 
 def _job_output_dir(job_id: str) -> Path:

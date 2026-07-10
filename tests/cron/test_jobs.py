@@ -424,6 +424,26 @@ class TestUpdateJob:
         assert get_job(job["id"]) is not None
         assert get_job("../escape") is None
 
+    def test_update_allows_identify_change(self, tmp_cron_dir):
+        from cron.jobs import build_job_identify
+
+        original = build_job_identify("slack", "user-a", "Alice")
+        replacement = build_job_identify("slack", "user-b", "Bob")
+        job = create_job(prompt="Reassign me", schedule="every 1h", identify=original)
+
+        updated = update_job(job["id"], {"identify": replacement})
+
+        assert updated is not None
+        assert updated["identify"] == replacement
+        assert get_job(job["id"])["identify"] == replacement
+
+    @pytest.mark.parametrize("field", ["profile", "profile_name"])
+    def test_update_rejects_profile_metadata_changes(self, tmp_cron_dir, field):
+        job = create_job(prompt="Keep profile metadata", schedule="every 1h")
+
+        with pytest.raises(ValueError, match=field):
+            update_job(job["id"], {field: "worker_alpha"})
+
 
 class TestPauseResumeJob:
     def test_pause_sets_state(self, tmp_cron_dir):

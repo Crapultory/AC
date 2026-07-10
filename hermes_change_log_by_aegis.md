@@ -100,6 +100,9 @@ Intent: Capture follow-up messages for active delegate loops before normal messa
 Feature: Slack clarify Block Kit prompts.
 Intent: Render multi-choice gateway clarify prompts as Slack buttons, resolve authorized button clicks through the shared clarify primitive, preserve the typed-answer fallback for Other/open-ended responses, and enforce the same gateway user authorization boundary used by Slack approval and slash-confirm interactions.
 
+Feature: Slack delegate delta edit throttling.
+Intent: Limit edits to the same Slack delegate output message to at most once every three seconds, while preserving immediate first sends and forced flushes at segment boundaries to reduce queued Slack updates.
+
 ## File: `gateway/run.py`
 
 Feature: Delegate runtime binding per gateway turn.
@@ -143,7 +146,7 @@ Intent: Carry parent user identity into classic `delegate_task` children so user
 ## File: `cron/jobs.py`
 
 Feature: Cron job identity ownership metadata.
-Intent: Add normalized immutable `identify` ownership records while preserving legacy `identify=None` jobs as visible public jobs and treating malformed identify data as non-public.
+Intent: Add normalized `identify` ownership records while preserving legacy `identify=None` jobs as visible public jobs and treating malformed identify data as non-public; keep `id`, `profile`, and `profile_name` immutable while allowing `identify` to be corrected through raw job updates.
 
 ## File: `tools/cronjob_tools.py`
 
@@ -153,14 +156,24 @@ Intent: Scope cron tool create/list/update/pause/resume/remove/run/context refer
 ## File: `cron/scheduler.py`
 
 Feature: Cron runtime user identity restoration.
-Intent: Restore platform/user identity from `identify` across cron agent runs, prompt prerun scripts, and `no_agent` script execution so scheduled jobs apply the owning user's env even without gateway session vars, and fail malformed identify records explicitly instead of treating them as public.
+Intent: Restore platform/user identity from `identify` across cron agent runs, prompt prerun scripts, and `no_agent` script execution so scheduled jobs apply the owning user's env even without gateway session vars, and fail malformed identify records explicitly instead of treating them as public. Preserve the legacy one-argument script-runner call for public jobs so existing integrations remain compatible.
 
 ## File: `tools/lazy_deps.py`
 
 Feature: Lazy A2A SDK dependency.
-Intent: Register `a2a-sdk==1.1.0` as an opt-in lazy dependency so remote A2A support does not expand the core install footprint.
+Intent: Register `a2a-sdk[fastapi]==1.1.0` as an opt-in lazy dependency so A2A client and FastAPI server surfaces are available on demand without expanding the core install footprint.
 
-## File: `plugins/platforms/slack/adapter.py`
+## File: `hermes_cli/main.py`
 
-Feature: Slack delegate delta edit throttling.
-Intent: Limit edits to the same Slack delegate output message to at most once every three seconds, while preserving immediate first sends and forced flushes at segment boundaries to reduce queued Slack updates.
+Feature: AISOC and Aegis builtin CLI dispatch.
+Intent: Recognize `hermes aisoc` and `hermes aegis` without plugin discovery, register their product-owned parsers, and forward the parsed namespace to each backend while keeping product startup and security policy outside the Hermes core.
+
+## File: `pyproject.toml`
+
+Feature: AISOC/Aegis package and A2A server dependency exposure.
+Intent: Ship the two product packages as importable distributions and keep the FastAPI portion of the A2A SDK behind the existing opt-in `a2a` extra rather than adding it to the default installation.
+
+## File: `scripts/a2a_smoke_test.py`
+
+Feature: Official A2A protocol smoke test.
+Intent: Exercise Agent Card discovery, single and multi-turn context reuse, polling, streaming, terminal states, and optional bearer authentication through the installed A2A SDK for AISOC verification.

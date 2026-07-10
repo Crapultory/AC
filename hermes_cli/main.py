@@ -12230,7 +12230,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
     {
         "acp", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
         "computer-use",
-        "config", "console", "cron", "curator", "dashboard", "serve", "debug", "doctor",
+        "config", "console", "cron", "curator", "dashboard", "serve", "aegis", "aisoc", "debug", "doctor",
         "dump", "fallback", "gateway", "hooks", "import", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
         "journey", "memory-graph", "learning",
@@ -12717,6 +12717,20 @@ def cmd_claw(args):
     from hermes_cli.claw import claw_command
 
     claw_command(args)
+
+
+def cmd_aisoc(args):
+    """Delegate AISOC startup and module dispatch to its backend entrypoint."""
+    from aisoc.backend.main import cmd_aisoc as backend_cmd_aisoc
+
+    return backend_cmd_aisoc(args)
+
+
+def cmd_aegis(args):
+    """Delegate Aegis startup to its backend entrypoint."""
+    from aegis.backend.main import cmd_aegis as backend_cmd_aegis
+
+    return backend_cmd_aegis(args)
 
 
 def main():
@@ -14484,6 +14498,29 @@ def main():
         cmd_dashboard=cmd_dashboard,
         cmd_dashboard_register=cmd_dashboard_register,
     )
+
+    # =========================================================================
+    # Aegis and AISOC product commands
+    # =========================================================================
+    aegis_parser = subparsers.add_parser(
+        "aegis",
+        help="Start the Aegis web console",
+        description="Launch the Aegis console for agent orchestration and routing policy controls",
+    )
+    from aegis.backend.main import configure_aegis_parser
+
+    configure_aegis_parser(aegis_parser)
+    aegis_parser.set_defaults(func=cmd_aegis)
+
+    aisoc_parser = subparsers.add_parser(
+        "aisoc",
+        help="Start the AISOC web console",
+        description="Launch the AISOC console for chat operations and runtime controls",
+    )
+    from aisoc.backend.main import configure_aisoc_parser
+
+    configure_aisoc_parser(aisoc_parser)
+    aisoc_parser.set_defaults(func=cmd_aisoc)
 
 
     # =========================================================================

@@ -27,6 +27,13 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/d4/ea/3a5b160cfd51c67759b08748051094d9365ceff18127633d0021950c9860/a2a_sdk-1.1.0-py3-none-any.whl", hash = "sha256:d7f5846caf18033d8bf3108b11ec827dd8dd32f867c98848ede0e39474be93be", size = 241886, upload-time = "2026-05-29T09:34:41.484Z" },
 ]
 
+[package.optional-dependencies]
+fastapi = [
+    { name = "fastapi" },
+    { name = "sse-starlette" },
+    { name = "starlette" },
+]
+
 [[package]]
 name = "agent-client-protocol"
 version = "0.9.0"
@@ -1600,7 +1607,7 @@ dependencies = [
 
 [package.optional-dependencies]
 a2a = [
-    { name = "a2a-sdk" },
+    { name = "a2a-sdk", extra = ["fastapi"] },
 ]
 acp = [
     { name = "agent-client-protocol" },
@@ -1782,7 +1789,7 @@ youtube = [
 
 [package.metadata]
 requires-dist = [
-    { name = "a2a-sdk", marker = "extra == 'a2a'", specifier = "==1.1.0" },
+    { name = "a2a-sdk", extras = ["fastapi"], marker = "extra == 'a2a'", specifier = "==1.1.0" },
     { name = "agent-client-protocol", marker = "extra == 'acp'", specifier = "==0.9.0" },
     { name = "aiohttp", marker = "extra == 'homeassistant'", specifier = "==3.14.1" },
     { name = "aiohttp", marker = "extra == 'matrix'", specifier = "==3.14.1" },

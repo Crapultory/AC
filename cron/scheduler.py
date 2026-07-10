@@ -2223,10 +2223,14 @@ def _build_job_prompt(job: dict, prerun_script: Optional[tuple] = None) -> str:
         if prerun_script is not None:
             success, script_output = prerun_script
         else:
-            success, script_output = _run_job_script(
-                script_path,
-                identify=job.get("identify"),
-            )
+            script_identify = job.get("identify")
+            if script_identify:
+                success, script_output = _run_job_script(
+                    script_path,
+                    identify=script_identify,
+                )
+            else:
+                success, script_output = _run_job_script(script_path)
         if success:
             if script_output:
                 prompt = (
@@ -2584,7 +2588,12 @@ def run_job(
                 _prior_cwd = None
 
         try:
-            ok, output = _run_job_script(script_path, identify=job_identify)
+            if job_identify:
+                ok, output = _run_job_script(script_path, identify=job_identify)
+            else:
+                # Preserve the legacy call shape for public jobs and older
+                # integrations that replace the script runner.
+                ok, output = _run_job_script(script_path)
         finally:
             if _prior_cwd is not None:
                 try:
@@ -2673,7 +2682,10 @@ def run_job(
     prerun_script = None
     script_path = job.get("script")
     if script_path:
-        prerun_script = _run_job_script(script_path, identify=job_identify)
+        if job_identify:
+            prerun_script = _run_job_script(script_path, identify=job_identify)
+        else:
+            prerun_script = _run_job_script(script_path)
         _ran_ok, _script_output = prerun_script
         if _ran_ok and not _parse_wake_gate(_script_output):
             logger.info(
