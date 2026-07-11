@@ -9,6 +9,7 @@ import LoginScreen from './components/LoginScreen';
 import RegisterScreen from './components/RegisterScreen';
 import UserManagementTab from './components/UserManagementTab';
 import ChangePasswordDialog from './components/ChangePasswordDialog';
+import SettingsTab from './components/SettingsTab';
 import { AegisChatProvider, useAegisChatRuntime } from './lib/chatRuntime';
 import { clearStoredAuth, getStoredUser, hasStoredToken, setStoredAuth, setStoredUser } from './lib/auth';
 import { fetchJSON, ApiError, alertApiError, getApiErrorMessage } from './lib/api';
@@ -25,7 +26,7 @@ import {
 } from './lib/adapters';
 import { Agent, AgentDraft, AuthenticatedUser, RoutingRule, RoutingRuleDraft, UserDraft } from './types';
 
-type AppTab = 'overview' | 'chat' | 'orchestration' | 'policy' | 'users';
+type AppTab = 'overview' | 'chat' | 'orchestration' | 'policy' | 'users' | 'settings';
 
 type AuthLoginResponse = {
   authenticated: boolean;
@@ -51,10 +52,11 @@ const TAB_TO_PATH: Record<AppTab, string> = {
   orchestration: '/orchestration',
   policy: '/policy',
   users: '/users',
+  settings: '/settings',
 };
 
 function isAdminOnlyTab(tab: AppTab | null): boolean {
-  return tab === 'orchestration' || tab === 'policy' || tab === 'users';
+  return tab === 'orchestration' || tab === 'policy' || tab === 'users' || tab === 'settings';
 }
 
 const getUtcTimestamp = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
@@ -74,6 +76,9 @@ function resolveTabFromPath(pathname: string): AppTab | null {
   }
   if (pathname === '/users') {
     return 'users';
+  }
+  if (pathname === '/settings') {
+    return 'settings';
   }
   return 'overview';
 }
@@ -115,6 +120,7 @@ function AuthenticatedAppShell({
   onDeleteAgent,
   onDeleteRule,
   onDeleteUser,
+  onAuthExpired,
   onLogout,
   onRefresh,
   onResetUserPassword,
@@ -139,6 +145,7 @@ function AuthenticatedAppShell({
   onDeleteAgent: (agentId: string) => Promise<void>;
   onDeleteRule: (ruleId: string) => Promise<void>;
   onDeleteUser: (uid: string) => Promise<void>;
+  onAuthExpired: () => void;
   onLogout: () => void;
   onRefresh: () => Promise<void>;
   onResetUserPassword: (uid: string, password: string) => Promise<void>;
@@ -196,12 +203,16 @@ function AuthenticatedAppShell({
                 <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-rose-500 shadow-[0_0_6px_#f43f5e]" />
                 <Bell className="h-4 w-4" />
               </button>
-              <button
-                title="Configure platform settings"
-                className="shrink-0 rounded border border-slate-800 bg-[#05080F] p-1.5 text-slate-400 transition-all hover:bg-[#080C14] hover:text-cyan-400"
-              >
-                <Settings className="h-4 w-4" />
-              </button>
+              {isAdmin ? (
+                <button
+                  type="button"
+                  title="Configure platform settings"
+                  onClick={() => navigateTo('settings')}
+                  className="shrink-0 rounded border border-slate-800 bg-[#05080F] p-1.5 text-slate-400 transition-all hover:bg-[#080C14] hover:text-cyan-400"
+                >
+                  <Settings className="h-4 w-4" />
+                </button>
+              ) : null}
 
               <div className="relative flex items-center gap-2.5 border-l border-slate-800 pl-3">
                 <button
@@ -295,6 +306,7 @@ function AuthenticatedAppShell({
               users={users}
             />
           ) : null}
+          {activeTab === 'settings' ? <SettingsTab onAuthExpired={onAuthExpired} /> : null}
         </main>
       </div>
     </div>
@@ -319,7 +331,10 @@ export default function App() {
   const [isSyncing, setIsSyncing] = useState(false);
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
 
-  const activeTab = useMemo(() => resolveTabFromPath(pathname) || 'overview', [pathname]);
+  const requestedTab = useMemo(() => resolveTabFromPath(pathname) || 'overview', [pathname]);
+  const activeTab = isAdminOnlyTab(requestedTab) && !currentUser?.is_admin
+    ? 'overview'
+    : requestedTab;
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -813,6 +828,7 @@ export default function App() {
           onDeleteAgent={handleDeleteAgent}
           onDeleteRule={handleDeleteRule}
           onDeleteUser={handleDeleteUser}
+          onAuthExpired={handleAuthExpired}
           onLogout={handleLogout}
           onRefresh={() => loadConsoleData(currentUser)}
           onResetUserPassword={handleResetUserPassword}

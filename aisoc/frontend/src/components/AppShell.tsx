@@ -4,7 +4,7 @@ import { useState } from "react";
 import { clearStoredToken } from "../lib/auth";
 import { FloatingChat } from "./FloatingChat";
 
-type NavIconName = "overview" | "chat" | "sessions" | "cron" | "skills" | "wiki" | "memory";
+type NavIconName = "overview" | "chat" | "sessions" | "cron" | "skills" | "wiki" | "memory" | "settings";
 
 const NAV_ITEMS: Array<{ path: string; label: string; icon: NavIconName }> = [
   { path: "/overview", label: "Overview", icon: "overview" },
@@ -14,6 +14,7 @@ const NAV_ITEMS: Array<{ path: string; label: string; icon: NavIconName }> = [
   { path: "/skills", label: "Skills", icon: "skills" },
   { path: "/wiki", label: "LLMWiki", icon: "wiki" },
   { path: "/memory", label: "Memory", icon: "memory" },
+  { path: "/settings", label: "Settings", icon: "settings" },
 ];
 
 const NAV_COLLAPSED_STORAGE_KEY = "aisoc_nav_collapsed";
@@ -80,6 +81,12 @@ function NavIcon({ name }: { name: NavIconName }) {
           <path {...common} d="M3.75 7.5c0-1.66 3.7-3 8.25-3s8.25 1.34 8.25 3-3.7 3-8.25 3-8.25-1.34-8.25-3Z" />
           <path {...common} d="M3.75 7.5V16.5c0 1.66 3.7 3 8.25 3s8.25-1.34 8.25-3V7.5" />
           <path {...common} d="M3.75 12c0 1.66 3.7 3 8.25 3s8.25-1.34 8.25-3" />
+        </>
+      )}
+      {name === "settings" && (
+        <>
+          <path {...common} d="M12 15.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z" />
+          <path {...common} d="M19.1 13.6a7.6 7.6 0 0 0 .05-1.6 7.6 7.6 0 0 0-.05-1.6l2-1.55-2-3.45-2.45 1a7.6 7.6 0 0 0-2.75-1.6L13.55 2h-4l-.4 2.8A7.6 7.6 0 0 0 6.4 6.4l-2.45-1-2 3.45 2 1.55A7.6 7.6 0 0 0 3.9 12a7.6 7.6 0 0 0 .05 1.6l-2 1.55 2 3.45 2.45-1a7.6 7.6 0 0 0 2.75 1.6l.4 2.8h4l.4-2.8a7.6 7.6 0 0 0 2.75-1.6l2.45 1 2-3.45-2-1.55Z" />
         </>
       )}
     </svg>

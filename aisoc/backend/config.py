@@ -25,6 +25,7 @@ class AisocSettings:
     a2a_auth_enabled: bool = False
     a2a_session_token: str = ""
     a2a_token_source: A2ATokenSource = "disabled"
+    a2a_admin_token: str = ""
     dist_dir: Path | None = None
 
 
@@ -64,6 +65,8 @@ def load_aisoc_settings(
         a2a_token = ""
         a2a_source = "disabled"
 
+    a2a_admin_token = (os.environ.get("AISOC_A2A_ADMIN_TOKEN") or "").strip()
+
     return AisocSettings(
         host=host,
         port=port,
@@ -75,6 +78,7 @@ def load_aisoc_settings(
         a2a_auth_enabled=a2a_auth_enabled,
         a2a_session_token=a2a_token,
         a2a_token_source=a2a_source,
+        a2a_admin_token=a2a_admin_token,
         dist_dir=dist_dir,
     )
 

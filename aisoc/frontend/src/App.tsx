@@ -9,6 +9,7 @@ import { MemoryPage } from "./pages/MemoryPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { OverviewPage } from "./pages/OverviewPage";
 import { SessionsPage } from "./pages/SessionsPage";
+import { SettingsPage } from "./pages/SettingsPage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { WikiPage } from "./pages/WikiPage";
 
@@ -26,6 +27,7 @@ export function App() {
           <Route path="/skills" element={<SkillsPage />} />
           <Route path="/wiki" element={<WikiPage />} />
           <Route path="/memory" element={<MemoryPage />} />
+          <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Route>
       <Route path="*" element={<NotFoundPage />} />

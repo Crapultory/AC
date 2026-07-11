@@ -124,7 +124,11 @@ def create_app(settings: AegisSettings | None = None) -> FastAPI:
     app.include_router(build_agents_router(active_settings, user_service))
     app.include_router(build_routing_router(active_settings, user_service))
     app.include_router(
-        build_system_router(active_settings, admin_setup_required=not admin_ready)
+        build_system_router(
+            active_settings,
+            user_service,
+            admin_setup_required=not admin_ready,
+        )
     )
     app.include_router(build_chat_router(active_settings, user_service, manager=chat_manager))
     _install_docs_bearer_auth(app)

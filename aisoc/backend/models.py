@@ -24,11 +24,19 @@ class AuthLogoutResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+    pid: int
 
 
 class SystemBootstrapResponse(BaseModel):
     embedded_chat: bool
     auth_scheme: str
+
+
+class SystemRestartResponse(BaseModel):
+    accepted: bool
+    already_requested: bool
+    service: str
+    pid: int
 
 
 class CronJobCreate(BaseModel):

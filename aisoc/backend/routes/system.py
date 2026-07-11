@@ -2,10 +2,23 @@
 
 from __future__ import annotations
 
-from fastapi import APIRouter
+from _thread import interrupt_main as _interrupt_main
+import os
+
+from fastapi import APIRouter, BackgroundTasks, status
 
 from aisoc.backend.config import AisocSettings
-from aisoc.backend.models import HealthResponse, SystemBootstrapResponse
+from aisoc.backend.models import (
+    HealthResponse,
+    SystemBootstrapResponse,
+    SystemRestartResponse,
+)
+from hermes_self_restart import request_self_restart
+
+
+def _graceful_shutdown() -> None:
+    """Ask the serving process to stop after the response has been sent."""
+    _interrupt_main()
 
 
 def build_system_router(settings: AisocSettings) -> APIRouter:
@@ -13,7 +26,7 @@ def build_system_router(settings: AisocSettings) -> APIRouter:
 
     @router.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
-        return HealthResponse(status="ok")
+        return HealthResponse(status="ok", pid=os.getpid())
 
     @router.get("/api/system/bootstrap", response_model=SystemBootstrapResponse)
     async def bootstrap() -> SystemBootstrapResponse:
@@ -22,5 +35,16 @@ def build_system_router(settings: AisocSettings) -> APIRouter:
             auth_scheme="bearer-token",
         )
 
-    return router
+    @router.post(
+        "/api/system/restart",
+        response_model=SystemRestartResponse,
+        status_code=status.HTTP_202_ACCEPTED,
+    )
+    async def restart(background_tasks: BackgroundTasks) -> SystemRestartResponse:
+        result = request_self_restart(
+            "aisoc",
+            lambda: background_tasks.add_task(_graceful_shutdown),
+        )
+        return SystemRestartResponse(**result.as_dict())
 
+    return router

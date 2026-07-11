@@ -423,6 +423,118 @@ describe('Aegis App integration', () => {
     expect(screen.queryByRole('button', { name: /user management/i })).not.toBeInTheDocument();
   });
 
+  it('lets administrators navigate to System Settings from the sidebar and header control', async () => {
+    seedStoredAuth(adminUser);
+
+    global.fetch = vi.fn(async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/auth/session') {
+        return jsonResponse({ authenticated: true, user: adminUser, expires_in: 28800 });
+      }
+      if (url === '/api/overview/agents' || url === '/api/agents') {
+        return jsonResponse({ agents: [] });
+      }
+      if (url === '/api/routing/global') {
+        return jsonResponse({ rules: [] });
+      }
+      if (url === '/api/users') {
+        return jsonResponse({ users: [adminUser] });
+      }
+      if (url === '/health') {
+        return jsonResponse({ status: 'ok', pid: 123 });
+      }
+      throw new Error(`Unhandled request: GET ${url}`);
+    }) as typeof global.fetch;
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /system settings/i }));
+    expect(window.location.pathname).toBe('/settings');
+    expect(await screen.findByRole('heading', { name: /system settings/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /overview/i }));
+    fireEvent.click(screen.getByTitle(/configure platform settings/i));
+    expect(window.location.pathname).toBe('/settings');
+    expect(await screen.findByRole('heading', { name: /system settings/i })).toBeInTheDocument();
+  });
+
+  it('returns to login when the Settings restart request reports an expired session', async () => {
+    seedStoredAuth(adminUser);
+
+    global.fetch = vi.fn(async (input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = init?.method || 'GET';
+      if (url === '/api/auth/session') {
+        return jsonResponse({ authenticated: true, user: adminUser, expires_in: 28800 });
+      }
+      if (url === '/api/overview/agents' || url === '/api/agents') {
+        return jsonResponse({ agents: [] });
+      }
+      if (url === '/api/routing/global') {
+        return jsonResponse({ rules: [] });
+      }
+      if (url === '/api/users') {
+        return jsonResponse({ users: [adminUser] });
+      }
+      if (url === '/health') {
+        return jsonResponse({ status: 'ok', pid: 123 });
+      }
+      if (url === '/api/system/restart' && method === 'POST') {
+        return jsonResponse({ detail: 'Token expired' }, 401);
+      }
+      throw new Error(`Unhandled request: ${method} ${url}`);
+    }) as typeof global.fetch;
+
+    render(<App />);
+
+    fireEvent.click(await screen.findByRole('button', { name: /system settings/i }));
+    fireEvent.click(screen.getByRole('button', { name: /restart aegis/i }));
+    fireEvent.click(screen.getByRole('button', { name: /continue/i }));
+    fireEvent.change(screen.getByLabelText(/restart confirmation phrase/i), {
+      target: { value: 'RESTART AEGIS' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /confirm restart/i }));
+
+    expect(await screen.findByRole('heading', { name: /sign in/i })).toBeInTheDocument();
+    expect(window.location.pathname).toBe('/login');
+    expect(window.localStorage.getItem('aegis_session_token')).toBeNull();
+    expect(screen.queryByText(/restart request failed/i)).not.toBeInTheDocument();
+  });
+
+  it('hides every settings control from non-admin users and redirects direct settings access', async () => {
+    seedStoredAuth(analystUser);
+    window.history.replaceState({}, '', '/overview');
+    const alertSpy = vi.spyOn(window, 'alert').mockImplementation(() => {});
+    const requests: string[] = [];
+
+    global.fetch = vi.fn(async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      requests.push(url);
+      if (url === '/api/auth/session') {
+        return jsonResponse({ authenticated: true, user: analystUser, expires_in: 28800 });
+      }
+      if (url === '/api/overview/agents') {
+        return jsonResponse({ agents: [] });
+      }
+      throw new Error(`Unhandled request: GET ${url}`);
+    }) as typeof global.fetch;
+
+    render(<App />);
+
+    await screen.findByRole('button', { name: /overview/i });
+    requests.length = 0;
+    window.history.replaceState({}, '', '/settings');
+    fireEvent(window, new PopStateEvent('popstate'));
+    await waitFor(() => {
+      expect(window.location.pathname).toBe('/overview');
+    });
+    expect(alertSpy).toHaveBeenCalledWith('Admin access required.');
+    expect(screen.queryByText(/system settings/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: /system settings/i })).not.toBeInTheDocument();
+    expect(screen.queryByTitle(/configure platform settings/i)).not.toBeInTheDocument();
+    expect(requests).not.toContain('/health');
+  });
+
   it('keeps session sockets alive when switching chat sessions and preserves parallel task streams', async () => {
     seedStoredAuth(analystUser);
     vi.stubGlobal('WebSocket', MockWebSocket as unknown as typeof WebSocket);

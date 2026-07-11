@@ -93,6 +93,7 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 - `AISOC_A2A_AUTH`：A2A 模块认证开关；`true/1/yes/on` 启用，未设置或 `false/0/no/off` 关闭
 - `A2A_SESSION_TOKEN`：仅 `a2a` 模块使用；启用 A2A 认证时若设置，则使用静态 token（`a2a_token_source=env`）
 - 启用 A2A 认证且未设置 `A2A_SESSION_TOKEN` 时：进程启动自动生成随机 A2A token（`a2a_token_source=generated`）
+- `AISOC_A2A_ADMIN_TOKEN`：仅用于启用 `/man` A2A 管理页面和换取短期管理凭证；这是独立的管理 secret，不得与负责 A2A 通信认证的 `A2A_SESSION_TOKEN` 复用相同值
 - `AISOC_MCP_ACTIVE`：仅影响 `a2a` / `extcli` 的 MCP 装载；默认跟随配置自动加载，设置为 `false/0/no/off` 可在启动时关闭 MCP
 
 ---
@@ -135,7 +136,15 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 - 仅在 HTTP 中间件层认证，不改变 A2A executor、消息流或任务状态机
 - `AISOC_SESSION_TOKEN` 仍仅用于 `server` 模块；`A2A_SESSION_TOKEN` 仅用于 `a2a` 模块
 
-### 3.4 Chat（`--tui`）链路设计
+### 3.4 A2A 管理与重启
+- 设置非空 `AISOC_A2A_ADMIN_TOKEN` 后启用 `GET /man`；未设置时页面会明确显示管理未启用，管理 API 返回 503，重启不可用
+- 页面通过 `POST /man/api/auth` 提交 `{"token":"<AISOC_A2A_ADMIN_TOKEN>"}`，成功后换取有效期 5 分钟的专用 Bearer；管理 secret 和短期 Bearer 都只保存在浏览器内存中，不写入 cookie、localStorage 或 sessionStorage
+- `POST /man/api/restart` 只接受上述短期 Bearer，不接受原始管理 secret 或 `A2A_SESSION_TOKEN`；浏览器流程需要危险操作确认并准确输入 `RESTART A2A`
+- 管理路由仅允许浏览器同源调用；无 `Origin` 的非浏览器客户端仍可使用相同的管理认证流程
+- 重启成功返回 HTTP 202，统一字段为 `accepted`、`already_requested`、`service`、`pid`；重复请求不会启动第二个 watcher
+- 重启会重放当前启动命令；若认证 token 原本由进程启动时随机生成，新进程可能生成不同值
+
+### 3.5 Chat（`--tui`）链路设计
 当 `embedded_chat=True`（CLI `--tui`）时启用：
 - `/api/chat/pty`：浏览器 <-> PTY 双向字节流
 - `/api/chat/ws`：JSON-RPC sidecar（tui_gateway）
@@ -234,6 +243,11 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 - 原 `GET /api/overview/cronjobs/{job_id}/history` 已迁移到 `GET /api/cron/jobs/{job_id}/history`
 - 原 `GET /api/overview/sessions/{session_id}/detail` 已迁移到 `GET /api/sessions/{session_id}/detail`
 - Overview 仅保留总览/聚合接口；明细下钻接口归属到对应业务模块（Cron / Sessions）
+
+### 4.11 A2A Management
+- `GET /man`
+- `POST /man/api/auth`：请求体 `{"token":"..."}`，返回 5 分钟、仅用于管理 API 的 Bearer 及到期信息
+- `POST /man/api/restart`：需要管理 Bearer，成功返回 HTTP 202 和 `accepted`、`already_requested`、`service`、`pid`
 
 ---
 

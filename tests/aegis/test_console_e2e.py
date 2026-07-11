@@ -23,6 +23,10 @@ def _free_port() -> int:
 @pytest.mark.asyncio
 async def test_hermes_aegis_e2e_hosted_console_and_api_roundtrip(tmp_path) -> None:
     port = _free_port()
+    (tmp_path / ".env").write_text(
+        f"AEGIS_BOOTSTRAP_ADMIN_PASSWORD={BOOTSTRAP_PASSWORD}\n",
+        encoding="utf-8",
+    )
     env = os.environ.copy()
     env["HERMES_HOME"] = str(tmp_path)
     env["PYTHONPATH"] = os.getcwd()

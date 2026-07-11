@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -177,7 +179,7 @@ def test_auth_middleware_allows_cors_preflight_for_protected_routes(
 def test_public_health_and_bootstrap_routes_are_accessible(client: TestClient) -> None:
     health_response = client.get("/health")
     assert health_response.status_code == 200
-    assert health_response.json() == {"status": "ok"}
+    assert health_response.json() == {"status": "ok", "pid": os.getpid()}
 
     bootstrap_response = client.get("/api/system/bootstrap")
     assert bootstrap_response.status_code == 200

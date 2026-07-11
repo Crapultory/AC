@@ -109,12 +109,20 @@ class UserDeleteResponse(BaseModel):
 
 class HealthResponse(BaseModel):
     status: str
+    pid: int
 
 
 class SystemBootstrapResponse(BaseModel):
     embedded_chat: bool
     auth_scheme: str
     admin_setup_required: bool
+
+
+class SystemRestartResponse(BaseModel):
+    accepted: bool
+    already_requested: bool
+    service: str
+    pid: int
 
 
 AgentStatus = Literal["active", "idle", "offline"]

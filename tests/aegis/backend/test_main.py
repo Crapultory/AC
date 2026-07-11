@@ -4,6 +4,7 @@ import argparse
 import importlib
 import importlib.util
 import json
+import os
 from types import SimpleNamespace
 
 import pytest
@@ -155,7 +156,7 @@ def test_create_app_keeps_public_endpoints_available_when_store_is_invalid(
     with TestClient(app) as client:
         health_response = client.get("/health")
         assert health_response.status_code == 200
-        assert health_response.json() == {"status": "ok"}
+        assert health_response.json() == {"status": "ok", "pid": os.getpid()}
 
         session_response = client.get("/api/auth/session")
         assert session_response.status_code == 200
