@@ -56,7 +56,12 @@ Intent: Keep a single remote A2A session alive across foreground Slack input, re
 ## File: `toolsets.py`
 
 Feature: Toolset catalog.
-Intent: Expose A2A tools behind an explicit `a2a` toolset so users can opt in without adding schema cost to every Hermes session.
+Intent: Expose `userenv` and A2A tools behind explicit toolsets so users can opt in without adding schema cost to every Hermes session.
+
+## File: `hermes_cli/tools_config.py`
+
+Feature: Configurable user environment and A2A toolsets.
+Intent: Surface `userenv` and `a2a` in the standard `hermes tools` flow while keeping both disabled by default until a user explicitly enables them for a platform, without changing AISOC's dedicated A2A runtime.
 
 ## File: `model_tools.py`
 

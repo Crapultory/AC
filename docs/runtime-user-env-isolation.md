@@ -1,6 +1,6 @@
 # Runtime 用户环境隔离
 
-本文档描述当前 Hermes 主线中 Aegis 二次开发的 messaging 用户级 runtime env 隔离。它覆盖 live gateway turn、local terminal、`userenv` 工具以及带身份的 cron job（包括 `no_agent=True` 脚本模式）。目标是让同一 Hermes 进程服务多个用户、多个会话时，用户环境变量不会互相读取、覆盖或残留。
+本文档描述当前 Hermes 主线中 Aegis 二次开发的 messaging 用户级 runtime env 隔离。它覆盖 live gateway turn、local terminal、`userenv` 工具、Slack 直入和 Aegis 远端 A2A 委托的来源身份前缀，以及带身份的 cron job（包括 `no_agent=True` 脚本模式）。目标是让同一 Hermes 进程服务多个用户、多个会话时，用户环境变量不会互相读取、覆盖或残留。
 
 ## 1. 设计目标与数据模型
 
@@ -43,6 +43,9 @@
 - `tools/userenv_tool.py`: 当前用户的管理入口。
 - `agent/tool_executor.py`、`agent/agent_runtime_helpers.py`: 所有工具执行路径的身份绑定。
 - `tools/environments/base.py`、`tools/environments/local.py`、`tools/terminal_tool.py`: 注入、snapshot hygiene 和 local cache isolation。
+- `gateway/run.py`: 为 Slack 直入 Agent 的入站 turn 组装 `<source>` 前缀。
+- `tools/a2a_delegate_tool.py`: Aegis 父 Agent 委托远端 A2A Agent 时组装 `<source>` 前缀。
+- `aisoc/backend/a2a_service/executor.py`: 解析收到的 `<source>` 前缀，并将身份绑定到 Aegis Agent runtime。
 - `cron/jobs.py`、`tools/cronjob_tools.py`、`cron/scheduler.py`: 延迟执行时的 cron 所属身份。
 
 ## 2. 存储与 `userenv`
@@ -97,6 +100,63 @@ gateway event / scheduled agent
 `agent/tool_executor.py` 和 `agent/agent_runtime_helpers.py` 都必须包裹身份 binding，覆盖顺序执行、并发/辅助执行以及 agent-owned tool 分发。`tools/thread_context.py` 的 ContextVar 线程传播自然携带当前 identity；任何新开工具线程也必须使用现有 context propagation helper，不能重新从 process-global `os.environ` 推断用户。
 
 调用 `bind_current_user_env_identity_from_agent(agent)` 时优先读取 runtime-only 的 `agent._user_env_platform`，再读取 `agent.platform`。这是 cron 需要保留 scheduler 身份与原始 messaging platform 两种语义时的关键。
+
+### 3.1 `<source>` 来源身份前缀：Slack 直入与 Aegis 远端委托
+
+`<source>` 是 runtime identity 的补充载体，当前有两处**写入端**。两者都使用紧凑 JSON，并要求 envelope 位于最终消息的第一行，但触发时机和字段不同。
+
+#### 场景 A：Slack 消息直接进入 Agent
+
+`gateway/run.py` 为每个带 Slack `user_id` 的入站 Agent turn（DM、频道和 thread 都包括）在最终组装文本的首行添加：
+
+```text
+<source>{"platform":"slack","channel":"C02MVR0PADS","uid":"U02LQJ2S5HN","uname":"Guisheng(郭桂生)"}</source>
+
+获取 TEST_KEY 内容
+```
+
+这里的 `channel` 来自 Slack channel 或 DM 会话 ID，因此 runtime 可同时获得用户身份和消息范围。reply context、附件说明、时间戳、channel context 与用户正文都必须置于该行之后。
+
+```text
+Slack adapter / gateway
+  -> gateway/run.py writes first-line <source>
+  -> direct Agent runtime
+  -> userenv / terminal isolation and runtime RBAC decisions
+```
+
+#### 场景 B：Aegis 与远端 A2A Agent 通信
+
+当 Aegis 父 Agent 调用 `a2a_delegate` 向远端 A2A Agent 发送首轮目标或前台 follow-up 时，`tools/a2a_delegate_tool.py::_decorate_a2a_user_message()` 会根据父 Agent 当前绑定的 runtime identity 重建前缀，并把它置于远端请求首行：
+
+```text
+<source>{"platform":"slack","uid":"U02LQJ2S5HN","uname":"Guisheng(郭桂生)"}</source>
+
+<context>可选委托上下文</context>
+
+请远程 Agent 完成此任务
+```
+
+该出站格式由 `_format_aegis_source_header()` 生成。它当前从父 Agent 读取 `platform`、`_user_id` 和 `_user_name`；**不会携带 `channel`**。远端 A2A Agent 可据此恢复调用方用户的 platform/user identity，进行用户环境隔离和 RBAC 判断；若远端授权还需要频道范围，必须通过经认证的 A2A 元数据或后续协议扩展传递，不能假定该字段存在。
+
+```text
+Aegis parent Agent
+  -> a2a_delegate_tool writes first-line <source>
+  -> remote A2A Agent
+  -> remote runtime identity / RBAC decisions
+```
+
+#### 字段与信任边界
+
+| 字段 | Slack 直入 | Aegis → 远端 A2A | RBAC / 隔离用途 |
+| --- | --- | --- | --- |
+| `platform` | 固定为 `slack`。 | 父 Agent 当前来源平台。 | 与 `uid` 共同构成身份命名空间。 |
+| `channel` | Slack channel 或 DM 会话 ID。 | 当前不发送。 | Slack 直入时可用于频道范围判断。 |
+| `uid` | Slack 稳定用户 ID。 | 父 Agent 的 `_user_id`。 | 用户隔离与 RBAC 的主身份键；不得用显示名替代。 |
+| `uname` | Slack 显示名。 | 父 Agent 的 `_user_name`。 | 仅用于展示、审计上下文与 `CURRENT_USER_NAME`；不作为授权或存储分区键。 |
+
+Aegis executor 接收 A2A 请求时只解析文本偏移 0 处、精确形如 `<source>{...}</source>` 的 envelope；成功后保留原始文本给模型，并将可用的 `platform`、`uid`、`uname` 绑定到 runtime identity 与 session context。其他 messaging adapter、CLI、cron 和普通 A2A client 当前都不会自行写入该前缀。
+
+`<source>` 是**受信任上游附加的身份声明**，而不是独立的授权凭证。运行时 RBAC 可以使用已验证的 `platform + uid`（Slack 直入时可附加 `channel`）作判断，但不得仅因任意 A2A 请求正文含有该标签就授予权限。直接 A2A client 和远端服务仍必须依赖传输层认证、gateway/adapter 授权及服务端信任边界；消息正文中第二个或非首行的 `<source>` 一律只是非可信内容。
 
 ## 4. Terminal 和 shell snapshot
 
@@ -202,8 +262,9 @@ run_job(job)
 venv/bin/python -m pytest tests/tools/test_user_env_store.py tests/tools/test_user_env_runtime.py tests/tools/test_userenv_tool.py -q
 venv/bin/python -m pytest tests/tools/test_local_user_env.py tests/tools/test_userenv_terminal_isolation.py -q
 venv/bin/python -m pytest tests/tools/test_cronjob_tools.py tests/cron/test_scheduler.py tests/cron/test_cron_no_agent.py -q
+venv/bin/python -m pytest tests/gateway/test_shared_group_sender_prefix.py tests/tools/test_a2a_delegate_tool.py tests/aisoc/test_a2a.py -q
 venv/bin/python -m py_compile tools/user_env_store.py tools/user_env_runtime.py tools/userenv_tool.py tools/cronjob_tools.py cron/jobs.py cron/scheduler.py
 git diff --check
 ```
 
-回归至少应覆盖：同平台不同用户、跨平台相同 user id、用户名变更、legacy 单记录迁移、多 legacy 候选拒绝迁移、`CURRENT_USER_NAME` 不可删除、变量值脱敏、local snapshot 不泄漏/删除即时生效、terminal cache scope、cron 跨用户不可见/不可操作、global job 兼容、malformed identify 失败，以及 identified `no_agent` 脚本读取专属 env。
+回归至少应覆盖：同平台不同用户、跨平台相同 user id、用户名变更、legacy 单记录迁移、多 legacy 候选拒绝迁移、`CURRENT_USER_NAME` 不可删除、变量值脱敏、local snapshot 不泄漏/删除即时生效、terminal cache scope、cron 跨用户不可见/不可操作、global job 兼容、malformed identify 失败、identified `no_agent` 脚本读取专属 env、Slack 直入 `<source>` 的首行与 `channel` 字段，以及 Aegis 远端委托首轮和 follow-up 的 `<source>` 前缀。

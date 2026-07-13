@@ -143,8 +143,22 @@ def test_gui_toolset_label_strips_leading_emoji():
     assert gui_toolset_label("Terminal & Processes") == "Terminal & Processes"
 
 
-def test_configurable_toolsets_include_context_engine():
-    assert any(ts_key == "context_engine" for ts_key, _, _ in CONFIGURABLE_TOOLSETS)
+def test_configurable_toolsets_include_context_engine_userenv_and_a2a():
+    keys = {ts_key for ts_key, _, _ in CONFIGURABLE_TOOLSETS}
+
+    assert {"context_engine", "userenv", "a2a"} <= keys
+    assert {"userenv", "a2a"} <= _DEFAULT_OFF_TOOLSETS
+
+
+@pytest.mark.parametrize("toolset", ["userenv", "a2a"])
+def test_get_platform_tools_accepts_explicit_userenv_and_a2a_selection(toolset):
+    enabled = _get_platform_tools(
+        {"platform_toolsets": {"cli": [toolset]}},
+        "cli",
+        include_default_mcp_servers=False,
+    )
+
+    assert toolset in enabled
 
 
 def test_get_platform_tools_active_context_engine_is_enabled_for_explicit_config():
