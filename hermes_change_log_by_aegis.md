@@ -97,6 +97,9 @@ Intent: Track delegate output per route, edit AI deltas, split long Slack messag
 Feature: Slack foreground message routing.
 Intent: Capture follow-up messages for active delegate loops before normal message dispatch so delegate conversations do not leak into the main Slack session, while routing mentioned `/main` and `/exit` commands from the original Slack text so thread context or attachment prefixes do not turn loop-exit commands into remote prompts.
 
+Feature: Slack slash-command source identity.
+Intent: Preserve the invoking Slack display name when constructing slash-command events, including legacy `/hermes` free-form turns, so downstream source envelopes retain the same user identity fields as normal Slack messages.
+
 Feature: Slack clarify Block Kit prompts.
 Intent: Render multi-choice gateway clarify prompts as Slack buttons, resolve authorized button clicks through the shared clarify primitive, preserve the typed-answer fallback for Other/open-ended responses, and enforce the same gateway user authorization boundary used by Slack approval and slash-confirm interactions.
 
@@ -107,6 +110,10 @@ Intent: Limit edits to the same Slack delegate output message to at most once ev
 
 Feature: Delegate runtime binding per gateway turn.
 Intent: Bind adapter-provided delegate output and input factories onto both fresh and cached agents each turn, preventing Slack thread/user runtime state from leaking across cached sessions.
+
+Feature: Slack source identity envelope for agent-bound messages.
+Intent: Prefix Slack DM and shared-channel messages with compact structured source metadata only after gateway command handling has selected an agent-bound turn and after all other inbound context has been assembled, so downstream A2A execution can recover the Slack channel and user identity from the first line without breaking Slack slash-command parsing or changing other platform attribution.
+
 
 ## File: `tools/user_env_store.py`
 

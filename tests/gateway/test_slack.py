@@ -3210,11 +3210,13 @@ class TestSlashCommands:
             "command": "/hermes",
             "text": "what's the weather today?",
             "user_id": "U1",
+            "user_name": "Alice",
             "channel_id": "C1",
         }
         await adapter._handle_slash_command(command)
         msg = adapter.handle_message.call_args[0][0]
         assert msg.text == "what's the weather today?"
+        assert msg.source.user_name == "Alice"
 
 
 # ---------------------------------------------------------------------------

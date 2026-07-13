@@ -4729,6 +4729,7 @@ class SlackAdapter(BasePlatformAdapter):
             chat_id=channel_id,
             chat_type="dm" if is_dm else "group",
             user_id=user_id,
+            user_name=command.get("user_name", ""),
         )
 
         event = MessageEvent(

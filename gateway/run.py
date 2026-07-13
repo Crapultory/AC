@@ -10297,7 +10297,22 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             group_sessions_per_user=_group_sessions_per_user,
             thread_sessions_per_user=_thread_sessions_per_user,
         )
-        if _is_shared_multi_user and source.user_name:
+        _source_header = None
+        # Build a structured source header for every Slack message, including
+        # DMs, so the A2A executor can recover the sender and channel identity.
+        # It is applied after all other inbound context has been prepended,
+        # keeping it on the first line for the executor's parser.
+        if source.platform and getattr(source.platform, "value", None) == "slack" and source.user_id:
+            import json as _json
+
+            _source_data: dict = {"platform": "slack"}
+            if source.chat_id:
+                _source_data["channel"] = source.chat_id
+            _source_data["uid"] = source.user_id
+            if source.user_name:
+                _source_data["uname"] = source.user_name
+            _source_header = f"<source>{_json.dumps(_source_data, ensure_ascii=False, separators=(',', ':'))}</source>"
+        elif _is_shared_multi_user and source.user_name:
             message_text = f"[{source.user_name}] {message_text}"
 
         # Prepend channel context from history backfill (if any).  This
@@ -10558,6 +10573,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     message_text = _ctx_result.message
             except Exception as exc:
                 logger.debug("@ context reference expansion failed: %s", exc)
+
+        if _source_header:
+            message_text = f"{_source_header}\n\n{message_text}"
 
         return message_text
 
