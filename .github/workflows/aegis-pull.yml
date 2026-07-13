@@ -1,0 +1,13 @@
+name: Pull aegis_v0.2
+
+on:
+  push:
+    branches:
+      - aegis_v0.2
+
+jobs:
+  pull:
+    runs-on: [self-hosted, aiapagent]
+    steps:
+      - name: Pull latest aegis_v0.2
+        run: cd "$HOME/.hermes/hermes-agent" && git pull origin aegis_v0.2
