@@ -414,13 +414,13 @@ class TestUpdateJob:
         result = update_job("nonexistent_id", {"name": "X"})
         assert result is None
 
-    def test_update_rejects_id_change(self, tmp_cron_dir):
-        """Job IDs are filesystem path components — must be immutable."""
+    def test_update_ignores_id_change(self, tmp_cron_dir):
+        """An immutable ID is ignored while other fields are still updated."""
         job = create_job(prompt="Original", schedule="every 1h")
 
-        with pytest.raises(ValueError, match="id"):
-            update_job(job["id"], {"id": "../escape"})
+        updated = update_job(job["id"], {"id": "../escape", "name": "Renamed"})
 
+        assert updated["name"] == "Renamed"
         # Original job still resolvable, no rename happened.
         assert get_job(job["id"]) is not None
         assert get_job("../escape") is None
@@ -439,11 +439,13 @@ class TestUpdateJob:
         assert get_job(job["id"])["identify"] == replacement
 
     @pytest.mark.parametrize("field", ["profile", "profile_name"])
-    def test_update_rejects_profile_metadata_changes(self, tmp_cron_dir, field):
+    def test_update_ignores_profile_metadata_changes(self, tmp_cron_dir, field):
         job = create_job(prompt="Keep profile metadata", schedule="every 1h")
 
-        with pytest.raises(ValueError, match=field):
-            update_job(job["id"], {field: "worker_alpha"})
+        updated = update_job(job["id"], {field: "worker_alpha", "name": "Updated"})
+
+        assert updated["name"] == "Updated"
+        assert field not in updated
 
 
 class TestPauseResumeJob:

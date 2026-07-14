@@ -670,9 +670,8 @@ async def test_update_cron_job_clears_snapshots_for_no_agent(
 
 
 @pytest.mark.asyncio
-async def test_update_cron_job_rejects_id_mutation(isolated_profiles):
-    """Dashboard surfaces a 400 (not a 500 or silent rename) when an
-    id-mutation attempt is rejected by cron/jobs.update_job."""
+async def test_update_cron_job_ignores_id_mutation(isolated_profiles):
+    """Dashboard ignores an immutable ID while applying valid updates."""
     from hermes_cli import web_server
 
     worker_job = web_server._call_cron_for_profile(
@@ -683,15 +682,14 @@ async def test_update_cron_job_rejects_id_mutation(isolated_profiles):
         name="immutable-id-job",
     )
 
-    with pytest.raises(HTTPException) as exc:
-        await web_server.update_cron_job(
-            worker_job["id"],
-            web_server.CronJobUpdate(updates={"id": "../escape"}),
-            profile="worker_alpha",
-        )
+    updated = await web_server.update_cron_job(
+        worker_job["id"],
+        web_server.CronJobUpdate(updates={"id": "../escape", "name": "updated-name"}),
+        profile="worker_alpha",
+    )
 
-    assert exc.value.status_code == 400
-    assert "id" in exc.value.detail
+    assert updated["id"] == worker_job["id"]
+    assert updated["name"] == "updated-name"
     worker_jobs = await web_server.list_cron_jobs(profile="worker_alpha")
     assert [job["id"] for job in worker_jobs] == [worker_job["id"]]
 

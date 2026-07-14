@@ -1338,14 +1338,15 @@ def list_jobs(include_disabled: bool = False) -> List[Dict[str, Any]]:
 
 def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Update a job by ID, refreshing derived schedule fields when needed."""
-    # Block mutation of immutable fields. ``id`` in particular is a filesystem
-    # path component under OUTPUT_DIR — letting an update change it leaks
-    # path-escape values into output writes/deletes.
-    bad_fields = _IMMUTABLE_JOB_FIELDS.intersection(updates or {})
-    if bad_fields:
-        raise ValueError(
-            f"Cron job field(s) cannot be updated: {', '.join(sorted(bad_fields))}"
-        )
+    # Ignore immutable fields rather than rejecting the whole update.  API
+    # callers commonly send an annotated job object back as an update, which
+    # includes profile metadata.  ``id`` in particular remains a filesystem
+    # path component under OUTPUT_DIR and must never be allowed to change.
+    updates = {
+        key: value
+        for key, value in (updates or {}).items()
+        if key not in _IMMUTABLE_JOB_FIELDS
+    }
 
     with _jobs_lock():
         jobs = load_jobs()
