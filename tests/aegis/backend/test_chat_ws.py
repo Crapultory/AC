@@ -63,6 +63,34 @@ class _StreamingAgent:
         return {"final_response": f"hello world: {user_message}", "completed": True}
 
 
+class _MainA2AResumeAgent:
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.stream_delta_callback = None
+        self.tool_start_callback = None
+        self.tool_complete_callback = None
+
+    def run_conversation(
+        self,
+        user_message: str,
+        system_message: str | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
+        task_id: str | None = None,
+        stream_callback=None,
+        persist_user_message: bool = True,
+    ) -> dict[str, Any]:
+        del system_message, conversation_history, task_id, stream_callback, persist_user_message
+        if callable(self.stream_delta_callback):
+            self.stream_delta_callback("before delegate")
+        if callable(self.tool_start_callback):
+            self.tool_start_callback("call-a2a", "a2a_delegate", {"agent_name": "threat-intel"})
+        if callable(self.tool_complete_callback):
+            self.tool_complete_callback("call-a2a", "a2a_delegate", {"agent_name": "threat-intel"}, "delegated")
+        if callable(self.stream_delta_callback):
+            self.stream_delta_callback("after delegate")
+        return {"final_response": f"final: {user_message}", "completed": True}
+
+
 class _SwitchableAgent(_StreamingAgent):
     def __init__(self, session_id: str):
         super().__init__(session_id)
@@ -227,6 +255,30 @@ class _DelegateAgent:
         output.emit("delegate", "ai", f"delegate-followup: {next_message}", session_id="delegate-sess")
         output.emit("delegate", "status", "return to main", session_id="delegate-sess")
         input_adapter.exit_foreground()
+        return {"final_response": "", "completed": True}
+
+
+class _DelegateFinalOnlyAgent:
+    def __init__(self, session_id: str):
+        self.session_id = session_id
+        self.stream_delta_callback = None
+        self.tool_start_callback = None
+        self.tool_complete_callback = None
+
+    def run_conversation(
+        self,
+        user_message: str,
+        system_message: str | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
+        task_id: str | None = None,
+        stream_callback=None,
+        persist_user_message: bool = True,
+    ) -> dict[str, Any]:
+        del user_message, system_message, conversation_history, task_id, stream_callback, persist_user_message
+        if callable(self.tool_start_callback):
+            self.tool_start_callback("call-delegate", "a2a_delegate", {"agent_name": "threat-intel"})
+        output = getattr(self, "_delegate_ext_output_adapter")
+        output.emit("delegate", "ai", "final without streamed delta", session_id="delegate-sess")
         return {"final_response": "", "completed": True}
 
 
@@ -742,6 +794,55 @@ def test_chat_ws_binds_and_streams_main_agent_events(
             assert completed["content"] == "hello world: hello aegis"
 
 
+def test_chat_ws_starts_new_main_message_after_a2a_delegate_completion(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    app.state.chat_manager.set_agent_factory(lambda session_id: _MainA2AResumeAgent(session_id))
+
+    with TestClient(app) as client:
+        with client.websocket_connect(f"/api/chat/ws?token={AUTH_TOKEN}") as ws:
+            ws.send_json({"type": "session.bind", "title": "A2A Message Boundary"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "delegate please",
+                    "client_msg_id": "msg-a2a-boundary",
+                }
+            )
+            accepted = _recv_until(ws, "message.accepted")
+            first_delta = _recv_until(ws, "message.delta")
+            assert first_delta["source"] == "main"
+            assert first_delta["delta"] == "before delegate"
+            assert first_delta["turn_id"] == accepted["turn_id"]
+
+            completed_tool = _recv_until(ws, "tool.completed")
+            assert completed_tool["source"] == "main"
+            assert completed_tool["tool_name"] == "a2a_delegate"
+            assert completed_tool["tool_call_id"] == "call-a2a"
+
+            stream_completed = _recv_until(ws, "message.stream.completed")
+            assert stream_completed["source"] == "main"
+            assert stream_completed["message_id"] == first_delta["message_id"]
+            assert stream_completed["turn_id"] == accepted["turn_id"]
+
+            second_delta = _recv_until(ws, "message.delta")
+            assert second_delta["source"] == "main"
+            assert second_delta["delta"] == "after delegate"
+            assert second_delta["turn_id"] == accepted["turn_id"]
+            assert second_delta["message_id"] != first_delta["message_id"]
+
+            completed = _recv_until(ws, "message.completed")
+            assert completed["source"] == "main"
+            assert completed["message_id"] == second_delta["message_id"]
+
+
 def test_chat_ws_keeps_parallel_sessions_isolated(
     load_backend,
     monkeypatch,
@@ -1234,12 +1335,12 @@ def test_chat_ws_routes_follow_up_into_delegate_foreground_with_srcagent(
             assert first_delegate_delta["delta"] == "delegate-start: "
             assert first_delegate_delta["turn_id"] == first_accepted["turn_id"]
 
-            first_delegate_reply = _recv_until(ws, "message.completed")
-            assert first_delegate_reply["source"] == "delegate"
-            assert first_delegate_reply["srcagent"] == "threat-intel"
-            assert first_delegate_reply["content"] == "delegate-start: delegate please"
-            assert first_delegate_reply["message_id"] == first_delegate_delta["message_id"]
-            assert first_delegate_reply["turn_id"] == first_accepted["turn_id"]
+            first_delegate_stream_completed = _recv_until(ws, "message.stream.completed")
+            assert first_delegate_stream_completed["source"] == "delegate"
+            assert first_delegate_stream_completed["srcagent"] == "threat-intel"
+            assert "content" not in first_delegate_stream_completed
+            assert first_delegate_stream_completed["message_id"] == first_delegate_delta["message_id"]
+            assert first_delegate_stream_completed["turn_id"] == first_accepted["turn_id"]
 
             ws.send_json(
                 {
@@ -1256,17 +1357,46 @@ def test_chat_ws_routes_follow_up_into_delegate_foreground_with_srcagent(
             assert second_delegate_delta["srcagent"] == "threat-intel"
             assert second_delegate_delta["delta"] == "delegate-followup: "
             assert second_delegate_delta["turn_id"] == second_accepted["turn_id"]
-            second_delegate_reply = _recv_until(ws, "message.completed")
-            assert second_delegate_reply["source"] == "delegate"
-            assert second_delegate_reply["srcagent"] == "threat-intel"
-            assert second_delegate_reply["content"] == "delegate-followup: follow-up routed to delegate"
-            assert second_delegate_reply["message_id"] == second_delegate_delta["message_id"]
-            assert second_delegate_reply["turn_id"] == second_accepted["turn_id"]
+            second_delegate_stream_completed = _recv_until(ws, "message.stream.completed")
+            assert second_delegate_stream_completed["source"] == "delegate"
+            assert second_delegate_stream_completed["srcagent"] == "threat-intel"
+            assert "content" not in second_delegate_stream_completed
+            assert second_delegate_stream_completed["message_id"] == second_delegate_delta["message_id"]
+            assert second_delegate_stream_completed["turn_id"] == second_accepted["turn_id"]
 
             exited = _recv_until(ws, "delegate.exited")
             assert exited["srcagent"] == "threat-intel"
             assert exited["reason"] == "return_to_main"
             assert exited["turn_id"] == second_accepted["turn_id"]
+
+
+def test_chat_ws_renders_delegate_final_when_no_streamed_delta(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    app.state.chat_manager.set_agent_factory(lambda session_id: _DelegateFinalOnlyAgent(session_id))
+
+    with TestClient(app) as client:
+        with client.websocket_connect(f"/api/chat/ws?token={AUTH_TOKEN}") as ws:
+            ws.send_json({"type": "session.bind", "title": "Delegate Final Only"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "delegate please",
+                    "client_msg_id": "msg-final-only",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            delegate_reply = _recv_until(ws, "message.completed")
+
+            assert delegate_reply["source"] == "delegate"
+            assert delegate_reply["content"] == "final without streamed delta"
 
 
 def test_chat_ws_stop_slash_cancels_active_remote_a2a_delegate(

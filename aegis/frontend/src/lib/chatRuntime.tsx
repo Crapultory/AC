@@ -521,6 +521,24 @@ export function AegisChatProvider({
           return nextConversation;
         }
 
+        if (payload.type === 'message.stream.completed') {
+          const messageId = payload.message_id;
+          if (!messageId) {
+            return nextConversation;
+          }
+          const existingIndex = nextConversation.messages.findIndex((message) => message.id === messageId);
+          if (existingIndex < 0) {
+            return nextConversation;
+          }
+          const updatedMessages = [...nextConversation.messages];
+          updatedMessages[existingIndex] = {
+            ...updatedMessages[existingIndex],
+            pending: false,
+          };
+          nextConversation.messages = updatedMessages;
+          return nextConversation;
+        }
+
         if (payload.type === 'message.delta' || payload.type === 'message.completed') {
           const source = payload.source || 'main';
           const messageId =

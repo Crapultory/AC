@@ -784,18 +784,30 @@ class ChatSessionActor:
             return
 
         if event_type == "ai":
-            message_id = self._latest_delegate_message_id or f"delegate_msg_{uuid4().hex[:10]}"
-            self._send_event(
-                "message.completed",
-                {
-                    "message_id": message_id,
-                    "content": content,
-                    "completed": True,
-                    "srcagent": self._foreground_agent or None,
-                },
-                source="delegate",
-                turn_id=self._turn_id,
-            )
+            message_id = self._latest_delegate_message_id
+            if message_id:
+                self._send_event(
+                    "message.stream.completed",
+                    {
+                        "message_id": message_id,
+                        "completed": True,
+                        "srcagent": self._foreground_agent or None,
+                    },
+                    source="delegate",
+                    turn_id=self._turn_id,
+                )
+            else:
+                self._send_event(
+                    "message.completed",
+                    {
+                        "message_id": f"delegate_msg_{uuid4().hex[:10]}",
+                        "content": content,
+                        "completed": True,
+                        "srcagent": self._foreground_agent or None,
+                    },
+                    source="delegate",
+                    turn_id=self._turn_id,
+                )
             self._latest_delegate_message_id = None
 
     def record_pending_delegate_name(self, function_args: dict[str, Any] | None) -> None:
@@ -933,6 +945,7 @@ class ChatSessionActor:
                 preview = str(function_result)
                 if len(preview) > 200:
                     preview = preview[:200] + "..."
+                event_source = self._foreground_source
                 self._send_event(
                     "tool.completed",
                     {
@@ -940,9 +953,20 @@ class ChatSessionActor:
                         "tool_call_id": tool_call_id,
                         "result_preview": preview,
                     },
-                    source=self._foreground_source,
+                    source=event_source,
                     turn_id=turn_id,
                 )
+                if event_source == "main" and function_name == "a2a_delegate":
+                    self._send_event(
+                        "message.stream.completed",
+                        {
+                            "message_id": self._main_message_id,
+                            "completed": True,
+                        },
+                        source="main",
+                        turn_id=turn_id,
+                    )
+                    self._main_message_id = f"assistant_{uuid4().hex[:10]}"
 
             setattr(agent, "stream_delta_callback", _on_delta)
             setattr(agent, "tool_start_callback", _on_tool_start)

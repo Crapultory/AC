@@ -355,6 +355,86 @@ describe('ChatTab', () => {
     });
   });
 
+  it('keeps delegate delta text when its stream completes and renders final-only delegate replies', async () => {
+    render(<ChatTab agents={[]} />);
+
+    fireEvent.change(screen.getByPlaceholderText(/ask aegis anything/i), {
+      target: { value: 'delegate please' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+
+    await waitFor(() => {
+      expect(MockWebSocket.instances).toHaveLength(1);
+    });
+    const socket = MockWebSocket.instances[0];
+    socket.emit({
+      type: 'session.bound',
+      session_id: 'sess-delegate-stream',
+      title: 'Delegate stream',
+      resumed: false,
+    });
+
+    await waitFor(() => {
+      expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true);
+    });
+
+    socket.emit({
+      type: 'message.delta',
+      session_id: 'sess-delegate-stream',
+      turn_id: 'turn-delegate-stream',
+      message_id: 'delegate-stream-1',
+      source: 'delegate',
+      srcagent: 'threat-intel',
+      delta: 'streamed delegate result',
+    });
+
+    expect(await screen.findByText('streamed delegate result')).toBeInTheDocument();
+    const messageCountBeforeCompletion = screen.getAllByTestId('chat-message').length;
+
+    socket.emit({
+      type: 'message.stream.completed',
+      session_id: 'sess-delegate-stream',
+      turn_id: 'turn-delegate-stream',
+      message_id: 'delegate-stream-1',
+      source: 'delegate',
+      srcagent: 'threat-intel',
+    });
+
+    await waitFor(() => {
+      expect(screen.getAllByText('streamed delegate result')).toHaveLength(1);
+      expect(screen.getAllByTestId('chat-message')).toHaveLength(messageCountBeforeCompletion);
+    });
+
+    socket.emit({
+      type: 'message.delta',
+      session_id: 'sess-delegate-stream',
+      turn_id: 'turn-delegate-stream',
+      message_id: 'delegate-stream-2',
+      source: 'delegate',
+      srcagent: 'threat-intel',
+      delta: 'next streamed delegate result',
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText('streamed delegate result')).toBeInTheDocument();
+      expect(screen.getByText('next streamed delegate result')).toBeInTheDocument();
+      expect(screen.getAllByTestId('chat-message')).toHaveLength(messageCountBeforeCompletion + 1);
+    });
+
+    socket.emit({
+      type: 'message.completed',
+      session_id: 'sess-delegate-stream',
+      turn_id: 'turn-delegate-final-only',
+      message_id: 'delegate-final-only-1',
+      source: 'delegate',
+      srcagent: 'threat-intel',
+      content: 'final without streamed delta',
+      completed: true,
+    });
+
+    expect(await screen.findByText('final without streamed delta')).toBeInTheDocument();
+  });
+
   it('sends clarify choices and routes Other into freeform clarify responses', async () => {
     render(<ChatTab agents={[]} />);
 
