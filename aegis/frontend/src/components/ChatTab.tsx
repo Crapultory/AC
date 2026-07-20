@@ -19,6 +19,8 @@ import {
   Send,
   ShieldAlert,
   Trash2,
+  Workflow,
+  X,
 } from 'lucide-react';
 import {
   AegisChatProvider,
@@ -112,6 +114,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
   const [copiedMessageId, setCopiedMessageId] = useState('');
   const [showDelegateTools, setShowDelegateTools] = useState(false);
   const [expandedMessageIds, setExpandedMessageIds] = useState<Record<string, boolean>>({});
+  const [workflowDrawerOpen, setWorkflowDrawerOpen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const copyFeedbackTimeoutRef = useRef<number | null>(null);
 
@@ -126,6 +129,19 @@ function ChatTabContent({ agents }: ChatTabProps) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [conversations, activeConvId]);
+
+  useEffect(() => {
+    if (!workflowDrawerOpen) {
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setWorkflowDrawerOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [workflowDrawerOpen]);
 
   function handleCreateNewConversation() {
     createConversation();
@@ -212,10 +228,14 @@ function ChatTabContent({ agents }: ChatTabProps) {
   const composerPlaceholder = activeConversation?.pendingClarify?.awaitingText
     ? 'Answer clarify prompt... 输入你的补充说明'
     : "Ask Aegis anything... 触发关键词：'钓鱼邮件', '勒索病毒', '敏感泄露'...";
+  const workflowSessionTitle = activeConversation?.title || 'Current Session';
 
   return (
-    <div className="flex h-full w-full bg-[#020408] items-stretch overflow-hidden text-xs">
-      <div className={`${sidebarCollapsed ? 'w-16' : 'w-80'} border-r border-slate-800 bg-[#05080F] flex flex-col pt-4 shrink-0 z-10 transition-[width] duration-200`}>
+    <div className={`flex bg-[#020408] items-stretch overflow-hidden text-xs ${
+      workflowDrawerOpen ? 'fixed inset-0 z-50 h-screen w-screen' : 'h-full w-full'
+    }`}>
+      {!workflowDrawerOpen ? (
+        <div className={`${sidebarCollapsed ? 'w-16' : 'w-80'} border-r border-slate-800 bg-[#05080F] flex flex-col pt-4 shrink-0 z-10 transition-[width] duration-200`}>
         <div className={`${sidebarCollapsed ? 'px-2 pb-3' : 'px-4 pb-3'} border-b border-slate-800 space-y-3`}>
           <div className={`flex ${sidebarCollapsed ? 'flex-col gap-2' : 'justify-between items-center'}`}>
             {!sidebarCollapsed ? (
@@ -230,6 +250,16 @@ function ChatTabContent({ agents }: ChatTabProps) {
                 title={sidebarCollapsed ? 'Expand session sidebar' : 'Collapse session sidebar'}
               >
                 {sidebarCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+              </button>
+              <button
+                type="button"
+                aria-label="Open workflow visualization"
+                aria-pressed={workflowDrawerOpen}
+                onClick={() => setWorkflowDrawerOpen(true)}
+                className="p-2 rounded border border-slate-800 bg-[#080C14] text-slate-400 hover:text-cyan-300 hover:border-cyan-900/50 transition-all"
+                title="Open session workflow"
+              >
+                <Workflow className="h-4 w-4" aria-hidden="true" />
               </button>
               <button
                 type="button"
@@ -345,9 +375,55 @@ function ChatTabContent({ agents }: ChatTabProps) {
             {!sidebarCollapsed ? <span>清空运行环境缓存</span> : null}
           </button>
         </div>
-      </div>
+        </div>
+      ) : null}
 
-      <div className={`flex-1 flex flex-col h-full min-w-0 bg-[#020408] relative ${composerExpanded ? 'pb-32' : 'pb-16'}`}>
+      {workflowDrawerOpen ? (
+        <aside
+          role="complementary"
+          aria-label={`Workflow for ${workflowSessionTitle}`}
+          className="w-1/2 h-full shrink-0 flex flex-col border-r border-cyan-900/50 bg-[#05080F] shadow-[20px_0_60px_rgba(0,0,0,0.5)] transition-transform duration-200"
+        >
+          <div className="h-16 shrink-0 px-5 border-b border-slate-800 bg-[#03060C] flex items-center gap-3">
+            <div className="h-8 w-8 rounded border border-cyan-900/50 bg-cyan-950/20 text-cyan-300 flex items-center justify-center">
+              <Workflow className="h-4 w-4" aria-hidden="true" />
+            </div>
+            <div className="min-w-0">
+              <div className="text-xs font-bold tracking-widest text-white">SESSION WORKFLOW</div>
+              <div className="mt-0.5 truncate text-[10px] font-mono text-slate-500">{workflowSessionTitle}</div>
+            </div>
+            <button
+              type="button"
+              aria-label="Close workflow visualization"
+              onClick={() => setWorkflowDrawerOpen(false)}
+              className="ml-auto h-8 w-8 rounded border border-slate-800 bg-[#080C14] text-slate-400 hover:text-cyan-300 hover:border-cyan-900/50 transition-all flex items-center justify-center"
+              title="Close workflow"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 flex items-center justify-center p-8 text-center bg-[radial-gradient(rgba(8,145,178,0.11)_1px,transparent_1px)] [background-size:18px_18px]">
+            <div className="max-w-xs space-y-3">
+              <div className="h-16 w-16 mx-auto rounded-full border border-dashed border-cyan-800/70 bg-cyan-950/10 text-cyan-300 flex items-center justify-center shadow-[0_0_28px_rgba(8,145,178,0.18)]">
+                <Workflow className="h-7 w-7" aria-hidden="true" />
+              </div>
+              <h4 className="text-sm font-bold text-slate-100">Execution trace will appear here</h4>
+              <p className="text-[11px] leading-relaxed text-slate-500">
+                Routing, agent delegation, and tool actions for this session will be drawn here in a future update.
+              </p>
+            </div>
+          </div>
+          <div className="shrink-0 px-5 py-3 border-t border-slate-800 bg-[#03060C] flex justify-between text-[10px] font-mono tracking-wider text-slate-500">
+            <span>SESSION TRACE</span>
+            <span>0 ACTIONS</span>
+          </div>
+        </aside>
+      ) : null}
+
+      <div
+        data-testid="chat-workspace"
+        className={`${workflowDrawerOpen ? 'w-1/2 shrink-0' : 'flex-1'} flex flex-col h-full min-w-0 bg-[#020408] relative ${composerExpanded ? 'pb-32' : 'pb-16'}`}
+      >
         <div className="p-4 border-b border-slate-800 bg-[#03060C] flex justify-between items-center">
           <div>
             <h3 className="text-sm font-bold text-white flex items-center gap-1.5 uppercase italic">

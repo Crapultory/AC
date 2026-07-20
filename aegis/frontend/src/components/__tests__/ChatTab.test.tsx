@@ -60,6 +60,41 @@ describe('ChatTab', () => {
     clipboardWriteText.mockReset();
   });
 
+  it('opens the global workflow drawer without replacing the composer draft', () => {
+    render(<ChatTab agents={[]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /新建对话/i }));
+    const composer = screen.getByPlaceholderText(/ask aegis anything/i);
+    fireEvent.change(composer, { target: { value: 'keep this draft' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+
+    expect(screen.getByRole('complementary', { name: /workflow for new investigation/i })).toBeInTheDocument();
+    expect(screen.getByText('Execution trace will appear here')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/ask aegis anything/i)).toHaveValue('keep this draft');
+    expect(screen.getByTestId('chat-workspace')).toHaveClass('w-1/2');
+  });
+
+  it('closes the global workflow drawer with its close control', () => {
+    render(<ChatTab agents={[]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close workflow visualization/i }));
+
+    expect(screen.queryByRole('complementary', { name: /workflow for current session/i })).not.toBeInTheDocument();
+    expect(screen.getByText('CENTRAL ARCHIVE')).toBeInTheDocument();
+  });
+
+  it('closes the global workflow drawer when Escape is pressed', () => {
+    render(<ChatTab agents={[]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(screen.queryByRole('complementary', { name: /workflow for current session/i })).not.toBeInTheDocument();
+    expect(screen.getByText('CENTRAL ARCHIVE')).toBeInTheDocument();
+  });
+
   it('connects lazily and renders main state, delegate events, delegate tools, copy actions, and per-turn orchestration chains', async () => {
     render(<ChatTab agents={[]} />);
 
