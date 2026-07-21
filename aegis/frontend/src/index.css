@@ -36,3 +36,37 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #0891b2; /* cyan-600 */
 }
+
+@keyframes workflow-edge-flow {
+  from {
+    stroke-dashoffset: 0;
+  }
+  to {
+    stroke-dashoffset: -42;
+  }
+}
+
+.workflow-edge-flow {
+  animation: workflow-edge-flow 1.8s linear infinite;
+  opacity: 0.9;
+}
+
+.workflow-node-focus-ring {
+  opacity: 0;
+  transition: opacity 120ms ease-out;
+}
+
+.workflow-node:focus-visible .workflow-node-focus-ring {
+  opacity: 0.9;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .workflow-edge-flow {
+    animation: none;
+    opacity: 0.5;
+  }
+
+  .workflow-node-focus-ring {
+    transition: none;
+  }
+}

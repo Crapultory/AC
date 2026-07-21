@@ -10,7 +10,11 @@ import {
   ZoomOut,
 } from 'lucide-react';
 import { Conversation, WorkflowGraphNode } from '../types';
-import { projectSessionWorkflow } from '../lib/sessionWorkflow';
+import {
+  compactWorkflowGraph,
+  projectSessionWorkflow,
+  WorkflowToolRunExpansion,
+} from '../lib/sessionWorkflow';
 
 interface SessionWorkflowProps {
   conversation?: Conversation;
@@ -33,6 +37,7 @@ const NODE_COLORS: Record<WorkflowGraphNode['kind'], { fill: string; stroke: str
   input: { fill: '#f2b557', stroke: '#ffd994', glow: 'rgba(242,181,87,0.32)' },
   delegate: { fill: '#d73b68', stroke: '#ff8eaa', glow: 'rgba(215,59,104,0.36)' },
   tool: { fill: '#4aa8df', stroke: '#a5dcff', glow: 'rgba(74,168,223,0.32)' },
+  'tool-group': { fill: '#3979c6', stroke: '#9fdcff', glow: 'rgba(66,153,225,0.4)' },
   end: { fill: '#42c79a', stroke: '#a6f3d8', glow: 'rgba(66,199,154,0.3)' },
 };
 
@@ -42,8 +47,30 @@ function clampScale(scale: number): number {
 
 function nodeRadius(node: WorkflowGraphNode, nodeCount: number): number {
   const density = nodeCount > 100 ? 0.72 : nodeCount > 45 ? 0.84 : 1;
-  const base = node.kind === 'root' ? 25 : node.kind === 'delegate' ? 17 : node.kind === 'input' ? 14 : 11;
+  const base =
+    node.kind === 'root'
+      ? 25
+      : node.kind === 'delegate'
+        ? 17
+        : node.kind === 'input'
+          ? 14
+          : node.kind === 'tool-group'
+            ? 13
+            : 11;
   return base * density;
+}
+
+function nodeHaloSize(node: WorkflowGraphNode, radius: number, nodeCount: number): number {
+  const density = nodeCount > 100 ? 0.45 : nodeCount > 45 ? 0.7 : 1;
+  const extension =
+    node.kind === 'root'
+      ? 18
+      : node.kind === 'delegate' || node.kind === 'tool-group'
+        ? 12
+        : node.kind === 'input'
+          ? 9
+          : 7;
+  return radius + extension * density;
 }
 
 function edgePath(from: WorkflowGraphNode, to: WorkflowGraphNode): string {
@@ -77,6 +104,7 @@ export default function SessionWorkflow({
   const [selectedNodeId, setSelectedNodeId] = useState<string>();
   const [transform, setTransform] = useState<ViewportTransform>({ x: 36, y: 36, scale: 1 });
   const [userMovedViewport, setUserMovedViewport] = useState(false);
+  const [revealedByRun, setRevealedByRun] = useState<WorkflowToolRunExpansion>({});
   const legacyTraceAvailable = Boolean(
     conversation?.messages.some(
       (message) =>
@@ -87,7 +115,7 @@ export default function SessionWorkflow({
     ) && !conversation?.workflowTraceVersion,
   );
 
-  const graph = useMemo(
+  const logicalGraph = useMemo(
     () =>
       projectSessionWorkflow({
         conversationId: conversation?.id || 'empty',
@@ -97,6 +125,10 @@ export default function SessionWorkflow({
         partial: legacyTraceAvailable,
       }),
     [conversation, legacyTraceAvailable],
+  );
+  const graph = useMemo(
+    () => compactWorkflowGraph(logicalGraph, revealedByRun),
+    [logicalGraph, revealedByRun],
   );
   const nodeById = useMemo(
     () => new Map(graph.nodes.map((node) => [node.id, node])),
@@ -136,10 +168,17 @@ export default function SessionWorkflow({
 
   useEffect(() => {
     setSelectedNodeId(undefined);
+    setRevealedByRun({});
     setUserMovedViewport(false);
     const frame = window.requestAnimationFrame(() => fitGraphRef.current());
     return () => window.cancelAnimationFrame(frame);
   }, [conversation?.id]);
+
+  useEffect(() => {
+    if (selectedNodeId && !nodeById.has(selectedNodeId)) {
+      setSelectedNodeId(undefined);
+    }
+  }, [nodeById, selectedNodeId]);
 
   useEffect(() => {
     if (userMovedViewport || typeof ResizeObserver === 'undefined') {
@@ -219,7 +258,23 @@ export default function SessionWorkflow({
     }
   }
 
-  const visibleActionCount = Math.max(0, graph.nodes.length - 1);
+  const revealToolGroup = useCallback((node: WorkflowGraphNode) => {
+    if (node.kind !== 'tool-group' || !node.toolRunId || !node.hiddenToolCount) {
+      return;
+    }
+    setUserMovedViewport(true);
+    setRevealedByRun((current) => {
+      const currentRevealCount = current[node.toolRunId] || 0;
+      return {
+        ...current,
+        [node.toolRunId]: node.hiddenToolCount <= 3
+          ? Number.POSITIVE_INFINITY
+          : currentRevealCount + 3,
+      };
+    });
+  }, []);
+
+  const actionCount = Math.max(0, logicalGraph.nodes.length - 1);
 
   return (
     <aside
@@ -316,17 +371,8 @@ export default function SessionWorkflow({
             }
           }}
         >
-          <defs>
-            <filter id="workflow-glow" x="-80%" y="-80%" width="260%" height="260%">
-              <feGaussianBlur stdDeviation="5" result="blur" />
-              <feMerge>
-                <feMergeNode in="blur" />
-                <feMergeNode in="SourceGraphic" />
-              </feMerge>
-            </filter>
-          </defs>
           <g transform={`translate(${transform.x} ${transform.y}) scale(${transform.scale})`}>
-            {graph.edges.map((edge) => {
+            {graph.edges.map((edge, edgeIndex) => {
               const from = nodeById.get(edge.from);
               const to = nodeById.get(edge.to);
               if (!from || !to) {
@@ -337,12 +383,27 @@ export default function SessionWorkflow({
               return (
                 <g key={edge.id} opacity={highlighted ? 1 : 0.22} className="transition-opacity duration-200">
                   <path
+                    data-testid={`workflow-edge-base-${edge.id}`}
+                    data-edge-layer="base"
                     d={edgePath(from, to)}
                     fill="none"
                     stroke={delegate ? '#d94673' : '#55b8d7'}
                     strokeWidth={highlighted ? 2 : 1.25}
                     strokeDasharray={delegate ? '7 6' : undefined}
                     vectorEffect="non-scaling-stroke"
+                  />
+                  <path
+                    data-testid={`workflow-edge-flow-${edge.id}`}
+                    data-edge-layer="flow"
+                    d={edgePath(from, to)}
+                    fill="none"
+                    stroke={delegate ? '#ff6e9a' : '#a7edff'}
+                    strokeWidth={highlighted ? 2.25 : 1.5}
+                    strokeDasharray="3 18"
+                    vectorEffect="non-scaling-stroke"
+                    pathLength="100"
+                    className="workflow-edge-flow pointer-events-none"
+                    style={{ animationDelay: `${-(edgeIndex % 9) * 0.12}s` }}
                   />
                   {edge.label ? (
                     <text
@@ -363,9 +424,11 @@ export default function SessionWorkflow({
 
             {graph.nodes.map((node) => {
               const radius = nodeRadius(node, graph.nodes.length);
+              const haloRadius = nodeHaloSize(node, radius, graph.nodes.length);
               const selected = node.id === selectedNodeId;
               const highlighted = !selectedNode || highlightedNodeIds.has(node.id);
               const failed = node.kind === 'end' && node.status !== 'completed';
+              const toolGroup = node.kind === 'tool-group';
               const colors = failed
                 ? { fill: '#e45168', stroke: '#ffabb9', glow: 'rgba(228,81,104,0.35)' }
                 : NODE_COLORS[node.kind];
@@ -374,8 +437,13 @@ export default function SessionWorkflow({
                   key={node.id}
                   role="button"
                   tabIndex={0}
-                  aria-label={`Select ${node.detail || node.label}`}
+                  aria-label={
+                    toolGroup
+                      ? `Show next ${Math.min(3, node.hiddenToolCount || 0)} of ${node.hiddenToolCount || 0} hidden tools`
+                      : `Select ${node.detail || node.label}`
+                  }
                   data-workflow-node
+                  data-node-kind={node.kind}
                   data-testid={`workflow-node-${node.id}`}
                   data-highlighted={highlighted ? 'true' : 'false'}
                   transform={`translate(${node.x} ${node.y})`}
@@ -383,15 +451,49 @@ export default function SessionWorkflow({
                   className="workflow-node cursor-pointer outline-none transition-opacity duration-200 motion-safe:animate-[pulse_420ms_ease-out_1]"
                   onClick={(event) => {
                     event.stopPropagation();
-                    setSelectedNodeId(node.id);
+                    if (toolGroup) {
+                      revealToolGroup(node);
+                    } else {
+                      setSelectedNodeId(node.id);
+                    }
                   }}
                   onKeyDown={(event) => {
                     if (event.key === 'Enter' || event.key === ' ') {
                       event.preventDefault();
-                      setSelectedNodeId(node.id);
+                      if (toolGroup) {
+                        revealToolGroup(node);
+                      } else {
+                        setSelectedNodeId(node.id);
+                      }
                     }
                   }}
                 >
+                  <circle
+                    data-testid={`workflow-node-halo-${node.kind}`}
+                    r={haloRadius}
+                    fill={colors.glow}
+                    opacity={selected ? 0.88 : 0.58}
+                    className="workflow-node-halo pointer-events-none transition-opacity duration-200"
+                  />
+                  <circle
+                    data-testid={`workflow-node-focus-${node.kind}`}
+                    r={haloRadius + 3}
+                    fill="none"
+                    stroke="#f8fafc"
+                    strokeWidth="1.5"
+                    strokeDasharray="3 3"
+                    className="workflow-node-focus-ring pointer-events-none"
+                  />
+                  {node.kind === 'root' || node.kind === 'delegate' || toolGroup ? (
+                    <circle
+                      r={radius + (node.kind === 'root' ? 8 : 5)}
+                      fill="none"
+                      stroke={colors.stroke}
+                      strokeWidth="0.8"
+                      opacity={selected ? 0.8 : 0.3}
+                      className="pointer-events-none"
+                    />
+                  ) : null}
                   {node.status === 'running' ? (
                     <circle
                       r={radius + 7}
@@ -407,17 +509,31 @@ export default function SessionWorkflow({
                     fill={colors.fill}
                     stroke={selected ? '#ffffff' : colors.stroke}
                     strokeWidth={selected ? 2.5 : 1.25}
-                    style={{ filter: selected ? `drop-shadow(0 0 11px ${colors.glow})` : undefined }}
+                    style={{ filter: selected ? `drop-shadow(0 0 10px ${colors.stroke})` : undefined }}
                   />
                   {node.kind === 'delegate' ? (
                     <circle r={radius * 0.28} fill="#06121b" opacity="0.82" />
+                  ) : null}
+                  {toolGroup ? (
+                    <text
+                      x="0"
+                      y="3"
+                      fill="#e6f7ff"
+                      fontSize="9"
+                      fontWeight="700"
+                      fontFamily="JetBrains Mono, monospace"
+                      textAnchor="middle"
+                      pointerEvents="none"
+                    >
+                      …
+                    </text>
                   ) : null}
                   <text
                     x={radius + 9}
                     y="3.5"
                     fill={highlighted ? '#d8e5ed' : '#738493'}
                     fontSize={graph.nodes.length > 100 ? 8 : graph.nodes.length > 45 ? 9 : 10}
-                    fontWeight={node.kind === 'root' || node.kind === 'delegate' ? 700 : 500}
+                    fontWeight={node.kind === 'root' || node.kind === 'delegate' || toolGroup ? 700 : 500}
                     fontFamily="JetBrains Mono, monospace"
                     paintOrder="stroke"
                     stroke="#03131e"
@@ -432,7 +548,7 @@ export default function SessionWorkflow({
           </g>
         </svg>
 
-        {graph.status === 'empty' ? (
+        {logicalGraph.status === 'empty' ? (
           <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
             <div className="mt-24 text-center">
               <div className="text-[10px] font-mono tracking-[0.2em] text-cyan-500/70">AWAITING FIRST TURN</div>
@@ -486,10 +602,10 @@ export default function SessionWorkflow({
 
       <footer className="shrink-0 px-4 py-2.5 border-t border-slate-800 bg-[#03080f] flex items-center justify-between text-[9px] font-mono tracking-wider text-slate-500">
         <div className="flex items-center gap-2">
-          <span className={`h-1.5 w-1.5 rounded-full ${graph.status === 'live' ? 'bg-amber-400 motion-safe:animate-pulse' : graph.status === 'complete' ? 'bg-emerald-400' : 'bg-slate-500'}`} />
-          <span>{graph.status === 'partial' ? 'PARTIAL TRACE' : graph.status === 'live' ? 'LIVE TRACE' : graph.status === 'complete' ? 'STATIC TRACE' : 'SESSION TRACE'}</span>
+          <span className={`h-1.5 w-1.5 rounded-full ${logicalGraph.status === 'live' ? 'bg-amber-400 motion-safe:animate-pulse' : logicalGraph.status === 'complete' ? 'bg-emerald-400' : 'bg-slate-500'}`} />
+          <span>{logicalGraph.status === 'partial' ? 'PARTIAL TRACE' : logicalGraph.status === 'live' ? 'LIVE TRACE' : logicalGraph.status === 'complete' ? 'STATIC TRACE' : 'SESSION TRACE'}</span>
         </div>
-        <span>{visibleActionCount} ACTIONS · {graph.nodes.filter((node) => node.kind === 'tool').length} TOOLS</span>
+        <span>{actionCount} ACTIONS · {logicalGraph.nodes.filter((node) => node.kind === 'tool').length} TOOLS</span>
       </footer>
     </aside>
   );

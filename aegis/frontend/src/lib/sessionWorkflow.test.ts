@@ -1,5 +1,228 @@
 import { describe, expect, it } from 'vitest';
-import { applyWorkflowSocketEvent, projectSessionWorkflow } from './sessionWorkflow';
+import {
+  applyWorkflowSocketEvent,
+  compactWorkflowGraph,
+  projectSessionWorkflow,
+} from './sessionWorkflow';
+import { WorkflowGraph } from '../types';
+
+function linearToolGraph(toolCount: number): WorkflowGraph {
+  const rootId = 'session:test';
+  const nodes: WorkflowGraph['nodes'] = [
+    {
+      id: rootId,
+      kind: 'root',
+      label: 'AEGIS',
+      detail: 'Test session',
+      status: 'active',
+      source: 'main',
+      x: 72,
+      y: 120,
+      depth: 0,
+    },
+    {
+      id: 'turn:test',
+      kind: 'input',
+      label: 'Test turn',
+      detail: 'Test turn',
+      status: 'completed',
+      source: 'main',
+      turnId: 'test',
+      parentId: rootId,
+      x: 268,
+      y: 120,
+      depth: 1,
+    },
+  ];
+  for (let index = 1; index <= toolCount; index += 1) {
+    nodes.push({
+      id: `tool:test:${index}`,
+      kind: 'tool',
+      label: `tool-${index}`,
+      detail: `tool-${index}`,
+      status: 'completed',
+      source: 'main',
+      turnId: 'test',
+      parentId: index === 1 ? 'turn:test' : `tool:test:${index - 1}`,
+      x: 268 + index * 196,
+      y: 120,
+      depth: index + 1,
+    });
+  }
+  nodes.push({
+    id: 'end:main:test',
+    kind: 'end',
+    label: 'Task complete',
+    detail: 'idle',
+    status: 'completed',
+    source: 'main',
+    turnId: 'test',
+    parentId: toolCount ? `tool:test:${toolCount}` : 'turn:test',
+    x: 268 + toolCount * 196 + 172,
+    y: 120,
+    depth: toolCount + 2,
+  });
+  return {
+    rootId,
+    nodes,
+    edges: nodes.flatMap((node) => node.parentId ? [{
+      id: `${node.parentId}->${node.id}`,
+      from: node.parentId,
+      to: node.id,
+      source: node.source,
+    }] : []),
+    status: 'complete',
+    width: 268 + toolCount * 196 + 392,
+    height: 360,
+  };
+}
+
+describe('compactWorkflowGraph', () => {
+  it('collapses a four-tool run at the inclusive threshold without mutating the original graph', () => {
+    const graph = linearToolGraph(4);
+    const before = structuredClone(graph);
+    const compact = compactWorkflowGraph(graph);
+
+    expect(compact.nodes.filter((node) => node.kind === 'tool').map((node) => node.id)).toEqual([
+      'tool:test:1',
+      'tool:test:4',
+    ]);
+    expect(compact.nodes.find((node) => node.kind === 'tool-group')).toMatchObject({
+      label: '+2 tools',
+      hiddenToolCount: 2,
+      source: 'main',
+    });
+    expect(graph).toEqual(before);
+  });
+
+  it('replaces the middle of a long tool run and compacts its layout', () => {
+    const graph = linearToolGraph(8);
+    const compact = compactWorkflowGraph(graph);
+    const group = compact.nodes.find((node) => node.kind === 'tool-group');
+
+    expect(compact.nodes.filter((node) => node.kind === 'tool').map((node) => node.id)).toEqual([
+      'tool:test:1',
+      'tool:test:8',
+    ]);
+    expect(group).toMatchObject({
+      id: 'tool-group:tool:test:1:tool:test:8',
+      label: '+6 tools',
+      hiddenToolCount: 6,
+      toolRunId: 'tool-run:tool:test:1',
+      parentId: 'tool:test:1',
+    });
+    expect(compact.nodes.find((node) => node.id === 'tool:test:8')).toMatchObject({
+      parentId: group?.id,
+      depth: 4,
+    });
+    expect(compact.width).toBeLessThan(graph.width);
+  });
+
+  it('reveals three hidden tools at a time from the start of the run', () => {
+    const graph = linearToolGraph(10);
+    const firstExpansion = compactWorkflowGraph(graph, { 'tool-run:tool:test:1': 3 });
+
+    expect(firstExpansion.nodes.filter((node) => node.kind === 'tool').map((node) => node.id)).toEqual([
+      'tool:test:1',
+      'tool:test:2',
+      'tool:test:3',
+      'tool:test:4',
+      'tool:test:10',
+    ]);
+    expect(firstExpansion.nodes.find((node) => node.kind === 'tool-group')).toMatchObject({
+      label: '+5 tools',
+      hiddenToolCount: 5,
+      parentId: 'tool:test:4',
+    });
+
+    const secondExpansion = compactWorkflowGraph(graph, { 'tool-run:tool:test:1': 6 });
+    expect(secondExpansion.nodes.find((node) => node.kind === 'tool-group')).toMatchObject({
+      label: '+2 tools',
+      hiddenToolCount: 2,
+      parentId: 'tool:test:7',
+    });
+
+    const fullyExpanded = compactWorkflowGraph(graph, {
+      'tool-run:tool:test:1': Number.POSITIVE_INFINITY,
+    });
+    expect(fullyExpanded.nodes.some((node) => node.kind === 'tool-group')).toBe(false);
+    expect(fullyExpanded.nodes.filter((node) => node.kind === 'tool')).toHaveLength(10);
+  });
+
+  it('splits at a same-source branch and folds only the downstream four-tool run', () => {
+    const graph = linearToolGraph(7);
+    const branchParent = graph.nodes.find((node) => node.id === 'tool:test:3');
+    const end = graph.nodes.find((node) => node.id === 'end:main:test');
+    if (!branchParent || !end) {
+      throw new Error('Expected test graph nodes');
+    }
+    end.parentId = branchParent.id;
+    graph.edges = graph.nodes.flatMap((node) => node.parentId ? [{
+      id: `${node.parentId}->${node.id}`,
+      from: node.parentId,
+      to: node.id,
+      source: node.source,
+    }] : []);
+
+    const compact = compactWorkflowGraph(graph);
+    const group = compact.nodes.find((node) => node.kind === 'tool-group');
+    expect(group).toMatchObject({
+      id: 'tool-group:tool:test:4:tool:test:7',
+      label: '+2 tools',
+      parentId: 'tool:test:4',
+    });
+    expect(compact.nodes.find((node) => node.id === 'tool:test:3')).toMatchObject({
+      parentId: 'tool:test:2',
+    });
+    expect(compact.nodes.find((node) => node.id === 'end:main:test')).toMatchObject({
+      parentId: 'tool:test:3',
+    });
+  });
+
+  it('folds a main tool backbone even when a hidden tool owns a delegate side branch', () => {
+    const graph = linearToolGraph(7);
+    graph.nodes.push({
+      id: 'delegate:test:side-branch',
+      kind: 'delegate',
+      label: 'Side delegate',
+      detail: 'Side delegate',
+      status: 'running',
+      source: 'delegate',
+      turnId: 'test',
+      parentId: 'tool:test:3',
+      agent: 'side-agent',
+      x: 1052,
+      y: 200,
+      depth: 5,
+    });
+    graph.edges.push({
+      id: 'tool:test:3->delegate:test:side-branch',
+      from: 'tool:test:3',
+      to: 'delegate:test:side-branch',
+      source: 'delegate',
+      label: 'DELEGATE · side-agent',
+    });
+
+    const compact = compactWorkflowGraph(graph);
+    const group = compact.nodes.find((node) => node.kind === 'tool-group');
+
+    expect(group).toMatchObject({
+      label: '+5 tools',
+      source: 'main',
+      parentId: 'tool:test:1',
+    });
+    expect(compact.nodes.find((node) => node.id === 'tool:test:7')).toMatchObject({
+      parentId: group?.id,
+    });
+    expect(compact.nodes.find((node) => node.id === 'delegate:test:side-branch')).toMatchObject({
+      parentId: group?.id,
+    });
+    expect(compact.edges.find((edge) => edge.to === 'delegate:test:side-branch')).toMatchObject({
+      source: 'delegate',
+      label: 'DELEGATE · side-agent',
+    });
+  });
+});
 
 describe('projectSessionWorkflow', () => {
   it('branches every main user turn directly from the Aegis session root', () => {

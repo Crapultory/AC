@@ -204,6 +204,195 @@ export interface ProjectSessionWorkflowInput {
   partial?: boolean;
 }
 
+export type WorkflowToolRunExpansion = Readonly<Record<string, number>>;
+
+const MIN_TOOL_RUN_TO_COLLAPSE = 4;
+const TOOL_HORIZONTAL_GAP = 196;
+const COMPACT_GROUP_HORIZONTAL_GAP = 172;
+const END_HORIZONTAL_GAP = 172;
+
+interface ToolRun {
+  id: string;
+  nodes: WorkflowGraphNode[];
+}
+
+function findLinearToolRuns(graph: WorkflowGraph): ToolRun[] {
+  const nodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+  const childrenById = new Map<string, WorkflowGraphNode[]>();
+  graph.nodes.forEach((node) => {
+    if (!node.parentId) {
+      return;
+    }
+    const children = childrenById.get(node.parentId) || [];
+    children.push(node);
+    childrenById.set(node.parentId, children);
+  });
+
+  const visited = new Set<string>();
+  const runs: ToolRun[] = [];
+  const sameSourceChildren = (node: WorkflowGraphNode) =>
+    (childrenById.get(node.id) || []).filter((child) => child.source === node.source);
+  graph.nodes.forEach((node) => {
+    if (node.kind !== 'tool' || visited.has(node.id)) {
+      return;
+    }
+    const parent = node.parentId ? nodeById.get(node.parentId) : undefined;
+    const parentChildren = parent ? sameSourceChildren(parent) : [];
+    const parentContinuesRun =
+      parent?.kind === 'tool' &&
+      parent.source === node.source &&
+      parentChildren.length === 1 &&
+      parentChildren[0].id === node.id;
+    if (parentContinuesRun) {
+      return;
+    }
+
+    const runNodes = [node];
+    visited.add(node.id);
+    let cursor = node;
+    while (true) {
+      const children = sameSourceChildren(cursor);
+      if (children.length !== 1 || children[0].kind !== 'tool') {
+        break;
+      }
+      cursor = children[0];
+      runNodes.push(cursor);
+      visited.add(cursor.id);
+    }
+    runs.push({ id: `tool-run:${runNodes[0].id}`, nodes: runNodes });
+  });
+  return runs;
+}
+
+/**
+ * Derives a compact, render-only graph without mutating the trace-backed graph.
+ * Long linear tool runs keep their first/last nodes and progressively reveal
+ * hidden tools from the execution-order side of the run.
+ */
+export function compactWorkflowGraph(
+  graph: WorkflowGraph,
+  revealedByRun: WorkflowToolRunExpansion = {},
+): WorkflowGraph {
+  const collapsibleRuns = findLinearToolRuns(graph).filter(
+    (run) => run.nodes.length >= MIN_TOOL_RUN_TO_COLLAPSE,
+  );
+  if (collapsibleRuns.length === 0) {
+    return graph;
+  }
+
+  const replacementByNodeId = new Map<string, string>();
+  const groupByFirstHiddenId = new Map<string, WorkflowGraphNode>();
+  collapsibleRuns.forEach((run) => {
+    const hiddenTools = run.nodes.slice(1, -1);
+    const requestedRevealCount = revealedByRun[run.id] || 0;
+    const revealCount = Math.min(hiddenTools.length, Math.max(0, Math.floor(requestedRevealCount)));
+    const remainingTools = hiddenTools.slice(revealCount);
+    if (remainingTools.length === 0) {
+      return;
+    }
+
+    const first = run.nodes[0];
+    const last = run.nodes.at(-1) as WorkflowGraphNode;
+    const firstHidden = remainingTools[0];
+    const groupId = `tool-group:${first.id}:${last.id}`;
+    remainingTools.forEach((node) => replacementByNodeId.set(node.id, groupId));
+    groupByFirstHiddenId.set(firstHidden.id, {
+      id: groupId,
+      kind: 'tool-group',
+      label: `+${remainingTools.length} tools`,
+      detail: '',
+      status: remainingTools.some((node) => node.status === 'running') ? 'running' : 'collapsed',
+      source: firstHidden.source,
+      turnId: firstHidden.turnId,
+      parentId: firstHidden.parentId,
+      agent: firstHidden.agent,
+      timestamp: firstHidden.timestamp,
+      toolRunId: run.id,
+      hiddenToolCount: remainingTools.length,
+      x: firstHidden.x,
+      y: firstHidden.y,
+      depth: firstHidden.depth,
+    });
+  });
+
+  if (replacementByNodeId.size === 0) {
+    return graph;
+  }
+
+  const originalNodeById = new Map(graph.nodes.map((node) => [node.id, node]));
+  const edgeByTargetId = new Map(graph.edges.map((edge) => [edge.to, edge]));
+  const visibleNodes: WorkflowGraphNode[] = [];
+  graph.nodes.forEach((node) => {
+    const group = groupByFirstHiddenId.get(node.id);
+    if (group) {
+      visibleNodes.push(group);
+    }
+    if (!replacementByNodeId.has(node.id)) {
+      visibleNodes.push({ ...node });
+    }
+  });
+
+  const visibleNodeById = new Map(visibleNodes.map((node) => [node.id, node]));
+  const resolveVisibleParentId = (parentId?: string): string | undefined => {
+    let cursorId = parentId;
+    while (cursorId) {
+      const replacementId = replacementByNodeId.get(cursorId);
+      if (replacementId) {
+        return replacementId;
+      }
+      if (visibleNodeById.has(cursorId)) {
+        return cursorId;
+      }
+      cursorId = originalNodeById.get(cursorId)?.parentId;
+    }
+    return undefined;
+  };
+
+  visibleNodes.forEach((node) => {
+    node.parentId = resolveVisibleParentId(node.parentId);
+    if (!node.parentId) {
+      node.depth = 0;
+      return;
+    }
+    const parent = visibleNodeById.get(node.parentId);
+    if (!parent) {
+      return;
+    }
+    node.depth = parent.depth + 1;
+    const horizontalGap =
+      node.kind === 'end'
+        ? END_HORIZONTAL_GAP
+        : node.kind === 'tool-group'
+          ? COMPACT_GROUP_HORIZONTAL_GAP
+          : TOOL_HORIZONTAL_GAP;
+    node.x = parent.x + horizontalGap;
+  });
+
+  const edges: WorkflowGraphEdge[] = visibleNodes.flatMap((node) => {
+    if (!node.parentId) {
+      return [];
+    }
+    const originalEdge = edgeByTargetId.get(node.id);
+    return [{
+      id: `${node.parentId}->${node.id}`,
+      from: node.parentId,
+      to: node.id,
+      source: node.source,
+      label: originalEdge?.label,
+    }];
+  });
+  const maxX = visibleNodes.reduce((maximum, node) => Math.max(maximum, node.x), 0);
+  const maxY = visibleNodes.reduce((maximum, node) => Math.max(maximum, node.y), 0);
+
+  return {
+    ...graph,
+    nodes: visibleNodes,
+    edges,
+    width: Math.max(520, maxX + 220),
+    height: Math.max(graph.height, maxY + 80),
+  };
+}
+
 function deriveLegacyWorkflowTrace(messages: Message[]): WorkflowTraceEvent[] {
   const synthetic: WorkflowTraceEvent[] = [];
   const turnByMessageId = new Map<string, string>();

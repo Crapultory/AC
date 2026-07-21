@@ -71,7 +71,182 @@ function completedConversation(): Conversation {
   };
 }
 
+function longToolConversation(id = 'long-conversation', toolCount = 8): Conversation {
+  return {
+    id,
+    title: 'Long tool investigation',
+    timestamp: '10:00',
+    messages: [
+      {
+        id: `user-${id}`,
+        sender: 'user',
+        text: 'Run the complete investigation chain',
+        timestamp: '10:00',
+        turnId: 'long-turn',
+        source: 'main',
+      },
+    ],
+    workflowTraceVersion: 1,
+    workflowTrace: [
+      {
+        id: `accepted-${id}`,
+        type: 'message.accepted',
+        timestamp: 1,
+        turnId: 'long-turn',
+        source: 'main',
+      },
+      ...Array.from({ length: toolCount }, (_, index) => ({
+        id: `tool-event-${id}-${index + 1}`,
+        type: 'tool.completed' as const,
+        timestamp: index + 2,
+        turnId: 'long-turn',
+        source: 'main' as const,
+        toolName: `tool-${index + 1}`,
+        toolCallId: `tool-${index + 1}`,
+      })),
+      {
+        id: `idle-${id}`,
+        type: 'run.state',
+        timestamp: toolCount + 3,
+        turnId: 'long-turn',
+        source: 'main',
+        state: 'idle',
+      },
+    ],
+  };
+}
+
 describe('SessionWorkflow', () => {
+  it('collapses exactly four consecutive main tools at the inclusive threshold', () => {
+    render(
+      <SessionWorkflow
+        conversation={longToolConversation('four-main-tools', 4)}
+        fullscreen={false}
+        onFullscreenChange={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('+2 tools')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-node-tool:long-turn:tool-1')).toBeInTheDocument();
+    expect(screen.queryByTestId('workflow-node-tool:long-turn:tool-2')).not.toBeInTheDocument();
+    expect(screen.getByTestId('workflow-node-tool:long-turn:tool-4')).toBeInTheDocument();
+    expect(screen.getByText('6 ACTIONS · 4 TOOLS')).toBeInTheDocument();
+  });
+
+  it('progressively expands long tool chains without opening node details', () => {
+    render(
+      <SessionWorkflow
+        conversation={longToolConversation()}
+        fullscreen={false}
+        onFullscreenChange={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getByText('+6 tools')).toBeInTheDocument();
+    expect(screen.queryByTestId('workflow-node-tool:long-turn:tool-2')).not.toBeInTheDocument();
+    expect(screen.getByText('10 ACTIONS · 8 TOOLS')).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /show next 3 of 6 hidden tools/i }));
+    expect(screen.queryByText('NODE DETAILS')).not.toBeInTheDocument();
+    expect(screen.getByTestId('workflow-node-tool:long-turn:tool-2')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-node-tool:long-turn:tool-4')).toBeInTheDocument();
+    expect(screen.getByText('+3 tools')).toBeInTheDocument();
+
+    fireEvent.keyDown(screen.getByRole('button', { name: /show next 3 of 3 hidden tools/i }), {
+      key: 'Enter',
+    });
+    expect(screen.queryByText('+3 tools')).not.toBeInTheDocument();
+    expect(screen.getByTestId('workflow-node-tool:long-turn:tool-7')).toBeInTheDocument();
+  });
+
+  it('keeps viewport state while expanding and resets folding for a new session', async () => {
+    const initialConversation = longToolConversation();
+    const { rerender } = render(
+      <SessionWorkflow
+        conversation={initialConversation}
+        fullscreen={false}
+        onFullscreenChange={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    const canvas = screen.getByTestId('workflow-canvas');
+    fireEvent.click(screen.getByRole('button', { name: /zoom in workflow/i }));
+    const scaleBeforeExpansion = canvas.getAttribute('data-scale');
+    fireEvent.click(screen.getByRole('button', { name: /show next 3 of 6 hidden tools/i }));
+    expect(canvas).toHaveAttribute('data-scale', scaleBeforeExpansion);
+
+    const idle = initialConversation.workflowTrace?.at(-1);
+    const liveExtendedConversation: Conversation = {
+      ...initialConversation,
+      workflowTrace: [
+        ...(initialConversation.workflowTrace?.slice(0, -1) || []),
+        {
+          id: 'live-tool-9',
+          type: 'tool.completed',
+          timestamp: 10.5,
+          turnId: 'long-turn',
+          source: 'main',
+          toolName: 'tool-9',
+          toolCallId: 'tool-9',
+        },
+        ...(idle ? [idle] : []),
+      ],
+    };
+    rerender(
+      <SessionWorkflow
+        conversation={liveExtendedConversation}
+        fullscreen={false}
+        onFullscreenChange={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    expect(screen.getByText('+4 tools')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-node-tool:long-turn:tool-2')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-node-tool:long-turn:tool-9')).toBeInTheDocument();
+    expect(
+      screen.getByTestId('workflow-edge-base-tool:long-turn:tool-9->end:main:long-turn'),
+    ).toBeInTheDocument();
+    expect(canvas).toHaveAttribute('data-scale', scaleBeforeExpansion);
+
+    rerender(
+      <SessionWorkflow
+        conversation={longToolConversation('next-conversation')}
+        fullscreen={false}
+        onFullscreenChange={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+    await waitFor(() => expect(screen.getByText('+6 tools')).toBeInTheDocument());
+    expect(screen.queryByTestId('workflow-node-tool:long-turn:tool-2')).not.toBeInTheDocument();
+  });
+
+  it('renders semantic node halos and layered directional edges', () => {
+    render(
+      <SessionWorkflow
+        conversation={completedConversation()}
+        fullscreen={false}
+        onFullscreenChange={vi.fn()}
+        onClose={vi.fn()}
+      />,
+    );
+
+    expect(screen.getAllByTestId('workflow-node-halo-root')).toHaveLength(1);
+    expect(screen.getAllByTestId('workflow-node-halo-input')).toHaveLength(1);
+    expect(screen.getAllByTestId('workflow-node-halo-tool')).toHaveLength(1);
+    expect(screen.getAllByTestId('workflow-node-halo-end')).toHaveLength(1);
+    const toolNode = screen.getByTestId('workflow-node-tool:turn-1:tool-1');
+    expect(toolNode).toHaveAttribute('tabindex', '0');
+    expect(screen.getByTestId('workflow-node-focus-tool')).toHaveClass('workflow-node-focus-ring');
+    expect(document.querySelectorAll('[data-edge-layer="base"]')).toHaveLength(3);
+    expect(document.querySelectorAll('[data-edge-layer="flow"]')).toHaveLength(3);
+    document.querySelectorAll('[data-edge-layer="flow"]').forEach((edge) => {
+      expect(edge).toHaveClass('workflow-edge-flow');
+      expect(edge).toHaveAttribute('vector-effect', 'non-scaling-stroke');
+    });
+  });
+
   it('keeps node labels compact and reveals full details only after selection', () => {
     render(
       <SessionWorkflow

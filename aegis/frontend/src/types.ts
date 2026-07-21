@@ -109,7 +109,13 @@ export interface WorkflowTraceEvent {
   reason?: string;
 }
 
-export type WorkflowGraphNodeKind = 'root' | 'input' | 'delegate' | 'tool' | 'end';
+export type WorkflowGraphNodeKind =
+  | 'root'
+  | 'input'
+  | 'delegate'
+  | 'tool'
+  | 'tool-group'
+  | 'end';
 export type WorkflowGraphStatus = 'empty' | 'partial' | 'live' | 'complete';
 
 export interface WorkflowGraphNode {
@@ -126,6 +132,8 @@ export interface WorkflowGraphNode {
   argsPreview?: string;
   resultPreview?: string;
   finalMessage?: string;
+  toolRunId?: string;
+  hiddenToolCount?: number;
   x: number;
   y: number;
   depth: number;
