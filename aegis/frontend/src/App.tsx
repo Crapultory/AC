@@ -10,6 +10,7 @@ import RegisterScreen from './components/RegisterScreen';
 import UserManagementTab from './components/UserManagementTab';
 import ChangePasswordDialog from './components/ChangePasswordDialog';
 import SettingsTab from './components/SettingsTab';
+import AuditLogsTab from './components/AuditLogsTab';
 import { AegisChatProvider, useAegisChatRuntime } from './lib/chatRuntime';
 import { clearStoredAuth, getStoredUser, hasStoredToken, setStoredAuth, setStoredUser } from './lib/auth';
 import { fetchJSON, ApiError, alertApiError, getApiErrorMessage } from './lib/api';
@@ -26,7 +27,7 @@ import {
 } from './lib/adapters';
 import { Agent, AgentDraft, AuthenticatedUser, RoutingRule, RoutingRuleDraft, UserDraft } from './types';
 
-type AppTab = 'overview' | 'chat' | 'orchestration' | 'policy' | 'users' | 'settings';
+type AppTab = 'overview' | 'chat' | 'orchestration' | 'policy' | 'users' | 'settings' | 'audit';
 
 type AuthLoginResponse = {
   authenticated: boolean;
@@ -53,10 +54,11 @@ const TAB_TO_PATH: Record<AppTab, string> = {
   policy: '/policy',
   users: '/users',
   settings: '/settings',
+  audit: '/audit',
 };
 
 function isAdminOnlyTab(tab: AppTab | null): boolean {
-  return tab === 'orchestration' || tab === 'policy' || tab === 'users' || tab === 'settings';
+  return tab === 'orchestration' || tab === 'policy' || tab === 'users' || tab === 'settings' || tab === 'audit';
 }
 
 const getUtcTimestamp = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
@@ -79,6 +81,9 @@ function resolveTabFromPath(pathname: string): AppTab | null {
   }
   if (pathname === '/settings') {
     return 'settings';
+  }
+  if (pathname === '/audit') {
+    return 'audit';
   }
   return 'overview';
 }
@@ -287,11 +292,13 @@ function AuthenticatedAppShell({
           ) : null}
           {activeTab === 'policy' ? (
             <PolicyTab
+              agents={agents}
               busy={isSyncing}
               onCreate={onCreateRule}
               onDelete={onDeleteRule}
               onRefresh={onRefresh}
               onUpdate={onUpdateRule}
+              onAuthExpired={onAuthExpired}
               rules={rules}
             />
           ) : null}
@@ -307,6 +314,7 @@ function AuthenticatedAppShell({
             />
           ) : null}
           {activeTab === 'settings' ? <SettingsTab onAuthExpired={onAuthExpired} /> : null}
+          {activeTab === 'audit' ? <AuditLogsTab onAuthExpired={onAuthExpired} /> : null}
         </main>
       </div>
     </div>

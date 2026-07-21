@@ -4,6 +4,8 @@ import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from run_agent import AIAgent
 from toolsets import TOOLSETS, _HERMES_CORE_TOOLS
 from tools.registry import registry
@@ -17,6 +19,7 @@ def _make_parent():
     parent.api_mode = "chat_completions"
     parent.model = "anthropic/claude-sonnet-4"
     parent.platform = "cli"
+    parent._user_env_platform = None
     parent.reasoning_config = None
     parent.prefill_messages = None
     parent.max_tokens = None
@@ -125,6 +128,290 @@ def test_remote_task_poll_refreshes_parent_activity():
     parent._touch_activity.assert_called_once_with(
         "a2a_delegate: received remote task update"
     )
+
+
+def test_aegis_gate_absent_skips_policy_and_audit(monkeypatch):
+    import tools.a2a_delegate_tool as a2a_delegate_tool
+
+    monkeypatch.delenv("AEGIS_BOOTSTRAP_ADMIN_PASSWORD", raising=False)
+    parent = _make_parent()
+    run_delegate = MagicMock(return_value={"success": True, "type": "a2a"})
+    check_delegate = MagicMock()
+    monkeypatch.setattr(a2a_delegate_tool, "_run_remote_delegate", run_delegate)
+    monkeypatch.setattr(
+        a2a_delegate_tool.a2a_delegate_aegis,
+        "run_aegis_checked_delegate",
+        check_delegate,
+    )
+
+    payload = json.loads(
+        a2a_delegate_tool.a2a_delegate(
+            goal="Investigate",
+            agent_name="responder",
+            parent_agent=parent,
+        )
+    )
+
+    assert payload["success"] is True
+    check_delegate.assert_not_called()
+    run_delegate.assert_called_once()
+
+
+def test_aegis_gate_absent_preserves_agent_name_compatibility(monkeypatch):
+    import tools.a2a_delegate_tool as a2a_delegate_tool
+
+    monkeypatch.delenv("AEGIS_BOOTSTRAP_ADMIN_PASSWORD", raising=False)
+    run_delegate = MagicMock(return_value={"success": False, "type": "a2a", "error": "unknown"})
+    monkeypatch.setattr(a2a_delegate_tool, "_run_remote_delegate", run_delegate)
+
+    a2a_delegate_tool.a2a_delegate(
+        goal="Investigate",
+        agent_name=None,
+        parent_agent=_make_parent(),
+    )
+    assert run_delegate.call_args.kwargs["agent_name"] is None
+
+    a2a_delegate_tool.a2a_delegate(
+        goal="Investigate",
+        agent_name=" responder ",
+        parent_agent=_make_parent(),
+    )
+    assert run_delegate.call_args.kwargs["agent_name"] == " responder "
+
+
+def test_aegis_deny_short_circuits_remote_and_audits(monkeypatch, tmp_path):
+    import tools.a2a_delegate_tool as a2a_delegate_tool
+    from tools.a2a_delegate_aegis import AegisDelegateStore
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_BOOTSTRAP_ADMIN_PASSWORD", "configured")
+    store = AegisDelegateStore(tmp_path / "aegis.db")
+    store.create_policy(
+        rank_id=1,
+        platform="aegis",
+        user_id="u-1",
+        agent_name="responder",
+        status="deny",
+    )
+    parent = _make_parent()
+    parent.platform = "aegis"
+    parent._user_id = "u-1"
+    parent._user_name = "Alice"
+    run_delegate = MagicMock()
+    monkeypatch.setattr(a2a_delegate_tool, "_run_remote_delegate", run_delegate)
+
+    payload = json.loads(
+        a2a_delegate_tool.a2a_delegate(
+            goal="Investigate",
+            agent_name="responder",
+            session_id=None,
+            is_loop=True,
+            is_delegate_output=False,
+            parent_agent=parent,
+        )
+    )
+
+    assert payload["success"] is False
+    assert payload["authorization"] == "denied"
+    assert payload["session_id"] == ""
+    run_delegate.assert_not_called()
+    audits = store.query_audits().logs
+    assert len(audits) == 1
+    assert audits[0] == {
+        "id": audits[0]["id"],
+        "timestamp": audits[0]["timestamp"],
+        "platform": "aegis",
+        "user_id": "u-1",
+        "user_name": "Alice",
+        "agent_name": "responder",
+        "goal": "Investigate",
+        "session_id": "",
+        "is_loop": True,
+        "is_delegate_output": False,
+        "status": "fail",
+    }
+
+
+def test_aegis_nested_subagent_uses_originating_platform_for_policy(monkeypatch, tmp_path):
+    import tools.a2a_delegate_tool as a2a_delegate_tool
+    from tools.a2a_delegate_aegis import AegisDelegateStore
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_BOOTSTRAP_ADMIN_PASSWORD", "configured")
+    store = AegisDelegateStore(tmp_path / "aegis.db")
+    store.create_policy(
+        rank_id=1,
+        platform="aegis",
+        user_id="u-1",
+        agent_name="responder",
+        status="deny",
+    )
+    child = _make_parent()
+    child.platform = "subagent"
+    child._user_env_platform = "aegis"
+    child._user_id = "u-1"
+    child._user_name = "Alice"
+    run_delegate = MagicMock()
+    monkeypatch.setattr(a2a_delegate_tool, "_run_remote_delegate", run_delegate)
+
+    payload = json.loads(
+        a2a_delegate_tool.a2a_delegate(
+            goal="Investigate",
+            agent_name="responder",
+            parent_agent=child,
+        )
+    )
+
+    assert payload["authorization"] == "denied"
+    run_delegate.assert_not_called()
+    assert store.query_audits().logs[0]["platform"] == "aegis"
+
+
+def test_aegis_allowed_delegate_records_successful_authorization(monkeypatch, tmp_path):
+    import tools.a2a_delegate_tool as a2a_delegate_tool
+    from tools.a2a_delegate_aegis import AegisDelegateStore
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_BOOTSTRAP_ADMIN_PASSWORD", "configured")
+    parent = _make_parent()
+    parent.platform = "slack"
+    parent._user_id = "u-2"
+    parent._user_name = "Bob"
+    store = AegisDelegateStore(tmp_path / "aegis.db")
+
+    def run_delegate(**_kwargs):
+        audits = store.query_audits().logs
+        assert len(audits) == 1
+        assert audits[0]["status"] == "succ"
+        return {"success": False, "type": "a2a", "error": "remote failed"}
+
+    monkeypatch.setattr(
+        a2a_delegate_tool,
+        "_run_remote_delegate",
+        run_delegate,
+    )
+
+    payload = json.loads(
+        a2a_delegate_tool.a2a_delegate(
+            goal="Investigate",
+            agent_name="responder",
+            session_id="remote-2",
+            parent_agent=parent,
+        )
+    )
+
+    assert payload["success"] is False
+    audit = store.query_audits().logs[0]
+    assert audit["status"] == "succ"
+    assert audit["platform"] == "slack"
+    assert audit["session_id"] == "remote-2"
+
+
+def test_aegis_successful_delegate_records_succ(monkeypatch, tmp_path):
+    import tools.a2a_delegate_tool as a2a_delegate_tool
+    from tools.a2a_delegate_aegis import AegisDelegateStore
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_BOOTSTRAP_ADMIN_PASSWORD", "configured")
+    monkeypatch.setattr(
+        a2a_delegate_tool,
+        "_run_remote_delegate",
+        MagicMock(return_value={"success": True, "type": "a2a", "final_response": "done"}),
+    )
+
+    payload = json.loads(
+        a2a_delegate_tool.a2a_delegate(
+            goal="Investigate",
+            agent_name="responder",
+            parent_agent=_make_parent(),
+        )
+    )
+
+    assert payload["success"] is True
+    audit = AegisDelegateStore(tmp_path / "aegis.db").query_audits().logs[0]
+    assert audit["status"] == "succ"
+
+
+def test_aegis_policy_check_error_fails_closed(monkeypatch, tmp_path):
+    import tools.a2a_delegate_tool as a2a_delegate_tool
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_BOOTSTRAP_ADMIN_PASSWORD", "configured")
+    monkeypatch.setattr(
+        a2a_delegate_tool.a2a_delegate_aegis.AegisDelegateStore,
+        "evaluate_policy",
+        MagicMock(side_effect=OSError("database unavailable")),
+    )
+    run_delegate = MagicMock()
+    monkeypatch.setattr(a2a_delegate_tool, "_run_remote_delegate", run_delegate)
+
+    payload = json.loads(
+        a2a_delegate_tool.a2a_delegate(
+            goal="Investigate",
+            agent_name="responder",
+            parent_agent=_make_parent(),
+        )
+    )
+
+    assert payload["success"] is False
+    assert payload["authorization"] == "error"
+    assert "database unavailable" not in payload["error"]
+    run_delegate.assert_not_called()
+    audit = a2a_delegate_tool.a2a_delegate_aegis.AegisDelegateStore(
+        tmp_path / "aegis.db"
+    ).query_audits().logs[0]
+    assert audit["status"] == "fail"
+
+
+def test_aegis_audit_failure_does_not_replace_delegate_result(monkeypatch, tmp_path):
+    import tools.a2a_delegate_tool as a2a_delegate_tool
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_BOOTSTRAP_ADMIN_PASSWORD", "configured")
+    monkeypatch.setattr(
+        a2a_delegate_tool.a2a_delegate_aegis.AegisDelegateStore,
+        "record_audit",
+        MagicMock(side_effect=OSError("audit unavailable")),
+    )
+    monkeypatch.setattr(
+        a2a_delegate_tool,
+        "_run_remote_delegate",
+        MagicMock(return_value={"success": True, "type": "a2a", "final_response": "done"}),
+    )
+
+    payload = json.loads(
+        a2a_delegate_tool.a2a_delegate(
+            goal="Investigate",
+            agent_name="responder",
+            parent_agent=_make_parent(),
+        )
+    )
+
+    assert payload["success"] is True
+    assert payload["final_response"] == "done"
+
+
+def test_aegis_delegate_exception_does_not_change_authorization_audit(monkeypatch, tmp_path):
+    import tools.a2a_delegate_tool as a2a_delegate_tool
+    from tools.a2a_delegate_aegis import AegisDelegateStore
+
+    monkeypatch.setenv("HERMES_HOME", str(tmp_path))
+    monkeypatch.setenv("AEGIS_BOOTSTRAP_ADMIN_PASSWORD", "configured")
+    monkeypatch.setattr(
+        a2a_delegate_tool,
+        "_run_remote_delegate",
+        MagicMock(side_effect=RuntimeError("remote exploded")),
+    )
+
+    with pytest.raises(RuntimeError, match="remote exploded"):
+        a2a_delegate_tool.a2a_delegate(
+            goal="Investigate",
+            agent_name="responder",
+            parent_agent=_make_parent(),
+        )
+
+    audit = AegisDelegateStore(tmp_path / "aegis.db").query_audits().logs[0]
+    assert audit["status"] == "succ"
 
 
 def test_default_a2a_session_id_adds_two_digit_random_suffix(monkeypatch):

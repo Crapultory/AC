@@ -3,24 +3,31 @@ import { Edit2, Plus, RefreshCw, Search, Trash2, X } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { alertApiError } from '../lib/api';
 import { RoutingRule, RoutingRuleDraft } from '../types';
+import type { Agent } from '../types';
+import AgentPolicyPanel from './AgentPolicyPanel';
 
 interface PolicyTabProps {
+  agents?: Agent[];
   rules: RoutingRule[];
   busy: boolean;
   onCreate: (draft: RoutingRuleDraft) => Promise<void>;
   onUpdate: (ruleId: string, draft: RoutingRuleDraft) => Promise<void>;
   onDelete: (ruleId: string) => Promise<void>;
   onRefresh: () => Promise<void>;
+  onAuthExpired?: () => void;
 }
 
 export default function PolicyTab({
+  agents = [],
   rules,
   busy,
   onCreate,
   onDelete,
   onRefresh,
   onUpdate,
+  onAuthExpired,
 }: PolicyTabProps) {
+  const [activePolicyView, setActivePolicyView] = useState<'global' | 'agent'>('global');
   const [searchTerm, setSearchTerm] = useState('');
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [editingRule, setEditingRule] = useState<RoutingRule | null>(null);
@@ -109,24 +116,28 @@ export default function PolicyTab({
             Aegis Smart Policy Router (路由 Policy 中枢)
           </h3>
           <p className="leading-relaxed text-slate-400">
-            当前页面直接管理 `a2a.json` 中的 <strong>Global Routing Rules</strong>。
-            这些全局策略会优先于默认 Agent 能力匹配，用于统一分流、兜底拦截与默认处置。
+            管理 `a2a.json` 中的 <strong>Global Routing Rules</strong>，以及 `aegis.db`
+            中控制用户能否委派目标 Agent 的 <strong>Agent Policy</strong>。
           </p>
         </div>
         <div className="shrink-0 rounded border border-slate-800 bg-[#03060C] px-3 py-2 text-[10px] font-bold text-cyan-400">
-          Core Mode: <strong className="text-white">Global Rules Only</strong>
+          Policy Mode: <strong className="text-white">Routing + Access</strong>
         </div>
       </div>
 
-      <div className="flex flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#05080F]">
-        <div className="flex flex-col justify-between gap-4 border-b border-slate-800 bg-[#03060C] p-4 md:flex-row md:items-center">
-          <button
-            type="button"
-            className="cursor-default rounded-lg border border-slate-800 bg-[#020408] px-3 py-1.5 text-xs font-bold text-cyan-400"
-          >
-            Global Routing Rules (全局规则路由)
-          </button>
+      <div className="flex gap-2 rounded-xl border border-slate-800 bg-[#03060C] p-2">
+        <button type="button" aria-pressed={activePolicyView === 'global'} onClick={() => setActivePolicyView('global')} className={`aegis-btn rounded-lg px-4 py-2 font-bold ${activePolicyView === 'global' ? 'aegis-btn--primary aegis-btn--selected' : 'aegis-btn--ghost'}`}>Global Routing Rules</button>
+        <button type="button" aria-pressed={activePolicyView === 'agent'} onClick={() => setActivePolicyView('agent')} className={`aegis-btn rounded-lg px-4 py-2 font-bold ${activePolicyView === 'agent' ? 'aegis-btn--primary aegis-btn--selected' : 'aegis-btn--ghost'}`}>Agent Policy</button>
+      </div>
 
+      {activePolicyView === 'global' ? <div className="flex flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#05080F]">
+        <div className="flex flex-col justify-between gap-3 border-b border-slate-800 bg-[#03060C] p-4 md:flex-row md:items-center">
+          <div>
+            <h4 className="font-bold text-cyan-400">Global Routing Rules</h4>
+            <p className="mt-1 text-[10px] text-slate-500">
+              Priority-ordered rules route matching requests to the configured agent.
+            </p>
+          </div>
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative">
               <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-slate-600" />
@@ -229,10 +240,10 @@ export default function PolicyTab({
             </tbody>
           </table>
         </div>
-      </div>
+      </div> : <AgentPolicyPanel agents={agents} onAuthExpired={onAuthExpired} />}
 
       <AnimatePresence>
-        {isModalOpen && (
+        {activePolicyView === 'global' && isModalOpen && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/85 p-4 backdrop-blur-sm">
             <motion.div
               initial={{ scale: 0.96, opacity: 0 }}

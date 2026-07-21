@@ -1,6 +1,8 @@
 export type AgentStatus = 'Active' | 'Idle' | 'Offline';
 export type RoutingRuleStatus = 'Enabled' | 'Disabled';
 export type UserStatus = 'enabled' | 'disabled';
+export type AgentPolicyStatus = 'allow' | 'deny';
+export type DelegateAuditStatus = 'succ' | 'fail' | 'auth_denied';
 
 export interface AuthenticatedUser {
   uid: string;
@@ -59,6 +61,35 @@ export interface RoutingRuleDraft {
   name: string;
   policy: string;
   status: RoutingRuleStatus;
+}
+
+export interface AgentPolicy {
+  rank_id: number;
+  platform: string;
+  user_id: string;
+  agent_name: string;
+  status: AgentPolicyStatus;
+}
+
+export interface DelegateAuditLog {
+  id: string;
+  timestamp: string;
+  platform: string;
+  user_id: string;
+  user_name: string;
+  agent_name: string;
+  goal: string;
+  session_id: string;
+  is_loop: boolean;
+  is_delegate_output: boolean;
+  status: DelegateAuditStatus;
+}
+
+export interface DelegateAuditPage {
+  logs: DelegateAuditLog[];
+  total: number;
+  page: number;
+  page_size: number;
 }
 
 export interface ChainStep {

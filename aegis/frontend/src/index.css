@@ -12,6 +12,148 @@ body {
   font-family: var(--font-sans);
 }
 
+@keyframes aegis-button-breathe {
+  0%, 100% {
+    opacity: 0.32;
+    transform: scale(0.98);
+  }
+  50% {
+    opacity: 0.86;
+    transform: scale(1.025);
+  }
+}
+
+.aegis-btn {
+  position: relative;
+  border-radius: 0.5rem;
+  cursor: pointer;
+  font-family: inherit;
+  font-weight: 700;
+  transition:
+    color 160ms ease,
+    background-color 160ms ease,
+    border-color 160ms ease,
+    box-shadow 160ms ease,
+    transform 120ms ease;
+}
+
+.aegis-btn:active:not(:disabled) {
+  transform: scale(0.96);
+}
+
+.aegis-btn:focus-visible {
+  outline: 1px solid rgba(103, 232, 249, 0.58);
+  outline-offset: 2px;
+}
+
+.aegis-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+  transform: none;
+}
+
+.aegis-btn:disabled:not(.aegis-btn--busy)::after {
+  animation: none !important;
+  opacity: 0;
+}
+
+.aegis-btn--primary {
+  border: 1px solid transparent;
+  background: #06b6d4;
+  color: #fff;
+  box-shadow: 0 0 10px rgba(6, 182, 212, 0.3);
+}
+
+.aegis-btn--primary:hover:not(:disabled) {
+  background: #0891b2;
+  box-shadow: 0 0 13px rgba(6, 182, 212, 0.4);
+}
+
+.aegis-btn--secondary {
+  border: 1px solid #1e293b;
+  background: #020408;
+  color: #cbd5e1;
+}
+
+.aegis-btn--secondary:hover:not(:disabled) {
+  border-color: rgba(8, 145, 178, 0.55);
+  background: rgba(8, 145, 178, 0.12);
+  color: #cffafe;
+}
+
+.aegis-btn--danger {
+  border: 1px solid rgba(136, 19, 55, 0.55);
+  background: rgba(76, 5, 25, 0.16);
+  color: #fb7185;
+}
+
+.aegis-btn--danger:hover:not(:disabled) {
+  border-color: rgba(225, 29, 72, 0.55);
+  background: rgba(136, 19, 55, 0.28);
+  color: #fda4af;
+  box-shadow: 0 0 10px rgba(244, 63, 94, 0.16);
+}
+
+.aegis-btn--ghost {
+  border: 1px solid transparent;
+  background: transparent;
+  color: #94a3b8;
+}
+
+.aegis-btn--ghost:hover:not(:disabled) {
+  border-color: #1e293b;
+  background: rgba(15, 23, 42, 0.72);
+  color: #e2e8f0;
+}
+
+.aegis-btn--icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.aegis-btn--secondary.aegis-btn--selected,
+.aegis-btn--ghost.aegis-btn--selected {
+  border-color: rgba(8, 145, 178, 0.62);
+  background: rgba(8, 145, 178, 0.16);
+  color: #67e8f9;
+}
+
+.aegis-btn--selected::after,
+.aegis-btn--busy::after {
+  position: absolute;
+  inset: -2px;
+  border-radius: inherit;
+  box-shadow: 0 0 15px rgba(34, 211, 238, 0.34);
+  content: '';
+  pointer-events: none;
+  animation: aegis-button-breathe 2.4s ease-in-out infinite;
+  will-change: opacity, transform;
+}
+
+.aegis-btn--danger.aegis-btn--selected::after,
+.aegis-btn--danger.aegis-btn--busy::after {
+  box-shadow: 0 0 13px rgba(244, 63, 94, 0.3);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .aegis-btn {
+    transition-duration: 0.01ms;
+  }
+
+  .aegis-btn--selected::after,
+  .aegis-btn--busy::after,
+  .aegis-btn--busy * {
+    animation: none;
+  }
+
+  .aegis-btn--selected::after,
+  .aegis-btn--busy::after {
+    opacity: 0.55;
+    transform: none;
+  }
+}
+
 /* Custom gorgeous cyber high density details */
 .cyber-panel {
   background: #05080F;

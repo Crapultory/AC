@@ -127,6 +127,8 @@ class SystemRestartResponse(BaseModel):
 
 AgentStatus = Literal["active", "idle", "offline"]
 GlobalRoutingStatus = Literal["active", "inactive"]
+AgentPolicyStatus = Literal["allow", "deny"]
+DelegateAuditStatus = Literal["succ", "fail", "auth_denied"]
 _HTTP_URL_ADAPTER = TypeAdapter(AnyHttpUrl)
 _URL_SCHEME_RE = re.compile(r"^[a-zA-Z][a-zA-Z0-9+.-]*://")
 
@@ -224,3 +226,51 @@ class GlobalRoutingRuleListResponse(BaseModel):
 class GlobalRoutingRuleDeleteResponse(BaseModel):
     deleted: bool
     id: str
+
+
+class AgentPolicyUpsertRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    rank_id: int = Field(gt=0)
+    platform: str = Field(default="*", max_length=128)
+    user_id: str = Field(default="*", max_length=256)
+    agent_name: str = Field(default="*", max_length=256)
+    status: AgentPolicyStatus
+
+
+class AgentPolicyResponse(BaseModel):
+    rank_id: int = Field(gt=0)
+    platform: str
+    user_id: str
+    agent_name: str
+    status: AgentPolicyStatus
+
+
+class AgentPolicyListResponse(BaseModel):
+    policies: list[AgentPolicyResponse]
+
+
+class AgentPolicyDeleteResponse(BaseModel):
+    deleted: bool
+    rank_id: int
+
+
+class DelegateAuditResponse(BaseModel):
+    id: str
+    timestamp: str
+    platform: str
+    user_id: str
+    user_name: str
+    agent_name: str
+    goal: str
+    session_id: str
+    is_loop: bool
+    is_delegate_output: bool
+    status: DelegateAuditStatus
+
+
+class DelegateAuditListResponse(BaseModel):
+    logs: list[DelegateAuditResponse]
+    total: int = Field(ge=0)
+    page: int = Field(ge=1)
+    page_size: int = Field(ge=1, le=100)

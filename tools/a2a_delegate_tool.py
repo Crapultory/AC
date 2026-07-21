@@ -18,6 +18,7 @@ import httpx
 
 from hermes_cli.profiles import get_active_profile_name
 from hermes_constants import get_hermes_home
+from tools import a2a_delegate_aegis
 from tools.registry import registry, tool_error
 
 logger = logging.getLogger(__name__)
@@ -1330,13 +1331,28 @@ def a2a_delegate(
     if not goal_text:
         return tool_error("a2a_delegate requires a non-empty goal")
 
+    delegate_output = bool(is_delegate_output)
+    loop_mode = bool(is_loop)
+    security_enabled = a2a_delegate_aegis.is_aegis_delegate_security_enabled()
+    if security_enabled:
+        aegis_check = a2a_delegate_aegis.run_aegis_checked_delegate(
+            parent_agent=parent_agent,
+            goal=goal_text,
+            agent_name=agent_name,
+            session_id=session_id,
+            is_loop=loop_mode,
+            is_delegate_output=delegate_output,
+        )
+        if not aegis_check.allowed:
+            return _json_result(**(aegis_check.failure_payload or {}))
+
     payload = _run_remote_delegate(
         goal=goal_text,
         context=context,
         agent_name=agent_name,
         session_id=session_id,
-        is_delegate_output=bool(is_delegate_output),
-        is_loop=bool(is_loop),
+        is_delegate_output=delegate_output,
+        is_loop=loop_mode,
         input=input,
         output=output,
         parent_agent=parent_agent,

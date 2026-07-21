@@ -421,6 +421,25 @@ describe('Aegis App integration', () => {
     expect(screen.queryByRole('button', { name: /agent orchestration/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /routing policy/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /user management/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /audit logs/i })).not.toBeInTheDocument();
+  });
+
+  it('lets administrators open the Audit Logs route', async () => {
+    seedStoredAuth(adminUser);
+    global.fetch = vi.fn(async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/auth/session') return jsonResponse({ authenticated: true, user: adminUser, expires_in: 28800 });
+      if (url === '/api/overview/agents' || url === '/api/agents') return jsonResponse({ agents: [] });
+      if (url === '/api/routing/global') return jsonResponse({ rules: [] });
+      if (url === '/api/users') return jsonResponse({ users: [adminUser] });
+      if (url.startsWith('/api/audit/a2a-delegates?')) return jsonResponse({ logs: [], total: 0, page: 1, page_size: 50 });
+      throw new Error(`Unhandled request: GET ${url}`);
+    }) as typeof global.fetch;
+
+    render(<App />);
+    fireEvent.click(await screen.findByRole('button', { name: /audit logs/i }));
+    expect(window.location.pathname).toBe('/audit');
+    expect(await screen.findByRole('heading', { name: /audit logs/i })).toBeInTheDocument();
   });
 
   it('lets administrators navigate to System Settings from the sidebar and header control', async () => {
