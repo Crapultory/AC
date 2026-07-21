@@ -41,6 +41,12 @@ Allowed calls run through the existing delegate implementation and write
 best-effort: failures are logged but never replace the delegation outcome.
 Each structurally valid invocation produces at most one final audit row.
 
+The Aegis integration is deliberately non-executing. The tool calls
+`run_aegis_checked_delegate(...)` to obtain an authorization flag, status, and
+opaque audit context, then invokes the existing remote delegate itself only
+when allowed. It reports that result through a separate Aegis audit helper.
+Neither Aegis helper accepts a callback or otherwise owns remote execution.
+
 ## API and user interface
 
 The administrator-only routing API gains Agent Policy CRUD at
