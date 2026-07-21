@@ -41,6 +41,57 @@ const NODE_COLORS: Record<WorkflowGraphNode['kind'], { fill: string; stroke: str
   end: { fill: '#42c79a', stroke: '#a6f3d8', glow: 'rgba(66,199,154,0.3)' },
 };
 
+const FAILED_COLORS = { fill: '#e45168', stroke: '#ffabb9', glow: 'rgba(228,81,104,0.35)' };
+
+/** P0-3 径向渐变用的中心亮色（每种 kind 一档提亮） */
+const NODE_GRADIENT_CENTER: Record<WorkflowGraphNode['kind'], string> = {
+  root: '#ffe9a8',
+  input: '#ffd08a',
+  delegate: '#f06a8f',
+  tool: '#7cc8ef',
+  'tool-group': '#5f9ede',
+  end: '#6fe0b8',
+};
+
+const NODE_GRADIENT_IDS: Record<WorkflowGraphNode['kind'], string> = {
+  root: 'workflow-grad-root',
+  input: 'workflow-grad-input',
+  delegate: 'workflow-grad-delegate',
+  tool: 'workflow-grad-tool',
+  'tool-group': 'workflow-grad-tool-group',
+  end: 'workflow-grad-end',
+};
+
+const DETAIL_ACCENT: Record<WorkflowGraphNode['kind'], string> = {
+  root: '#f8d36a',
+  input: '#f2b557',
+  delegate: '#d73b68',
+  tool: '#4aa8df',
+  'tool-group': '#3979c6',
+  end: '#42c79a',
+};
+
+/** P2-2 相对时间格式化 */
+function formatRelativeTime(timestamp?: number): string {
+  if (!timestamp) {
+    return '';
+  }
+  const deltaSeconds = Math.max(0, Date.now() / 1000 - timestamp);
+  if (deltaSeconds < 5) {
+    return 'just now';
+  }
+  if (deltaSeconds < 60) {
+    return `${Math.floor(deltaSeconds)}s ago`;
+  }
+  if (deltaSeconds < 3600) {
+    return `${Math.floor(deltaSeconds / 60)}m ago`;
+  }
+  if (deltaSeconds < 86400) {
+    return `${Math.floor(deltaSeconds / 3600)}h ago`;
+  }
+  return `${Math.floor(deltaSeconds / 86400)}d ago`;
+}
+
 function clampScale(scale: number): number {
   return Math.min(MAX_SCALE, Math.max(MIN_SCALE, scale));
 }
@@ -105,6 +156,19 @@ export default function SessionWorkflow({
   const [transform, setTransform] = useState<ViewportTransform>({ x: 36, y: 36, scale: 1 });
   const [userMovedViewport, setUserMovedViewport] = useState(false);
   const [revealedByRun, setRevealedByRun] = useState<WorkflowToolRunExpansion>({});
+  const [hoveredNodeId, setHoveredNodeId] = useState<string>();
+  /* P0-2 动画状态：出生的节点/边、完成回弹、失败抖动 */
+  const [bornNodeIds, setBornNodeIds] = useState<ReadonlySet<string>>(new Set());
+  const [bornEdgeIds, setBornEdgeIds] = useState<ReadonlySet<string>>(new Set());
+  const [settledNodeIds, setSettledNodeIds] = useState<ReadonlySet<string>>(new Set());
+  const [shookNodeIds, setShookNodeIds] = useState<ReadonlySet<string>>(new Set());
+  /* P2-3 完成收束仪式 */
+  const [completePingActive, setCompletePingActive] = useState(false);
+  const prevGraphRef = useRef<{ nodeStatuses: Map<string, string>; edgeIds: Set<string>; conversationId?: string; status?: string }>({
+    nodeStatuses: new Map(),
+    edgeIds: new Set(),
+  });
+  const animTimersRef = useRef<number[]>([]);
   const legacyTraceAvailable = Boolean(
     conversation?.messages.some(
       (message) =>
@@ -144,6 +208,144 @@ export default function SessionWorkflow({
     }
     return ids;
   }, [nodeById, selectedNode]);
+
+  /* P0-4 最新活动 running 节点（雷达 ping 定位） */
+  const livestNode = useMemo(() => {
+    let latest: WorkflowGraphNode | undefined;
+    graph.nodes.forEach((node) => {
+      if (node.status !== 'running' || !node.timestamp) {
+        return;
+      }
+      if (!latest || (node.timestamp || 0) > (latest.timestamp || 0)) {
+        latest = node;
+      }
+    });
+    return latest;
+  }, [graph.nodes]);
+
+  /* P1-1 delegate 泳道领地：每个 delegate 子树的包围盒 */
+  const delegateTerritories = useMemo(() => {
+    const childrenById = new Map<string, WorkflowGraphNode[]>();
+    graph.nodes.forEach((node) => {
+      if (!node.parentId) {
+        return;
+      }
+      const siblings = childrenById.get(node.parentId) || [];
+      siblings.push(node);
+      childrenById.set(node.parentId, siblings);
+    });
+    const territories: Array<{ id: string; agent: string; x: number; y: number; width: number; height: number }> = [];
+    graph.nodes
+      .filter((node) => node.kind === 'delegate')
+      .forEach((delegateNode) => {
+        const subtree: WorkflowGraphNode[] = [delegateNode];
+        const queue = [delegateNode];
+        while (queue.length) {
+          const current = queue.pop() as WorkflowGraphNode;
+          (childrenById.get(current.id) || []).forEach((child) => {
+            subtree.push(child);
+            queue.push(child);
+          });
+        }
+        const padding = 42;
+        const minX = Math.min(...subtree.map((node) => node.x)) - padding;
+        const maxX = Math.max(...subtree.map((node) => node.x)) + padding + 96;
+        const minY = Math.min(...subtree.map((node) => node.y)) - padding;
+        const maxY = Math.max(...subtree.map((node) => node.y)) + padding;
+        territories.push({
+          id: delegateNode.id,
+          agent: delegateNode.agent || delegateNode.label,
+          x: minX,
+          y: minY,
+          width: maxX - minX,
+          height: maxY - minY,
+        });
+      });
+    return territories;
+  }, [graph.nodes]);
+
+  /* P0-2 / P2-3 图变化 diff：新节点出生、新边画出、状态转变回弹/抖动、完成收束 */
+  useEffect(() => {
+    const prev = prevGraphRef.current;
+    const conversationChanged = prev.conversationId !== conversation?.id;
+    const nextStatuses = new Map(graph.nodes.map((node) => [node.id, node.status]));
+    const nextEdgeIds = new Set(graph.edges.map((edge) => edge.id));
+
+    if (conversationChanged) {
+      prevGraphRef.current = {
+        nodeStatuses: nextStatuses,
+        edgeIds: nextEdgeIds,
+        conversationId: conversation?.id,
+        status: logicalGraph.status,
+      };
+      setBornNodeIds(new Set());
+      setBornEdgeIds(new Set());
+      setSettledNodeIds(new Set());
+      setShookNodeIds(new Set());
+      setCompletePingActive(false);
+      return;
+    }
+
+    const isFirstLayout = prev.nodeStatuses.size === 0;
+    const born = new Set<string>();
+    const settled = new Set<string>();
+    const shook = new Set<string>();
+    graph.nodes.forEach((node) => {
+      const prevStatus = prev.nodeStatuses.get(node.id);
+      if (!isFirstLayout && prevStatus === undefined) {
+        born.add(node.id);
+      } else if (prevStatus === 'running' && node.status === 'completed') {
+        settled.add(node.id);
+      } else if (prevStatus === 'running' && node.status !== 'running' && node.status !== 'completed') {
+        shook.add(node.id);
+      }
+    });
+    const bornEdges = new Set<string>();
+    if (!isFirstLayout) {
+      graph.edges.forEach((edge) => {
+        if (!prev.edgeIds.has(edge.id)) {
+          bornEdges.add(edge.id);
+        }
+      });
+    }
+
+    const becameComplete = prev.status === 'live' && logicalGraph.status === 'complete';
+    if (born.size || settled.size || shook.size || bornEdges.size || becameComplete) {
+      setBornNodeIds(born);
+      setBornEdgeIds(bornEdges);
+      setSettledNodeIds(settled);
+      setShookNodeIds(shook);
+      if (becameComplete) {
+        setCompletePingActive(true);
+      }
+      animTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+      animTimersRef.current = [
+        window.setTimeout(() => {
+          setBornNodeIds(new Set());
+          setBornEdgeIds(new Set());
+        }, 700),
+        window.setTimeout(() => {
+          setSettledNodeIds(new Set());
+          setShookNodeIds(new Set());
+        }, 500),
+        window.setTimeout(() => setCompletePingActive(false), 1500),
+      ];
+    }
+
+    prevGraphRef.current = {
+      nodeStatuses: nextStatuses,
+      edgeIds: nextEdgeIds,
+      conversationId: conversation?.id,
+      status: logicalGraph.status,
+    };
+  }, [graph, conversation?.id, logicalGraph.status]);
+
+  useEffect(
+    () => () => {
+      animTimersRef.current.forEach((timer) => window.clearTimeout(timer));
+    },
+    [],
+  );
 
   const fitGraph = useCallback(() => {
     const bounds = canvasRef.current?.getBoundingClientRect();
@@ -275,6 +477,27 @@ export default function SessionWorkflow({
   }, []);
 
   const actionCount = Math.max(0, logicalGraph.nodes.length - 1);
+  const isLive = logicalGraph.status === 'live';
+  const showMinimap = graph.nodes.length > 30;
+
+  /* P1-2 minimap 视口联动 */
+  function handleMinimapNavigate(event: React.PointerEvent<SVGSVGElement>) {
+    const bounds = event.currentTarget.getBoundingClientRect();
+    if (!bounds.width || !bounds.height || !graph.width || !graph.height) {
+      return;
+    }
+    const ratioX = (event.clientX - bounds.left) / bounds.width;
+    const ratioY = (event.clientY - bounds.top) / bounds.height;
+    const canvasBounds = canvasRef.current?.getBoundingClientRect();
+    const viewportWidth = canvasBounds?.width || 900;
+    const viewportHeight = canvasBounds?.height || 560;
+    setUserMovedViewport(true);
+    setTransform((current) => ({
+      ...current,
+      x: viewportWidth / 2 - graph.width * ratioX * current.scale,
+      y: viewportHeight / 2 - graph.height * ratioY * current.scale,
+    }));
+  }
 
   return (
     <aside
@@ -317,7 +540,7 @@ export default function SessionWorkflow({
 
       <div
         ref={canvasRef}
-        className="relative flex-1 min-h-0 overflow-hidden select-none touch-none cursor-grab active:cursor-grabbing bg-[#03131e]"
+        className={`relative flex-1 min-h-0 overflow-hidden select-none touch-none cursor-grab active:cursor-grabbing bg-[#03131e] ${isLive ? 'workflow-canvas--live' : ''}`}
         onWheel={handleWheel}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -334,7 +557,10 @@ export default function SessionWorkflow({
         data-offset-y={transform.y.toFixed(2)}
       >
         <div className="absolute inset-0 pointer-events-none opacity-80 bg-[radial-gradient(circle_at_16%_18%,rgba(14,116,144,0.16),transparent_34%),radial-gradient(circle_at_88%_78%,rgba(190,24,93,0.08),transparent_30%)]" />
-        <div className="absolute inset-0 pointer-events-none opacity-25 bg-[radial-gradient(rgba(125,211,252,0.35)_0.75px,transparent_0.75px)] [background-size:19px_19px]" />
+        <div
+          className="absolute inset-0 pointer-events-none opacity-25 bg-[radial-gradient(rgba(125,211,252,0.35)_0.75px,transparent_0.75px)] [background-size:19px_19px]"
+          style={{ maskImage: 'radial-gradient(ellipse at 42% 46%, black 30%, transparent 78%)', WebkitMaskImage: 'radial-gradient(ellipse at 42% 46%, black 30%, transparent 78%)' }}
+        />
 
         <div data-workflow-overlay className="absolute left-3 top-3 z-20 flex items-center gap-1 rounded border border-slate-800/90 bg-[#03080f]/90 p-1 shadow-xl backdrop-blur">
           <button type="button" aria-label="Zoom in workflow" onClick={() => zoomBy(1.15)} className="h-7 w-7 text-slate-400 hover:text-cyan-200 flex items-center justify-center">
@@ -371,7 +597,76 @@ export default function SessionWorkflow({
             }
           }}
         >
+          <defs>
+            {(Object.keys(NODE_GRADIENT_IDS) as Array<WorkflowGraphNode['kind']>).map((kind) => (
+              <radialGradient key={kind} id={NODE_GRADIENT_IDS[kind]} cx="38%" cy="34%" r="72%">
+                <stop offset="0%" stopColor={NODE_GRADIENT_CENTER[kind]} />
+                <stop offset="100%" stopColor={NODE_COLORS[kind].fill} />
+              </radialGradient>
+            ))}
+            <radialGradient id="workflow-grad-failed" cx="38%" cy="34%" r="72%">
+              <stop offset="0%" stopColor="#ff8296" />
+              <stop offset="100%" stopColor={FAILED_COLORS.fill} />
+            </radialGradient>
+          </defs>
           <g transform={`translate(${transform.x} ${transform.y}) scale(${transform.scale})`}>
+            {/* P2-1 主泳道跑道分隔线 */}
+            {graph.nodes
+              .filter((node) => node.kind === 'input' && node.source === 'main')
+              .map((lane) => (
+                <line
+                  key={`lane-${lane.id}`}
+                  x1="36"
+                  x2={graph.width - 40}
+                  y1={lane.y}
+                  y2={lane.y}
+                  stroke="rgba(125,211,252,0.06)"
+                  strokeWidth="1"
+                  strokeDasharray="2 10"
+                  className="pointer-events-none"
+                />
+              ))}
+
+            {/* P1-1 delegate 泳道领地 */}
+            {delegateTerritories.map((territory) => (
+              <g key={`territory-${territory.id}`} className="pointer-events-none">
+                <rect
+                  x={territory.x}
+                  y={territory.y}
+                  width={territory.width}
+                  height={territory.height}
+                  rx="16"
+                  fill="rgba(215,59,104,0.05)"
+                  stroke="rgba(215,59,104,0.2)"
+                  strokeWidth="1"
+                />
+                <text
+                  x={territory.x + 14}
+                  y={territory.y + 16}
+                  fill="#ff8eaa"
+                  fontSize="9"
+                  fontFamily="JetBrains Mono, monospace"
+                  letterSpacing="0.12em"
+                  opacity="0.85"
+                >
+                  {territory.agent.toUpperCase()}
+                </text>
+              </g>
+            ))}
+
+            {/* P2-3 完成收束：root 扩散光环 */}
+            {completePingActive && nodeById.get(graph.rootId) ? (
+              <circle
+                cx={nodeById.get(graph.rootId)?.x}
+                cy={nodeById.get(graph.rootId)?.y}
+                r="30"
+                fill="none"
+                stroke="#a6f3d8"
+                strokeWidth="2.5"
+                className="workflow-complete-ping pointer-events-none"
+              />
+            ) : null}
+
             {graph.edges.map((edge, edgeIndex) => {
               const from = nodeById.get(edge.from);
               const to = nodeById.get(edge.to);
@@ -379,7 +674,21 @@ export default function SessionWorkflow({
                 return null;
               }
               const highlighted = !selectedNode || (highlightedNodeIds.has(edge.from) && highlightedNodeIds.has(edge.to));
+              const surging = Boolean(selectedNode) && highlightedNodeIds.has(edge.from) && highlightedNodeIds.has(edge.to);
               const delegate = edge.source === 'delegate';
+              /* P0-1 边分级：running 流动 / failed 红 / completed 沉淀 */
+              const targetFailed = to.kind === 'end' && to.status !== 'completed';
+              const targetRunning = to.status === 'running' || to.status === 'active';
+              const flowClass = targetFailed
+                ? 'workflow-edge-flow--failed'
+                : surging
+                  ? 'workflow-edge-flow--surge'
+                  : targetRunning
+                    ? 'workflow-edge-flow--live'
+                    : 'workflow-edge-flow--done';
+              const baseStroke = targetFailed ? '#e45168' : delegate ? '#d94673' : '#55b8d7';
+              const flowStroke = targetFailed ? '#ff8296' : delegate ? '#ff6e9a' : '#a7edff';
+              const draw = bornEdgeIds.has(edge.id);
               return (
                 <g key={edge.id} opacity={highlighted ? 1 : 0.22} className="transition-opacity duration-200">
                   <path
@@ -387,23 +696,24 @@ export default function SessionWorkflow({
                     data-edge-layer="base"
                     d={edgePath(from, to)}
                     fill="none"
-                    stroke={delegate ? '#d94673' : '#55b8d7'}
+                    stroke={baseStroke}
                     strokeWidth={highlighted ? 2 : 1.25}
                     strokeDasharray={delegate ? '7 6' : undefined}
                     vectorEffect="non-scaling-stroke"
+                    className={targetRunning || targetFailed ? '' : 'workflow-edge-base--done'}
                   />
                   <path
                     data-testid={`workflow-edge-flow-${edge.id}`}
                     data-edge-layer="flow"
                     d={edgePath(from, to)}
                     fill="none"
-                    stroke={delegate ? '#ff6e9a' : '#a7edff'}
+                    stroke={flowStroke}
                     strokeWidth={highlighted ? 2.25 : 1.5}
                     strokeDasharray="3 18"
                     vectorEffect="non-scaling-stroke"
                     pathLength="100"
-                    className="workflow-edge-flow pointer-events-none"
-                    style={{ animationDelay: `${-(edgeIndex % 9) * 0.12}s` }}
+                    className={`workflow-edge-flow pointer-events-none ${flowClass} ${draw ? 'workflow-edge--draw' : ''}`}
+                    style={{ animationDelay: draw ? undefined : `${-(edgeIndex % 9) * 0.12}s` }}
                   />
                   {edge.label ? (
                     <text
@@ -429,9 +739,16 @@ export default function SessionWorkflow({
               const highlighted = !selectedNode || highlightedNodeIds.has(node.id);
               const failed = node.kind === 'end' && node.status !== 'completed';
               const toolGroup = node.kind === 'tool-group';
-              const colors = failed
-                ? { fill: '#e45168', stroke: '#ffabb9', glow: 'rgba(228,81,104,0.35)' }
-                : NODE_COLORS[node.kind];
+              const colors = failed ? FAILED_COLORS : NODE_COLORS[node.kind];
+              const gradientId = failed ? 'workflow-grad-failed' : NODE_GRADIENT_IDS[node.kind];
+              const isLivest = livestNode?.id === node.id;
+              const nodeAnimClass = bornNodeIds.has(node.id)
+                ? 'workflow-node--born'
+                : settledNodeIds.has(node.id)
+                  ? 'workflow-node--settled'
+                  : shookNodeIds.has(node.id)
+                    ? 'workflow-node--shook'
+                    : '';
               return (
                 <g
                   key={node.id}
@@ -448,7 +765,9 @@ export default function SessionWorkflow({
                   data-highlighted={highlighted ? 'true' : 'false'}
                   transform={`translate(${node.x} ${node.y})`}
                   opacity={highlighted ? 1 : 0.24}
-                  className="workflow-node cursor-pointer outline-none transition-opacity duration-200 motion-safe:animate-[pulse_420ms_ease-out_1]"
+                  className={`workflow-node cursor-pointer outline-none transition-opacity duration-200 ${nodeAnimClass}`}
+                  onMouseEnter={() => setHoveredNodeId(node.id)}
+                  onMouseLeave={() => setHoveredNodeId((current) => (current === node.id ? undefined : current))}
                   onClick={(event) => {
                     event.stopPropagation();
                     if (toolGroup) {
@@ -468,6 +787,23 @@ export default function SessionWorkflow({
                     }
                   }}
                 >
+                  {/* P0-4 最新活动节点雷达 ping */}
+                  {isLivest ? (
+                    <circle
+                      r={haloRadius + 6}
+                      fill="none"
+                      stroke={colors.stroke}
+                      strokeWidth="1.5"
+                      className="workflow-radar-ping pointer-events-none"
+                    />
+                  ) : null}
+                  {/* P0-3 外层大气辉光（running 呼吸） */}
+                  <circle
+                    r={haloRadius + 9}
+                    fill={colors.glow}
+                    opacity="0.3"
+                    className={`workflow-node-halo-outer pointer-events-none ${node.status === 'running' ? 'workflow-node-halo-outer--running' : ''}`}
+                  />
                   <circle
                     data-testid={`workflow-node-halo-${node.kind}`}
                     r={haloRadius}
@@ -484,9 +820,21 @@ export default function SessionWorkflow({
                     strokeDasharray="3 3"
                     className="workflow-node-focus-ring pointer-events-none"
                   />
-                  {node.kind === 'root' || node.kind === 'delegate' || toolGroup ? (
+                  {/* P0-3 root 旋转虚线环 */}
+                  {node.kind === 'root' ? (
                     <circle
-                      r={radius + (node.kind === 'root' ? 8 : 5)}
+                      r={radius + 12}
+                      fill="none"
+                      stroke={colors.stroke}
+                      strokeWidth="1"
+                      strokeDasharray="4 9"
+                      opacity="0.7"
+                      className="workflow-root-ring pointer-events-none"
+                    />
+                  ) : null}
+                  {node.kind === 'delegate' || toolGroup ? (
+                    <circle
+                      r={radius + 5}
                       fill="none"
                       stroke={colors.stroke}
                       strokeWidth="0.8"
@@ -504,29 +852,35 @@ export default function SessionWorkflow({
                       className="motion-safe:animate-pulse"
                     />
                   ) : null}
+                  {/* P0-3 渐变能量体 + 上半弧高光 */}
                   <circle
                     r={radius}
-                    fill={colors.fill}
+                    fill={`url(#${gradientId})`}
                     stroke={selected ? '#ffffff' : colors.stroke}
                     strokeWidth={selected ? 2.5 : 1.25}
                     style={{ filter: selected ? `drop-shadow(0 0 10px ${colors.stroke})` : undefined }}
                   />
+                  <path
+                    d={`M ${-radius * 0.62} ${-radius * 0.42} A ${radius * 0.78} ${radius * 0.78} 0 0 1 ${radius * 0.62} ${-radius * 0.42}`}
+                    fill="none"
+                    stroke="rgba(255,255,255,0.4)"
+                    strokeWidth="1"
+                    strokeLinecap="round"
+                    className="pointer-events-none"
+                  />
+                  {/* P0-3 delegate 瞳孔 */}
                   {node.kind === 'delegate' ? (
-                    <circle r={radius * 0.28} fill="#06121b" opacity="0.82" />
+                    <>
+                      <circle r={radius * 0.34} fill="#06121b" opacity="0.9" />
+                      <circle r={radius * 0.34} fill="none" stroke={colors.stroke} strokeWidth="0.9" opacity="0.75" />
+                    </>
                   ) : null}
+                  {/* P0-3 tool-group 层叠图标 */}
                   {toolGroup ? (
-                    <text
-                      x="0"
-                      y="3"
-                      fill="#e6f7ff"
-                      fontSize="9"
-                      fontWeight="700"
-                      fontFamily="JetBrains Mono, monospace"
-                      textAnchor="middle"
-                      pointerEvents="none"
-                    >
-                      …
-                    </text>
+                    <g pointerEvents="none">
+                      <rect x="-5.5" y="-4.5" width="10" height="8" rx="1.5" fill="none" stroke="#e6f7ff" strokeWidth="1.1" opacity="0.55" />
+                      <rect x="-3.5" y="-2.5" width="10" height="8" rx="1.5" fill="#1c497f" stroke="#e6f7ff" strokeWidth="1.1" />
+                    </g>
                   ) : null}
                   <text
                     x={radius + 9}
@@ -542,6 +896,24 @@ export default function SessionWorkflow({
                   >
                     {node.label}
                   </text>
+                  {/* P2-2 hover 相对时间戳 */}
+                  {node.timestamp ? (
+                    <text
+                      x={radius + 9}
+                      y="15"
+                      fill="#7dd3e7"
+                      fontSize="8"
+                      fontFamily="JetBrains Mono, monospace"
+                      paintOrder="stroke"
+                      stroke="#03131e"
+                      strokeWidth="3"
+                      strokeLinejoin="round"
+                      className="workflow-node-time"
+                      data-visible={hoveredNodeId === node.id ? 'true' : 'false'}
+                    >
+                      {formatRelativeTime(node.timestamp)}
+                    </text>
+                  ) : null}
                 </g>
               );
             })}
@@ -557,11 +929,68 @@ export default function SessionWorkflow({
           </div>
         ) : null}
 
+        {/* P1-2 minimap 全局导航 */}
+        {showMinimap ? (
+          <div
+            data-workflow-overlay
+            className={`absolute bottom-4 z-20 rounded border border-slate-800/90 bg-[#03080f]/85 p-1 shadow-xl backdrop-blur ${selectedNode ? 'left-4' : 'right-4'}`}
+            data-testid="workflow-minimap"
+          >
+            <svg
+              width="160"
+              height={Math.max(48, Math.min(120, (160 * graph.height) / Math.max(1, graph.width)))}
+              viewBox={`0 0 ${graph.width} ${graph.height}`}
+              className="cursor-crosshair"
+              onPointerDown={(event) => {
+                event.stopPropagation();
+                handleMinimapNavigate(event);
+              }}
+              onWheel={(event) => event.stopPropagation()}
+            >
+              {graph.nodes.map((node) => (
+                <circle
+                  key={`mini-${node.id}`}
+                  cx={node.x}
+                  cy={node.y}
+                  r={node.kind === 'root' ? 26 : 16}
+                  fill={NODE_COLORS[node.kind].fill}
+                  opacity={node.id === selectedNodeId ? 1 : 0.7}
+                />
+              ))}
+              {(() => {
+                const canvasBounds = canvasRef.current?.getBoundingClientRect();
+                const vw = canvasBounds?.width || 900;
+                const vh = canvasBounds?.height || 560;
+                return (
+                  <rect
+                    x={-transform.x / transform.scale}
+                    y={-transform.y / transform.scale}
+                    width={vw / transform.scale}
+                    height={vh / transform.scale}
+                    fill="rgba(125,211,252,0.06)"
+                    stroke="#7dd3fc"
+                    strokeWidth={14}
+                    className="pointer-events-none"
+                  />
+                );
+              })()}
+            </svg>
+          </div>
+        ) : null}
+
         {selectedNode ? (
           <section
             data-workflow-overlay
-            className="absolute bottom-4 right-4 z-30 w-[min(22rem,calc(100%-2rem))] overflow-hidden rounded-lg border border-slate-700/80 bg-[#040b12]/95 shadow-[0_18px_70px_rgba(0,0,0,0.65)] backdrop-blur-md select-text touch-pan-y"
+            className="workflow-details-panel absolute bottom-4 right-4 z-30 w-[min(22rem,calc(100%-2rem))] overflow-hidden rounded-lg border border-slate-700/80 bg-[#040b12]/95 shadow-[0_18px_70px_rgba(0,0,0,0.65)] backdrop-blur-md select-text touch-pan-y"
           >
+            {/* P1-4 顶部渐变发光线，随节点 kind 变色 */}
+            <div
+              className="h-0.5 w-full"
+              style={{
+                background: `linear-gradient(90deg, transparent 0%, ${DETAIL_ACCENT[selectedNode.kind]} 38%, ${DETAIL_ACCENT[selectedNode.kind]} 62%, transparent 100%)`,
+                boxShadow: `0 0 12px ${DETAIL_ACCENT[selectedNode.kind]}`,
+              }}
+            />
             <div className="flex items-center justify-between border-b border-slate-800 px-3 py-2">
               <span className="text-[9px] font-mono font-bold tracking-[0.18em] text-cyan-300">NODE DETAILS</span>
               <button type="button" aria-label="Close node details" onClick={() => setSelectedNodeId(undefined)} className="text-slate-500 hover:text-white">
@@ -585,12 +1014,12 @@ export default function SessionWorkflow({
               {selectedNode.turnId ? <div className="break-all font-mono text-slate-500">TURN · {selectedNode.turnId}</div> : null}
               {selectedNode.agent ? <div className="font-mono text-rose-300">AGENT · {selectedNode.agent}</div> : null}
               {selectedNode.detail ? <div className="whitespace-pre-wrap break-words rounded border border-slate-800 bg-[#02070c] p-2.5 leading-relaxed text-slate-200">{selectedNode.detail}</div> : null}
-              {selectedNode.argsPreview ? <div><div className="mb-1 font-mono text-slate-600">ARGUMENTS</div><pre className="whitespace-pre-wrap break-words rounded bg-[#02070c] p-2 text-cyan-100/80">{selectedNode.argsPreview}</pre></div> : null}
-              {selectedNode.resultPreview ? <div><div className="mb-1 font-mono text-slate-600">RESULT</div><pre className="whitespace-pre-wrap break-words rounded bg-[#02070c] p-2 text-emerald-100/80">{selectedNode.resultPreview}</pre></div> : null}
+              {selectedNode.argsPreview ? <div><div className="mb-1 font-mono text-slate-600">ARGUMENTS</div><pre className="whitespace-pre-wrap break-words rounded-r border-l-2 border-cyan-500/70 bg-[#02070c] p-2 text-cyan-100/80">{selectedNode.argsPreview}</pre></div> : null}
+              {selectedNode.resultPreview ? <div><div className="mb-1 font-mono text-slate-600">RESULT</div><pre className="whitespace-pre-wrap break-words rounded-r border-l-2 border-emerald-500/70 bg-[#02070c] p-2 text-emerald-100/80">{selectedNode.resultPreview}</pre></div> : null}
               {selectedNode.finalMessage ? (
                 <div>
                   <div className="mb-1 font-mono font-semibold tracking-wider text-emerald-400/80">FINAL MESSAGE</div>
-                  <div className="whitespace-pre-wrap break-words rounded border border-emerald-900/40 bg-emerald-950/10 p-2.5 leading-relaxed text-emerald-50/90">
+                  <div className="whitespace-pre-wrap break-words rounded border border-emerald-900/40 bg-emerald-950/10 p-2.5 leading-relaxed text-emerald-50/90 shadow-[0_0_24px_rgba(16,185,129,0.08)]">
                     {selectedNode.finalMessage}
                   </div>
                 </div>
