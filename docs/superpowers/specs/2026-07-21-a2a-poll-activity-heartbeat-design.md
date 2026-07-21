@@ -2,8 +2,8 @@
 
 ## Scope
 
-Keep the parent Agent active while `a2a_delegate` successfully polls a
-non-final remote task. This change does not alter remote task deadlines,
+Keep the parent Agent active while `a2a_delegate` successfully polls a remote
+task. This change does not alter remote task deadlines,
 poll frequency, cancellation, or foreground-input behavior.
 
 ## Design

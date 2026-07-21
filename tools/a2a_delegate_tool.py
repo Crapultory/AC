@@ -656,6 +656,7 @@ class _A2ADelegateSession:
         base_url: str,
         *,
         output=None,
+        parent_agent=None,
         timeout: float = 60.0,
         poll_interval: float = 1.0,
         session_id: str | None = None,
@@ -663,6 +664,7 @@ class _A2ADelegateSession:
     ):
         self.base_url = base_url
         self.output = output
+        self.parent_agent = parent_agent
         self.timeout = timeout
         self.poll_interval = poll_interval
         self.context_id = session_id
@@ -891,6 +893,17 @@ class _A2ADelegateSession:
                 raise TimeoutError(f"Timed out waiting for task {getattr(current_task, 'id', None)!r}.")
             await asyncio.sleep(self.poll_interval)
             current_task = await self._client.get_task(GetTaskRequest(id=current_task.id))
+            self._touch_parent_activity_after_poll()
+
+    def _touch_parent_activity_after_poll(self) -> None:
+        """Record a successful remote task poll without affecting delegation."""
+        touch = getattr(self.parent_agent, "_touch_activity", None)
+        if not callable(touch):
+            return
+        try:
+            touch("a2a_delegate: received remote task update")
+        except Exception:
+            logger.debug("Failed to record A2A remote task polling activity", exc_info=True)
 
     def _emit_task_text_delta(self, task, *, session_id: str | None, is_final: bool) -> None:
         if not is_final:
@@ -1132,6 +1145,7 @@ def _run_remote_delegate(
     session = _A2ADelegateSession(
         _resolve_a2a_remote_url(entry),
         output=output,
+        parent_agent=parent_agent,
         session_id=remote_session_id,
         headers=entry.get("headers") or {},
     )

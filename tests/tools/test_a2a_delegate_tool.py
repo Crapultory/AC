@@ -89,6 +89,44 @@ def test_remote_delegate_session_default_poll_interval_is_one_second():
     assert session.poll_interval == 1.0
 
 
+def test_remote_task_poll_refreshes_parent_activity():
+    from tools.a2a_delegate_tool import _A2ADelegateSession, _run_coro_sync
+
+    parent = _make_parent()
+    parent._touch_activity = MagicMock()
+    completed_task = SimpleNamespace(
+        id="task-1",
+        context_id="ctx-1",
+        history=[],
+        status=SimpleNamespace(state="completed", message=None),
+    )
+
+    class FakeClient:
+        async def get_task(self, request):
+            assert request.id == "task-1"
+            return completed_task
+
+    session = _A2ADelegateSession(
+        "http://agent.local/a2a",
+        parent_agent=parent,
+        poll_interval=0,
+    )
+    session._client = FakeClient()
+    initial_task = SimpleNamespace(
+        id="task-1",
+        context_id="ctx-1",
+        history=[],
+        status=SimpleNamespace(state="working", message=None),
+    )
+
+    result = _run_coro_sync(session._wait_for_final(initial_task))
+
+    assert result is completed_task
+    parent._touch_activity.assert_called_once_with(
+        "a2a_delegate: received remote task update"
+    )
+
+
 def test_default_a2a_session_id_adds_two_digit_random_suffix(monkeypatch):
     import tools.a2a_delegate_tool as a2a_delegate_tool
 
