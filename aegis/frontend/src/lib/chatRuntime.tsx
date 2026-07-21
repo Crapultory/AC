@@ -8,9 +8,12 @@ import React, {
 } from 'react';
 import { ChainStep, Conversation, DelegateToolCall, Message } from '../types';
 import { getStoredToken } from './auth';
+import { applyWorkflowSocketEvent } from './sessionWorkflow';
 
 export type ChatSocketEvent = {
   type: string;
+  server_event_id?: string;
+  ts?: number;
   session_id?: string;
   title?: string;
   resumed?: boolean;
@@ -492,7 +495,7 @@ export function AegisChatProvider({
           return conversation;
         }
 
-        const nextConversation: Conversation = {
+        let nextConversation: Conversation = {
           ...conversation,
           lastUpdatedAt: new Date().toISOString(),
           timestamp: formatClock(),
@@ -505,6 +508,7 @@ export function AegisChatProvider({
                 isChatVisibleRef.current,
               )),
         };
+        nextConversation = applyWorkflowSocketEvent(nextConversation, payload);
 
         if (payload.type === 'session.bound') {
           nextConversation.sessionId = payload.session_id || nextConversation.sessionId;

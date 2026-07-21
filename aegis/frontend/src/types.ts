@@ -78,6 +78,76 @@ export interface DelegateToolCall {
   status: 'running' | 'completed';
 }
 
+export type WorkflowTraceEventType =
+  | 'message.accepted'
+  | 'message.completed'
+  | 'message.stream.completed'
+  | 'tool.started'
+  | 'tool.completed'
+  | 'run.state'
+  | 'delegate.entered'
+  | 'delegate.exited';
+
+export interface WorkflowTraceEvent {
+  id: string;
+  type: WorkflowTraceEventType;
+  timestamp: number;
+  turnId?: string;
+  parentTurnId?: string;
+  source: 'main' | 'delegate';
+  srcagent?: string;
+  clientMsgId?: string;
+  messageId?: string;
+  content?: string;
+  toolName?: string;
+  toolCallId?: string;
+  argsPreview?: string;
+  resultPreview?: string;
+  childSessionId?: string;
+  delegateId?: string;
+  state?: string;
+  reason?: string;
+}
+
+export type WorkflowGraphNodeKind = 'root' | 'input' | 'delegate' | 'tool' | 'end';
+export type WorkflowGraphStatus = 'empty' | 'partial' | 'live' | 'complete';
+
+export interface WorkflowGraphNode {
+  id: string;
+  kind: WorkflowGraphNodeKind;
+  label: string;
+  detail: string;
+  status: string;
+  source: 'main' | 'delegate';
+  turnId?: string;
+  parentId?: string;
+  agent?: string;
+  timestamp?: number;
+  argsPreview?: string;
+  resultPreview?: string;
+  finalMessage?: string;
+  x: number;
+  y: number;
+  depth: number;
+}
+
+export interface WorkflowGraphEdge {
+  id: string;
+  from: string;
+  to: string;
+  source: 'main' | 'delegate';
+  label?: string;
+}
+
+export interface WorkflowGraph {
+  rootId: string;
+  nodes: WorkflowGraphNode[];
+  edges: WorkflowGraphEdge[];
+  status: WorkflowGraphStatus;
+  width: number;
+  height: number;
+}
+
 export interface Message {
   id: string;
   sender: 'user' | 'aegis' | string;
@@ -91,6 +161,7 @@ export interface Message {
   turnId?: string;
   pending?: boolean;
   clientMsgId?: string;
+  workflowParentId?: string;
 }
 
 export interface Conversation {
@@ -119,4 +190,6 @@ export interface Conversation {
   } | null;
   hasUnread?: boolean;
   transportState?: 'idle' | 'connecting' | 'connected' | 'error' | 'closed';
+  workflowTraceVersion?: 1;
+  workflowTrace?: WorkflowTraceEvent[];
 }
