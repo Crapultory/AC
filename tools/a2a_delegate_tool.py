@@ -1410,18 +1410,8 @@ def a2a_delegate(
 
 A2A_LIST_SCHEMA = {
     "name": "a2a_list",
-    "description": "List active A2A agents and global routing rules. Use json for a compact summary or xml for Aegis context XML.",
-    "parameters": {
-        "type": "object",
-        "properties": {
-            "otype": {
-                "type": "string",
-                "enum": ["json", "xml"],
-                "default": "json",
-                "description": "Output format: json for a compact summary, xml for bare Aegis context XML.",
-            },
-        },
-    },
+    "description": "List active A2A agents and global routing rules.",
+    "parameters": {"type": "object", "properties": {}},
 }
 
 
@@ -1447,7 +1437,7 @@ registry.register(
     name="a2a_list",
     toolset="a2a",
     schema=A2A_LIST_SCHEMA,
-    handler=lambda args, **kw: a2a_list(otype=args.get("otype", "json")),
+    handler=lambda args, **kw: a2a_list(),
     emoji="A2A",
 )
 
