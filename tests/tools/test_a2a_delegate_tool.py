@@ -72,12 +72,7 @@ def test_a2a_schemas_are_registered_and_toolset_is_opt_in():
 
     list_schema = registry.get_schema("a2a_list")
     assert list_schema is not None
-    assert list_schema["parameters"]["properties"]["otype"] == {
-        "type": "string",
-        "enum": ["json", "xml"],
-        "default": "json",
-        "description": "Output format: json for a compact summary, xml for bare Aegis context XML.",
-    }
+    assert list_schema["parameters"]["properties"] == {}
     schema = registry.get_schema("a2a_delegate")
     assert schema is not None
     props = schema["parameters"]["properties"]
