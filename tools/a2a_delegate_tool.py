@@ -149,20 +149,47 @@ def _summarize_agent_card(card_json: dict[str, Any] | None) -> dict[str, Any] | 
     }
 
 
-def _refresh_a2a_registry() -> tuple[list[dict[str, Any]], str | None]:
+def _active_global_routing_rules(value: Any) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+
+    rules: list[dict[str, str]] = []
+    for raw_rule in value:
+        if not isinstance(raw_rule, dict):
+            continue
+        if str(raw_rule.get("status") or "").strip().lower() != "active":
+            continue
+        rule_id = raw_rule.get("id")
+        name = raw_rule.get("name")
+        policy = raw_rule.get("policy")
+        if not all(isinstance(field, str) for field in (rule_id, name, policy)):
+            continue
+        rules.append(
+            {
+                "id": rule_id,
+                "name": name,
+                "policy": policy,
+                "status": "active",
+            }
+        )
+    return rules
+
+
+def _refresh_a2a_registry() -> tuple[list[dict[str, Any]], list[dict[str, str]], str | None]:
     path = _a2a_registry_path()
     if not path.exists():
         A2A_REGISTRY.clear()
-        return [], f"A2A registry not found: {path}"
+        return [], [], f"A2A registry not found: {path}"
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
     except Exception as exc:
         A2A_REGISTRY.clear()
-        return [], f"Could not read A2A registry {path}: {exc}"
+        return [], [], f"Could not read A2A registry {path}: {exc}"
     raw_agents = payload.get("a2a", payload) if isinstance(payload, dict) else {}
     if not isinstance(raw_agents, dict):
         A2A_REGISTRY.clear()
-        return [], "A2A registry must contain an object of agents"
+        return [], [], "A2A registry must contain an object of agents"
+    global_routing = _active_global_routing_rules(payload.get("global", [])) if isinstance(payload, dict) else []
 
     entries: list[dict[str, Any]] = []
     A2A_REGISTRY.clear()
@@ -184,55 +211,76 @@ def _refresh_a2a_registry() -> tuple[list[dict[str, Any]], str | None]:
             {
                 "available": error is None,
                 "agent_card": _summarize_agent_card(card),
-                "agent_card_name": card.get("name") if isinstance(card, dict) else None,
                 "capabilities": list(dict.fromkeys(capabilities)),
                 "error": error,
             }
         )
         A2A_REGISTRY[str(name)] = entry
         entries.append(entry)
-    return entries, None
+    return entries, global_routing, None
 
 
-def _build_aegis_xml(entries: list[dict[str, Any]]) -> str:
-    lines = ["<aegis>", "  <a2a_agents>"]
+def _build_aegis_xml(entries: list[dict[str, Any]], global_routing: list[dict[str, str]]) -> str:
+    lines = ["<aegis_context>", "  <agents>"]
     for entry in entries:
-        if not entry.get("available"):
-            continue
-        lines.append(
-            f"    <agent name=\"{_xml_text(entry.get('name'))}\" url=\"{_xml_text(entry.get('url'))}\">"
-        )
-        if entry.get("description"):
-            lines.append(f"      <description>{_xml_text(entry.get('description'))}</description>")
-        card = entry.get("agent_card")
-        if isinstance(card, dict):
-            if card.get("name"):
-                lines.append(f"      <card_name>{_xml_text(card.get('name'))}</card_name>")
-            if card.get("description"):
-                lines.append(f"      <card_description>{_xml_text(card.get('description'))}</card_description>")
-        capabilities = entry.get("capabilities") or []
-        if capabilities:
+        attributes: list[str] = []
+        for field in ("name", "url", "status"):
+            value = entry.get(field)
+            if value is not None:
+                attributes.append(f'{field}="{_xml_text(value)}"')
+        if "available" in entry:
+            available = "true" if entry["available"] else "false"
+            attributes.append(f'available="{available}"')
+        attribute_text = f" {' '.join(attributes)}" if attributes else ""
+        lines.append(f"    <agent{attribute_text}>")
+
+        for field in ("description", "error"):
+            value = entry.get(field)
+            if value is not None:
+                lines.append(f"      <{field}>{_xml_text(value)}</{field}>")
+
+        if "capabilities" in entry:
+            capabilities = entry["capabilities"]
             lines.append("      <capabilities>")
-            for capability in capabilities:
-                lines.append(f"        <capability>{_xml_text(capability)}</capability>")
+            if isinstance(capabilities, list):
+                for capability in capabilities:
+                    lines.append(f"        <capability>{_xml_text(capability)}</capability>")
             lines.append("      </capabilities>")
         lines.append("    </agent>")
-    lines.extend(["  </a2a_agents>", "</aegis>"])
+    lines.extend(["  </agents>", "  <global_routing>"])
+    for rule in global_routing:
+        lines.append(
+            f"    <rule id=\"{_xml_text(rule['id'])}\" status=\"{_xml_text(rule['status'])}\">"
+        )
+        lines.append(f"      <name>{_xml_text(rule['name'])}</name>")
+        lines.append(f"      <policy>{_xml_text(rule['policy'])}</policy>")
+        lines.append("    </rule>")
+    lines.extend(["  </global_routing>", "</aegis_context>"])
     return "\n".join(lines)
 
 
-def a2a_list() -> str:
+def a2a_list(otype: str = "json") -> str:
     global A2A_CONTEXT
-    entries, error = _refresh_a2a_registry()
-    xml = _build_aegis_xml(entries)
+    if otype not in {"json", "xml"}:
+        return tool_error("otype must be 'json' or 'xml'")
+
+    entries, global_routing, error = _refresh_a2a_registry()
+    xml = _build_aegis_xml(entries, global_routing)
     if error is None:
         A2A_CONTEXT = xml
+    if otype == "xml":
+        return xml
+
     return _json_result(
         success=error is None,
         error=error,
-        context=xml,
+        global_routing=global_routing,
         agents=[
-            {key: value for key, value in entry.items() if key != "headers"}
+            {
+                key: value
+                for key, value in entry.items()
+                if key not in {"headers", "extcapabilities","agent_card"}
+            }
             for entry in entries
         ],
     )
@@ -1362,7 +1410,7 @@ def a2a_delegate(
 
 A2A_LIST_SCHEMA = {
     "name": "a2a_list",
-    "description": "List active A2A agents from $HERMES_HOME/a2a.json and return Aegis XML context.",
+    "description": "List active A2A agents and global routing rules.",
     "parameters": {"type": "object", "properties": {}},
 }
 

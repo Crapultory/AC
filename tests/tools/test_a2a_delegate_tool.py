@@ -1,6 +1,7 @@
 import json
 import re
 import threading
+import xml.etree.ElementTree as ET
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -69,7 +70,9 @@ class _Input:
 def test_a2a_schemas_are_registered_and_toolset_is_opt_in():
     import tools.a2a_delegate_tool as a2a_delegate_tool
 
-    assert registry.get_schema("a2a_list") is not None
+    list_schema = registry.get_schema("a2a_list")
+    assert list_schema is not None
+    assert list_schema["parameters"]["properties"] == {}
     schema = registry.get_schema("a2a_delegate")
     assert schema is not None
     props = schema["parameters"]["properties"]
@@ -82,6 +85,174 @@ def test_a2a_schemas_are_registered_and_toolset_is_opt_in():
     assert "a2a_list" not in _HERMES_CORE_TOOLS
     assert "a2a_delegate" not in _HERMES_CORE_TOOLS
     assert a2a_delegate_tool.A2A_DELEGATE_SCHEMA["name"] == "a2a_delegate"
+
+
+def test_a2a_list_supports_compact_json_and_bare_xml_outputs(monkeypatch, tmp_path):
+    import tools.a2a_delegate_tool as a2a_delegate_tool
+
+    registry_path = tmp_path / "a2a.json"
+    registry_path.write_text(
+        json.dumps(
+            {
+                "a2a": {
+                    "responder": {
+                        "url": "http://agent.local/a2a",
+                        "description": "Investigates incidents",
+                        "headers": {"Authorization": "Bearer secret"},
+                        "status": "active",
+                        "extcapabilities": ["configured-capability"],
+                    },
+                    "missing-url": {
+                        "description": "URL is not configured",
+                        "status": "active",
+                    },
+                    "unreachable": {
+                        "url": "http://unreachable.local/a2a",
+                        "status": "active",
+                    },
+                    "malformed": 42,
+                    "inactive": {
+                        "url": "http://inactive.local/a2a",
+                        "status": "inactive",
+                    },
+                },
+                "global": [
+                    {
+                        "id": "rule&001",
+                        "name": "Route <urgent> incidents",
+                        "policy": "Escalate to SOC & notify on-call.",
+                        "status": "active",
+                    },
+                    {
+                        "id": "rule0002",
+                        "name": "Disabled rule",
+                        "policy": "Must not be returned.",
+                        "status": "inactive",
+                    },
+                    {"id": "invalid", "status": "active"},
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(a2a_delegate_tool, "_a2a_registry_path", lambda: registry_path)
+    monkeypatch.setattr(
+        a2a_delegate_tool,
+        "_fetch_agent_card",
+        lambda url, **kwargs: (
+            (None, "connection refused")
+            if "unreachable" in url
+            else (
+                {
+                    "name": "Responder Card",
+                    "description": "Remote responder",
+                    "skills": [{"id": "investigate", "name": "Investigate"}],
+                },
+                None,
+            )
+        ),
+    )
+    monkeypatch.setattr(a2a_delegate_tool, "A2A_CONTEXT", "")
+
+    compact = json.loads(a2a_delegate_tool.a2a_list())
+    assert compact["success"] is True
+    assert "context" not in compact
+    agents = {agent["name"]: agent for agent in compact["agents"]}
+    assert set(agents) == {"responder", "missing-url", "unreachable", "malformed"}
+    assert agents["responder"]["capabilities"] == [
+        "id=investigate | name=Investigate",
+        "configured-capability",
+    ]
+    assert "agent_card_name" not in agents["responder"]
+    assert "headers" not in agents["responder"]
+    assert "extcapabilities" not in agents["responder"]
+    assert "agent_card" not in agents["responder"]
+    assert agents["missing-url"] == {
+        "name": "missing-url",
+        "url": "",
+        "description": "URL is not configured",
+        "status": "active",
+        "available": False,
+        "error": "missing url",
+    }
+    assert agents["unreachable"]["available"] is False
+    assert agents["unreachable"]["error"] == "connection refused"
+    assert agents["malformed"]["available"] is False
+    assert "must be a URL string or object" in agents["malformed"]["error"]
+    assert compact["global_routing"] == [
+        {
+            "id": "rule&001",
+            "name": "Route <urgent> incidents",
+            "policy": "Escalate to SOC & notify on-call.",
+            "status": "active",
+        }
+    ]
+
+    xml = a2a_delegate_tool.a2a_list(otype="xml")
+    assert xml.startswith("<aegis_context>\n  <agents>\n")
+    assert xml.endswith("</aegis_context>")
+    assert "<agent name=\"responder\"" in xml
+    assert "<global_routing>" in xml
+    assert '<rule id="rule&amp;001" status="active">' in xml
+    assert "<name>Route &lt;urgent&gt; incidents</name>" in xml
+    assert "<policy>Escalate to SOC &amp; notify on-call.</policy>" in xml
+    assert "Disabled rule" not in xml
+    assert "Remote responder" not in xml
+    assert "Bearer secret" not in xml
+    assert "configured-capability" in xml
+
+    root = ET.fromstring(xml)
+    xml_agents = {agent.attrib["name"]: agent for agent in root.find("agents") or []}
+    assert set(xml_agents) == set(agents)
+    assert xml_agents["responder"].attrib == {
+        "name": "responder",
+        "url": "http://agent.local/a2a",
+        "status": "active",
+        "available": "true",
+    }
+    assert xml_agents["responder"].find("agent_card_name") is None
+    assert [item.text for item in xml_agents["responder"].find("capabilities") or []] == agents[
+        "responder"
+    ]["capabilities"]
+    assert xml_agents["missing-url"].attrib == {
+        "name": "missing-url",
+        "url": "",
+        "status": "active",
+        "available": "false",
+    }
+    assert xml_agents["missing-url"].findtext("description") == agents["missing-url"]["description"]
+    assert xml_agents["missing-url"].findtext("error") == agents["missing-url"]["error"]
+    assert xml_agents["unreachable"].attrib == {
+        "name": "unreachable",
+        "url": "http://unreachable.local/a2a",
+        "status": "active",
+        "available": "false",
+    }
+    assert xml_agents["unreachable"].findtext("error") == agents["unreachable"]["error"]
+    assert xml_agents["malformed"].attrib == {"name": "malformed", "available": "false"}
+    assert xml_agents["malformed"].findtext("error") == agents["malformed"]["error"]
+    assert a2a_delegate_tool.A2A_CONTEXT == xml
+
+
+def test_a2a_list_keeps_an_empty_global_routing_container(monkeypatch, tmp_path):
+    import tools.a2a_delegate_tool as a2a_delegate_tool
+
+    registry_path = tmp_path / "a2a.json"
+    registry_path.write_text(json.dumps({"a2a": {}, "global": []}), encoding="utf-8")
+    monkeypatch.setattr(a2a_delegate_tool, "_a2a_registry_path", lambda: registry_path)
+
+    xml = a2a_delegate_tool.a2a_list(otype="xml")
+
+    assert "  <agents>\n  </agents>" in xml
+    assert "  <global_routing>\n  </global_routing>" in xml
+
+
+def test_a2a_list_rejects_unknown_output_type():
+    from tools.a2a_delegate_tool import a2a_list
+
+    assert json.loads(a2a_list(otype="yaml")) == {
+        "error": "otype must be 'json' or 'xml'"
+    }
 
 
 def test_remote_delegate_session_default_poll_interval_is_one_second():
