@@ -18,6 +18,7 @@ from aegis.backend.chat.routes import build_chat_router
 from aegis.backend.chat.service import ChatSessionManager
 from aegis.backend.config import AegisSettings, is_loopback_host, load_aegis_settings
 from aegis.backend.routes.agents import build_agents_router
+from aegis.backend.routes.audit import build_audit_router
 from aegis.backend.routes.auth import build_auth_router
 from aegis.backend.routes.overview import build_overview_router
 from aegis.backend.routes.routing import build_routing_router
@@ -123,6 +124,7 @@ def create_app(settings: AegisSettings | None = None) -> FastAPI:
     app.include_router(build_users_router(active_settings, user_service))
     app.include_router(build_agents_router(active_settings, user_service))
     app.include_router(build_routing_router(active_settings, user_service))
+    app.include_router(build_audit_router(active_settings, user_service))
     app.include_router(
         build_system_router(
             active_settings,

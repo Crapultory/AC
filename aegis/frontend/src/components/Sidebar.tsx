@@ -32,7 +32,7 @@ export default function Sidebar({
     isAdmin ? { id: 'policy', label: 'Routing Policy', sub: '路由策略配置', icon: Route, disabled: false } : null,
     isAdmin ? { id: 'users', label: 'User Management', sub: '用户管理', icon: Users, disabled: false } : null,
     isAdmin ? { id: 'settings', label: 'System Settings', sub: '系统设置', icon: Sliders, disabled: false } : null,
-    { id: 'audit', label: 'Audit Logs', sub: '审计日志', icon: FileText, disabled: true },
+    isAdmin ? { id: 'audit', label: 'Audit Logs', sub: '审计日志', icon: FileText, disabled: false } : null,
   ].filter(Boolean) as Array<{
     id: string;
     label: string;

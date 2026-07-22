@@ -10,6 +10,7 @@ import RegisterScreen from './components/RegisterScreen';
 import UserManagementTab from './components/UserManagementTab';
 import ChangePasswordDialog from './components/ChangePasswordDialog';
 import SettingsTab from './components/SettingsTab';
+import AuditLogsTab from './components/AuditLogsTab';
 import { AegisChatProvider, useAegisChatRuntime } from './lib/chatRuntime';
 import { clearStoredAuth, getStoredUser, hasStoredToken, setStoredAuth, setStoredUser } from './lib/auth';
 import { fetchJSON, ApiError, alertApiError, getApiErrorMessage } from './lib/api';
@@ -24,9 +25,9 @@ import {
   uiAgentDraftToApi,
   uiRoutingDraftToApi,
 } from './lib/adapters';
-import { Agent, AgentDraft, AuthenticatedUser, RoutingRule, RoutingRuleDraft, UserDraft } from './types';
+import { Agent, AgentDraft, AuthenticatedUser, OverviewStats, RoutingRule, RoutingRuleDraft, UserDraft } from './types';
 
-type AppTab = 'overview' | 'chat' | 'orchestration' | 'policy' | 'users' | 'settings';
+type AppTab = 'overview' | 'chat' | 'orchestration' | 'policy' | 'users' | 'settings' | 'audit';
 
 type AuthLoginResponse = {
   authenticated: boolean;
@@ -53,10 +54,11 @@ const TAB_TO_PATH: Record<AppTab, string> = {
   policy: '/policy',
   users: '/users',
   settings: '/settings',
+  audit: '/audit',
 };
 
 function isAdminOnlyTab(tab: AppTab | null): boolean {
-  return tab === 'orchestration' || tab === 'policy' || tab === 'users' || tab === 'settings';
+  return tab === 'orchestration' || tab === 'policy' || tab === 'users' || tab === 'settings' || tab === 'audit';
 }
 
 const getUtcTimestamp = () => new Date().toISOString().slice(0, 19).replace('T', ' ');
@@ -79,6 +81,9 @@ function resolveTabFromPath(pathname: string): AppTab | null {
   }
   if (pathname === '/settings') {
     return 'settings';
+  }
+  if (pathname === '/audit') {
+    return 'audit';
   }
   return 'overview';
 }
@@ -128,6 +133,8 @@ function AuthenticatedAppShell({
   onUpdateAgent,
   onUpdateRule,
   overviewAgents,
+  overviewStats,
+  overviewStatsError,
   rules,
   syncError,
   users,
@@ -153,6 +160,8 @@ function AuthenticatedAppShell({
   onUpdateAgent: (agentId: string, draft: AgentDraft) => Promise<void>;
   onUpdateRule: (ruleId: string, draft: RoutingRuleDraft) => Promise<void>;
   overviewAgents: Agent[];
+  overviewStats: OverviewStats | null;
+  overviewStatsError: string;
   rules: RoutingRule[];
   syncError: string;
   users: AuthenticatedUser[];
@@ -271,6 +280,8 @@ function AuthenticatedAppShell({
               agents={overviewAgents}
               currentUtcTime={currentUtcTime}
               isAdmin={isAdmin}
+              stats={overviewStats}
+              statsError={overviewStatsError}
               setTab={(tab) => navigateTo(tab as AppTab)}
             />
           ) : null}
@@ -287,11 +298,13 @@ function AuthenticatedAppShell({
           ) : null}
           {activeTab === 'policy' ? (
             <PolicyTab
+              agents={agents}
               busy={isSyncing}
               onCreate={onCreateRule}
               onDelete={onDeleteRule}
               onRefresh={onRefresh}
               onUpdate={onUpdateRule}
+              onAuthExpired={onAuthExpired}
               rules={rules}
             />
           ) : null}
@@ -307,6 +320,7 @@ function AuthenticatedAppShell({
             />
           ) : null}
           {activeTab === 'settings' ? <SettingsTab onAuthExpired={onAuthExpired} /> : null}
+          {activeTab === 'audit' ? <AuditLogsTab onAuthExpired={onAuthExpired} /> : null}
         </main>
       </div>
     </div>
@@ -318,6 +332,8 @@ export default function App() {
   const [currentUtcTime, setCurrentUtcTime] = useState<string>(() => getUtcTimestamp());
   const [agents, setAgents] = useState<Agent[]>([]);
   const [overviewAgents, setOverviewAgents] = useState<Agent[]>([]);
+  const [overviewStats, setOverviewStats] = useState<OverviewStats | null>(null);
+  const [overviewStatsError, setOverviewStatsError] = useState('');
   const [rules, setRules] = useState<RoutingRule[]>([]);
   const [users, setUsers] = useState<AuthenticatedUser[]>([]);
   const [currentUser, setCurrentUser] = useState<AuthenticatedUser | null>(() => getStoredUser());
@@ -423,6 +439,18 @@ export default function App() {
     setPathname(TAB_TO_PATH.overview);
   }, [currentUser, pathname]);
 
+  useEffect(() => {
+    if (!isAuthenticated || !currentUser) {
+      return;
+    }
+
+    const timer = window.setInterval(() => {
+      void refreshOverviewStats();
+    }, 60_000);
+
+    return () => window.clearInterval(timer);
+  }, [isAuthenticated, currentUser?.uid]);
+
   async function loadConsoleData(userOverride?: AuthenticatedUser | null) {
     const activeUser = userOverride ?? currentUser;
     if (!activeUser) {
@@ -432,8 +460,24 @@ export default function App() {
     setIsSyncing(true);
     setSyncError('');
     try {
-      const overviewResponse = await fetchJSON<BackendOverviewAgentList>('/api/overview/agents');
-      setOverviewAgents(sortAgents(overviewResponse.agents.map(backendAgentToUi)));
+      const [overviewAgentsResult, overviewStatsResult] = await Promise.allSettled([
+        fetchJSON<BackendOverviewAgentList>('/api/overview/agents'),
+        fetchJSON<OverviewStats>('/api/overview/stats'),
+      ]);
+      if (overviewAgentsResult.status === 'rejected') {
+        throw overviewAgentsResult.reason;
+      }
+      setOverviewAgents(sortAgents(overviewAgentsResult.value.agents.map(backendAgentToUi)));
+
+      if (overviewStatsResult.status === 'fulfilled') {
+        setOverviewStats(overviewStatsResult.value);
+        setOverviewStatsError('');
+      } else if (overviewStatsResult.reason instanceof ApiError && overviewStatsResult.reason.status === 401) {
+        handleAuthExpired();
+        return;
+      } else {
+        setOverviewStatsError(getApiErrorMessage(overviewStatsResult.reason, 'Overview metrics unavailable.'));
+      }
 
       if (!activeUser.is_admin) {
         setAgents([]);
@@ -488,10 +532,26 @@ export default function App() {
     setIsAuthenticated(false);
     setAgents([]);
     setOverviewAgents([]);
+    setOverviewStats(null);
+    setOverviewStatsError('');
     setRules([]);
     setUsers([]);
     setAuthNotice('');
     navigateAuth('/login');
+  }
+
+  async function refreshOverviewStats() {
+    try {
+      const response = await fetchJSON<OverviewStats>('/api/overview/stats');
+      setOverviewStats(response);
+      setOverviewStatsError('');
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) {
+        handleAuthExpired();
+        return;
+      }
+      setOverviewStatsError(getApiErrorMessage(error, 'Overview metrics unavailable.'));
+    }
   }
 
   async function handleLogin(username: string, password: string) {
@@ -547,6 +607,8 @@ export default function App() {
     setIsAuthenticated(false);
     setAgents([]);
     setOverviewAgents([]);
+    setOverviewStats(null);
+    setOverviewStatsError('');
     setRules([]);
     setUsers([]);
     setShowPasswordDialog(false);
@@ -836,6 +898,8 @@ export default function App() {
           onUpdateAgent={handleUpdateAgent}
           onUpdateRule={handleUpdateRule}
           overviewAgents={overviewAgents}
+          overviewStats={overviewStats}
+          overviewStatsError={overviewStatsError}
           rules={rules}
           syncError={syncError}
           users={users}

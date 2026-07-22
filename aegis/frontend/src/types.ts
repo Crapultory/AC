@@ -1,6 +1,8 @@
 export type AgentStatus = 'Active' | 'Idle' | 'Offline';
 export type RoutingRuleStatus = 'Enabled' | 'Disabled';
 export type UserStatus = 'enabled' | 'disabled';
+export type AgentPolicyStatus = 'allow' | 'deny';
+export type DelegateAuditStatus = 'succ' | 'fail' | 'auth_denied';
 
 export interface AuthenticatedUser {
   uid: string;
@@ -61,6 +63,61 @@ export interface RoutingRuleDraft {
   status: RoutingRuleStatus;
 }
 
+export interface AgentPolicy {
+  rank_id: number;
+  platform: string;
+  user_id: string;
+  agent_name: string;
+  status: AgentPolicyStatus;
+}
+
+export interface DelegateAuditLog {
+  id: string;
+  timestamp: string;
+  platform: string;
+  user_id: string;
+  user_name: string;
+  agent_name: string;
+  goal: string;
+  session_id: string;
+  is_loop: boolean;
+  is_delegate_output: boolean;
+  status: DelegateAuditStatus;
+}
+
+export interface DelegateAuditPage {
+  logs: DelegateAuditLog[];
+  total: number;
+  page: number;
+  page_size: number;
+}
+
+export interface OverviewStatusCounts {
+  succ: number;
+  fail: number;
+  auth_denied: number;
+}
+
+export interface OverviewStatsComparison {
+  previous_delegation_total: number;
+  delegation_volume_change_percent: number | null;
+  previous_success_rate: number | null;
+  success_rate_change_percentage_points: number | null;
+}
+
+export interface OverviewStats {
+  window_start: string;
+  window_end: string;
+  executing_agent_count: number;
+  source_platform_count: number;
+  active_user_count: number;
+  delegation_total: number;
+  success_count: number;
+  success_rate: number | null;
+  status_counts: OverviewStatusCounts;
+  comparison: OverviewStatsComparison;
+}
+
 export interface ChainStep {
   id?: string;
   agentName: string;
@@ -78,6 +135,84 @@ export interface DelegateToolCall {
   status: 'running' | 'completed';
 }
 
+export type WorkflowTraceEventType =
+  | 'message.accepted'
+  | 'message.completed'
+  | 'message.stream.completed'
+  | 'tool.started'
+  | 'tool.completed'
+  | 'run.state'
+  | 'delegate.entered'
+  | 'delegate.exited';
+
+export interface WorkflowTraceEvent {
+  id: string;
+  type: WorkflowTraceEventType;
+  timestamp: number;
+  turnId?: string;
+  parentTurnId?: string;
+  source: 'main' | 'delegate';
+  srcagent?: string;
+  clientMsgId?: string;
+  messageId?: string;
+  content?: string;
+  toolName?: string;
+  toolCallId?: string;
+  argsPreview?: string;
+  resultPreview?: string;
+  childSessionId?: string;
+  delegateId?: string;
+  state?: string;
+  reason?: string;
+}
+
+export type WorkflowGraphNodeKind =
+  | 'root'
+  | 'input'
+  | 'delegate'
+  | 'tool'
+  | 'tool-group'
+  | 'end';
+export type WorkflowGraphStatus = 'empty' | 'partial' | 'live' | 'complete';
+
+export interface WorkflowGraphNode {
+  id: string;
+  kind: WorkflowGraphNodeKind;
+  label: string;
+  detail: string;
+  status: string;
+  source: 'main' | 'delegate';
+  turnId?: string;
+  parentId?: string;
+  agent?: string;
+  timestamp?: number;
+  argsPreview?: string;
+  resultPreview?: string;
+  finalMessage?: string;
+  toolRunId?: string;
+  hiddenToolCount?: number;
+  x: number;
+  y: number;
+  depth: number;
+}
+
+export interface WorkflowGraphEdge {
+  id: string;
+  from: string;
+  to: string;
+  source: 'main' | 'delegate';
+  label?: string;
+}
+
+export interface WorkflowGraph {
+  rootId: string;
+  nodes: WorkflowGraphNode[];
+  edges: WorkflowGraphEdge[];
+  status: WorkflowGraphStatus;
+  width: number;
+  height: number;
+}
+
 export interface Message {
   id: string;
   sender: 'user' | 'aegis' | string;
@@ -91,6 +226,7 @@ export interface Message {
   turnId?: string;
   pending?: boolean;
   clientMsgId?: string;
+  workflowParentId?: string;
 }
 
 export interface Conversation {
@@ -119,4 +255,6 @@ export interface Conversation {
   } | null;
   hasUnread?: boolean;
   transportState?: 'idle' | 'connecting' | 'connected' | 'error' | 'closed';
+  workflowTraceVersion?: 1;
+  workflowTrace?: WorkflowTraceEvent[];
 }

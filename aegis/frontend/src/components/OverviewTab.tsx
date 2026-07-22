@@ -1,19 +1,13 @@
 import React, { useState, useMemo } from 'react';
-import { Agent } from '../types';
+import { Agent, OverviewStats } from '../types';
 import { 
   Search, 
-  Terminal, 
   Server, 
   Activity, 
   ShieldCheck, 
-  RefreshCw, 
   Play, 
-  Award,
   AlertTriangle,
   Cpu,
-  Clock,
-  Eye,
-  Settings
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 
@@ -22,9 +16,25 @@ interface OverviewTabProps {
   currentUtcTime: string;
   isAdmin: boolean;
   setTab: (tab: string) => void;
+  stats: OverviewStats | null;
+  statsError: string;
 }
 
-export default function OverviewTab({ agents, currentUtcTime, isAdmin, setTab }: OverviewTabProps) {
+function formatPercent(value: number): string {
+  return `${Math.round(value * 100)}%`;
+}
+
+function formatVolumeChange(value: number | null): string {
+  if (value === null) return 'No prior baseline';
+  return `${value >= 0 ? '↑' : '↓'} ${Math.abs(value).toFixed(1)}% vs previous 7 days`;
+}
+
+function formatRateChange(value: number | null): string {
+  if (value === null) return 'No prior baseline';
+  return `${value >= 0 ? '+' : ''}${value.toFixed(1)} pp vs previous 7 days`;
+}
+
+export default function OverviewTab({ agents, currentUtcTime, isAdmin, setTab, stats, statsError }: OverviewTabProps) {
   const [searchTerm, setSearchTerm] = useState('');
   const [selectedStatus, setSelectedStatus] = useState<string>('All');
   const [selectedNode, setSelectedNode] = useState<string | null>('threat-intel'); // Default highlight some node
@@ -39,12 +49,11 @@ export default function OverviewTab({ agents, currentUtcTime, isAdmin, setTab }:
     });
   }, [agents, searchTerm, selectedStatus]);
 
-  // Counts
+  // Agent Index count
   const totalCount = agents.length;
-  const activeCount = agents.filter(a => a.status === 'Active').length;
-  const idleCount = agents.filter(a => a.status === 'Idle').length;
-  const offlineCount = agents.filter(a => a.status === 'Offline').length;
-  const activeRatio = totalCount === 0 ? 0 : (activeCount / totalCount) * 100;
+  const successRate = stats?.success_rate ?? null;
+  const successRatePercent = successRate === null ? 0 : successRate * 100;
+  const metricsUnavailable = !stats && Boolean(statsError);
 
   // Selected agent details for panel
   const currentAgent = useMemo(() => {
@@ -123,74 +132,40 @@ export default function OverviewTab({ agents, currentUtcTime, isAdmin, setTab }:
 
       {/* Metrics Cards Wrap */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-        {/* Dynamic Metric 1 */}
         <div className="bg-[#05080F] border border-slate-800 rounded-xl p-4 hover:border-slate-700 transition-colors relative overflow-hidden group">
           <div className="absolute right-3 top-3 h-9 w-9 rounded-lg bg-cyan-500/5 flex items-center justify-center text-cyan-400 group-hover:bg-cyan-500/10 transition-colors">
             <Activity className="h-4 w-4" />
           </div>
-          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Active Work Agents</div>
-          <div className="flex items-baseline gap-2 mt-2">
-            <span className="text-2xl font-black text-white font-mono tracking-tight">{activeCount}</span>
-            <span className="text-xs text-slate-500">/ {totalCount} Total</span>
-          </div>
-          <div className="mt-3 flex items-center gap-2">
-            <div className="flex-1 h-1 bg-slate-800 rounded-full overflow-hidden">
-              <div className="h-full bg-cyan-500 shadow-[0_0_8px_rgba(6,182,212,0.8)] rounded-full" style={{ width: `${activeRatio}%` }} />
-            </div>
-            <span className="text-[10px] font-mono text-cyan-400 font-bold">{Math.round(activeRatio)}%</span>
-          </div>
+          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Executing Task Agents</div>
+          <div className="mt-2 text-2xl font-black text-white font-mono tracking-tight">{stats?.executing_agent_count ?? '—'}</div>
+          <p className="mt-3 text-[10px] font-mono text-slate-500">{metricsUnavailable ? 'Metrics unavailable' : 'Distinct agents · last 7 days'}</p>
         </div>
 
-        {/* Dynamic Metric 2 */}
         <div className="bg-[#05080F] border border-slate-800 rounded-xl p-4 hover:border-slate-700 transition-colors relative overflow-hidden group">
           <div className="absolute right-3 top-3 h-9 w-9 rounded-lg bg-purple-500/5 flex items-center justify-center text-purple-400 group-hover:bg-purple-500/10 transition-colors">
             <Cpu className="h-4 w-4" />
           </div>
-          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Tasks in Progress</div>
-          <div className="flex items-baseline gap-2 mt-2">
-            <span className="text-2xl font-black text-white font-mono tracking-tight">37</span>
-            <span className="text-[10px] text-emerald-500 font-mono font-bold flex items-center gap-0.5">↑ 12%</span>
-          </div>
-          <div className="mt-2.5 h-6 flex items-center gap-1">
-            {/* Sparkline simulation */}
-            {[23, 29, 21, 35, 27, 41, 31, 37].map((h, i) => (
-              <div 
-                key={i} 
-                className="flex-1 bg-purple-500/30 rounded-t hover:bg-purple-400 transition-colors cursor-pointer" 
-                style={{ height: `${h}%` }}
-                title={`Interval ${i}: ${h} Active Tasks`}
-              />
-            ))}
-          </div>
+          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Source Platforms</div>
+          <div className="mt-2 text-2xl font-black text-white font-mono tracking-tight">{stats?.source_platform_count ?? '—'}</div>
+          <p className="mt-3 text-[10px] font-mono text-slate-500">{metricsUnavailable ? 'Metrics unavailable' : 'Distinct sources · last 7 days'}</p>
         </div>
 
-        {/* Dynamic Metric 3 */}
         <div className="bg-[#05080F] border border-slate-800 rounded-xl p-4 hover:border-slate-700 transition-colors relative overflow-hidden group">
           <div className="absolute right-3 top-3 h-9 w-9 rounded-lg bg-rose-500/5 flex items-center justify-center text-rose-400 group-hover:bg-rose-500/10 transition-colors">
             <AlertTriangle className="h-4 w-4" />
           </div>
-          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Unchecked Alerts (24h)</div>
-          <div className="flex items-baseline gap-2 mt-2">
-            <span className="text-2xl font-black text-rose-500 font-mono tracking-tight">8</span>
-            <span className="text-[9px] text-rose-500 bg-rose-500/10 border border-rose-500/30 px-1.5 py-0.5 rounded font-mono font-bold">HIGH RISK</span>
-          </div>
-          <p className="text-[11px] text-slate-500 mt-3 truncate font-mono">Critical S3 breach vector mapped</p>
+          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Active Users</div>
+          <div className="mt-2 text-2xl font-black text-white font-mono tracking-tight">{stats?.active_user_count ?? '—'}</div>
+          <p className="mt-3 text-[10px] font-mono text-slate-500">{metricsUnavailable ? 'Metrics unavailable' : 'Distinct requesters · last 7 days'}</p>
         </div>
 
-        {/* Dynamic Metric 4 */}
         <div className="bg-[#05080F] border border-slate-800 rounded-xl p-4 hover:border-slate-700 transition-colors relative overflow-hidden group">
           <div className="absolute right-3 top-3 h-9 w-9 rounded-lg bg-emerald-500/5 flex items-center justify-center text-emerald-400 group-hover:bg-emerald-500/10 transition-colors">
             <ShieldCheck className="h-4 w-4" />
           </div>
-          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Security Posture Score</div>
-          <div className="flex items-baseline gap-2 mt-2">
-            <span className="text-2xl font-black text-emerald-400 font-mono tracking-tight">92</span>
-            <span className="text-xs text-slate-400 uppercase">Excellent</span>
-          </div>
-          <div className="mt-3 flex items-center gap-1.5 text-[10px]">
-            <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 shadow-[0_0_6px_#10b981]" />
-            <span className="text-slate-400 font-mono">1,284 Assets Shielded</span>
-          </div>
+          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Delegations Started</div>
+          <div className="mt-2 text-2xl font-black text-white font-mono tracking-tight">{stats?.delegation_total ?? '—'}</div>
+          <p className="mt-3 text-[10px] font-mono text-slate-500">{stats ? formatVolumeChange(stats.comparison.delegation_volume_change_percent) : metricsUnavailable ? 'Metrics unavailable' : 'Loading metrics...'}</p>
         </div>
       </div>
 
@@ -387,20 +362,36 @@ export default function OverviewTab({ agents, currentUtcTime, isAdmin, setTab }:
         {/* Side Panel: Agent Statistics & Live Directory (Equivalent to "Agent Orchestration" right col) */}
         <div className="flex flex-col gap-4">
 
-          {/* Sec Posture Progress Circle widget */}
+          {/* Delegation health widget */}
           <div className="bg-[#05080F] border border-slate-800 rounded-xl p-4 relative overflow-hidden flex items-center justify-between">
             <div className="absolute top-0 right-0 h-24 w-24 bg-cyan-500/5 rounded-full blur-2xl" />
             <div className="mr-2">
-              <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Aegis Sec Posture</div>
-              <h4 className="text-sm font-bold text-white mt-1 italic">Excellent Protection</h4>
+              <div className="text-[10px] text-slate-500 font-bold uppercase tracking-wider">Aegis Delegation Health (7D)</div>
+              <h4 className="text-sm font-bold text-white mt-1 italic">{successRate === null ? 'No delegations' : 'Delegation success rate'}</h4>
               <p className="text-[11px] text-slate-400 mt-1 leading-normal">
-                所有安全网关和 VIP 工具连接建立成功。
+                {stats
+                  ? successRate === null
+                    ? 'No delegate audits were recorded in this window.'
+                    : `${stats.success_count} succeeded of ${stats.delegation_total} delegations.`
+                  : metricsUnavailable
+                    ? 'Overview metrics are currently unavailable.'
+                    : 'Loading delegation metrics...'}
               </p>
+              {stats && successRate !== null ? (
+                <p className="mt-1 text-[10px] font-mono text-cyan-400">{formatRateChange(stats.comparison.success_rate_change_percentage_points)}</p>
+              ) : null}
+              {stats ? (
+                <div className="mt-2 flex flex-wrap gap-1.5 text-[9px] font-mono">
+                  <span className="rounded border border-emerald-900/40 px-1.5 py-0.5 text-emerald-400">succ {stats.status_counts.succ}</span>
+                  <span className="rounded border border-rose-900/40 px-1.5 py-0.5 text-rose-400">fail {stats.status_counts.fail}</span>
+                  <span className="rounded border border-amber-900/40 px-1.5 py-0.5 text-amber-400">denied {stats.status_counts.auth_denied}</span>
+                </div>
+              ) : null}
             </div>
             <div className="relative shrink-0 flex items-center justify-center">
               <svg width="72" height="72" viewBox="0 0 36 36" className="transform -rotate-90">
                 <circle cx="18" cy="18" r="15.91" fill="none" stroke="#1e293b" strokeWidth="2.5" />
-                <circle cx="18" cy="18" r="15.91" fill="none" stroke="url(#postureGradient)" strokeWidth="2.5" strokeDasharray="92 100" />
+                <circle cx="18" cy="18" r="15.91" fill="none" stroke="url(#postureGradient)" strokeWidth="2.5" strokeDasharray={`${successRatePercent} 100`} />
                 <defs>
                   <linearGradient id="postureGradient" x1="0%" y1="0%" x2="100%" y2="100%">
                     <stop offset="0%" stopColor="#06b6d4" />
@@ -408,7 +399,7 @@ export default function OverviewTab({ agents, currentUtcTime, isAdmin, setTab }:
                   </linearGradient>
                 </defs>
               </svg>
-              <span className="absolute text-white font-mono text-sm font-extrabold">92%</span>
+              <span className="absolute text-white font-mono text-sm font-extrabold">{successRate === null ? '—' : formatPercent(successRate)}</span>
             </div>
           </div>
 

@@ -4,7 +4,7 @@
 
 ## 当前能力
 
-- `Overview`：展示安全中枢总览、拓扑星图、Agent 索引和安全态势卡片。
+- `Overview`：展示安全中枢总览、拓扑星图、Agent 索引，以及基于近 7 天 A2A 委派审计的运行指标。
 - `Aegis Chat`：提供本地模拟的安全分析会话流，按预设场景回放 Agent/VIP Tool 协同链路。
 - `Agent Orchestration`：支持登录后对 `/api/agents` 执行新增、编辑、删除。
 - `Routing Policy`：支持登录后对 `/api/routing/global` 执行新增、编辑、删除。
@@ -95,6 +95,7 @@ aegis/frontend
 
 - `Agent Orchestration` 读取和写入 `/api/agents`。
 - `Routing Policy` 读取和写入 `/api/routing/global`。
+- `Overview` 读取 `/api/overview/agents` 和 `/api/overview/stats`；后者统计近 7 天委派的 Agent、平台、用户、任务量、成功率及相邻周期变化。
 - Chat 页面的回复与执行链路仍为前端模拟逻辑，不会真正调用 A2A、RPC 或外部安全系统。
 - 当前侧边栏品牌图标接入的是 `logo/aegis-icon-brand-tile-color.svg`。
 
@@ -107,4 +108,4 @@ aegis/frontend
 ## 已知边界
 
 - 当前只对接了 `Agent Orchestration` 和 `Routing Policy` 两个后端模块。
-- `Overview` 与 `Aegis Chat` 仍然偏演示态，尚未接真实安全执行链路。
+- 拓扑星图与 Aegis Chat 仍然偏演示态，尚未接真实安全执行链路；Overview 的近 7 天委派指标已接入审计日志。

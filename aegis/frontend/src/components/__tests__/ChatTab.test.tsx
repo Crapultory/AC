@@ -60,6 +60,60 @@ describe('ChatTab', () => {
     clipboardWriteText.mockReset();
   });
 
+  it('opens the global workflow drawer without replacing the composer draft', () => {
+    render(<ChatTab agents={[]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /新建对话/i }));
+    const composer = screen.getByPlaceholderText(/ask aegis anything/i);
+    fireEvent.change(composer, { target: { value: 'keep this draft' } });
+
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+
+    expect(screen.getByRole('complementary', { name: /workflow for new investigation/i })).toBeInTheDocument();
+    expect(screen.getByText('AWAITING FIRST TURN')).toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/ask aegis anything/i)).toHaveValue('keep this draft');
+    expect(screen.getByTestId('chat-workspace')).toHaveClass('w-1/2');
+  });
+
+  it('closes the global workflow drawer with its close control', () => {
+    render(<ChatTab agents={[]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    fireEvent.click(screen.getByRole('button', { name: /close workflow visualization/i }));
+
+    expect(screen.queryByRole('complementary', { name: /workflow for current session/i })).not.toBeInTheDocument();
+    expect(screen.getByText('CENTRAL ARCHIVE')).toBeInTheDocument();
+  });
+
+  it('closes the global workflow drawer when Escape is pressed', () => {
+    render(<ChatTab agents={[]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(screen.queryByRole('complementary', { name: /workflow for current session/i })).not.toBeInTheDocument();
+    expect(screen.getByText('CENTRAL ARCHIVE')).toBeInTheDocument();
+  });
+
+  it('exits workflow fullscreen before Escape closes the workflow drawer', () => {
+    render(<ChatTab agents={[]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    fireEvent.click(screen.getByRole('button', { name: /enter workflow fullscreen/i }));
+
+    expect(screen.getByTestId('session-workflow')).toHaveClass('w-full');
+    expect(screen.queryByTestId('chat-workspace')).not.toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+
+    expect(screen.getByTestId('session-workflow')).toHaveClass('w-1/2');
+    expect(screen.getByTestId('chat-workspace')).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /enter workflow fullscreen/i })).toBeInTheDocument();
+
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByTestId('session-workflow')).not.toBeInTheDocument();
+  });
+
   it('connects lazily and renders main state, delegate events, delegate tools, copy actions, and per-turn orchestration chains', async () => {
     render(<ChatTab agents={[]} />);
 
@@ -347,12 +401,43 @@ describe('ChatTab', () => {
     const cached = JSON.parse(window.localStorage.getItem('aegis_convs') || '[]');
     expect(cached[0]).toMatchObject({
       sessionId: 'sess-1',
+      workflowTraceVersion: 1,
+      workflowTrace: expect.arrayContaining([
+        expect.objectContaining({
+          type: 'message.accepted',
+          turnId: 'turn-1',
+          source: 'main',
+        }),
+        expect.objectContaining({
+          type: 'tool.completed',
+          toolCallId: 'tool-1',
+          resultPreview: '/Users/demo',
+        }),
+        expect.objectContaining({
+          type: 'tool.started',
+          turnId: 'turn-2',
+          source: 'delegate',
+          delegateId: expect.stringContaining('delegate:'),
+        }),
+      ]),
       messages: expect.arrayContaining([
-        expect.objectContaining({ text: 'hello over websocket', sender: 'user' }),
+        expect.objectContaining({
+          text: 'hello over websocket',
+          sender: 'user',
+          turnId: 'turn-1',
+          source: 'main',
+        }),
         expect.objectContaining({ text: 'hello websocket world', sender: 'aegis' }),
         expect.objectContaining({ text: 'main agent resumed after /main', sender: 'aegis' }),
       ]),
     });
+
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    expect(await screen.findByTestId('workflow-node-turn:turn-1')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-node-tool:turn-1:tool-1')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-node-delegate:turn-1:delegate-sess')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-node-tool:turn-1:delegate-tool-1')).toBeInTheDocument();
+    expect(screen.getByText('STATIC TRACE')).toBeInTheDocument();
   });
 
   it('keeps delegate delta text when its stream completes and renders final-only delegate replies', async () => {
@@ -433,6 +518,193 @@ describe('ChatTab', () => {
     });
 
     expect(await screen.findByText('final without streamed delta')).toBeInTheDocument();
+  });
+
+  it('persists and renders every direct A2A delegate turn as its own workflow sub-branch', async () => {
+    render(<ChatTab agents={[]} />);
+
+    const submit = (text: string) => {
+      fireEvent.change(screen.getByPlaceholderText(/ask aegis anything/i), {
+        target: { value: text },
+      });
+      fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    };
+
+    submit('Start a threat-intel delegate loop');
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({
+      type: 'session.bound',
+      session_id: 'sess-a2a-loop',
+      title: 'A2A Loop',
+      resumed: false,
+    });
+    await waitFor(() => {
+      expect(socket.sent.filter((item) => JSON.parse(item).type === 'message.send')).toHaveLength(1);
+    });
+    const mainSend = socket.sent.map((item) => JSON.parse(item)).find((item) => item.type === 'message.send');
+    socket.emit({
+      type: 'message.accepted',
+      server_event_id: 'sess-a2a-loop:1',
+      ts: 1,
+      session_id: 'sess-a2a-loop',
+      turn_id: 'main-turn',
+      client_msg_id: mainSend.client_msg_id,
+      source: 'main',
+    });
+    socket.emit({
+      type: 'tool.started',
+      server_event_id: 'sess-a2a-loop:2',
+      ts: 2,
+      session_id: 'sess-a2a-loop',
+      turn_id: 'main-turn',
+      source: 'main',
+      tool_name: 'a2a_delegate',
+      tool_call_id: 'delegate-call',
+      args_preview: '{"agent_name":"threat-intel"}',
+    });
+    socket.emit({
+      type: 'delegate.entered',
+      server_event_id: 'sess-a2a-loop:3',
+      ts: 3,
+      session_id: 'sess-a2a-loop',
+      turn_id: 'main-turn',
+      source: 'delegate',
+      srcagent: 'threat-intel',
+    });
+    socket.emit({
+      type: 'message.delta',
+      session_id: 'sess-a2a-loop',
+      turn_id: 'main-turn',
+      message_id: 'delegate-initial-reply',
+      source: 'delegate',
+      srcagent: 'threat-intel',
+      delta: 'Initial delegated result',
+    });
+    socket.emit({
+      type: 'message.stream.completed',
+      server_event_id: 'sess-a2a-loop:4',
+      ts: 4,
+      session_id: 'sess-a2a-loop',
+      turn_id: 'main-turn',
+      message_id: 'delegate-initial-reply',
+      source: 'delegate',
+      srcagent: 'threat-intel',
+    });
+    socket.emit({
+      type: 'run.state',
+      server_event_id: 'sess-a2a-loop:5',
+      ts: 5,
+      session_id: 'sess-a2a-loop',
+      turn_id: 'main-turn',
+      source: 'delegate',
+      srcagent: 'threat-intel',
+      state: 'waiting_for_delegate_input',
+    });
+
+    submit('Inspect the first IOC set');
+    await waitFor(() => {
+      expect(socket.sent.filter((item) => JSON.parse(item).type === 'message.send')).toHaveLength(2);
+    });
+    const firstDelegateSend = socket.sent
+      .map((item) => JSON.parse(item))
+      .filter((item) => item.type === 'message.send')[1];
+    socket.emit({
+      type: 'message.accepted',
+      server_event_id: 'sess-a2a-loop:6',
+      ts: 6,
+      session_id: 'sess-a2a-loop',
+      turn_id: 'delegate-turn-1',
+      client_msg_id: firstDelegateSend.client_msg_id,
+      source: 'delegate',
+      srcagent: 'threat-intel',
+    });
+    socket.emit({
+      type: 'message.completed',
+      server_event_id: 'sess-a2a-loop:7',
+      ts: 7,
+      session_id: 'sess-a2a-loop',
+      turn_id: 'delegate-turn-1',
+      message_id: 'delegate-reply-1',
+      source: 'delegate',
+      srcagent: 'threat-intel',
+      content: 'First IOC set completed',
+      completed: true,
+    });
+    socket.emit({
+      type: 'run.state',
+      server_event_id: 'sess-a2a-loop:8',
+      ts: 8,
+      session_id: 'sess-a2a-loop',
+      turn_id: 'delegate-turn-1',
+      source: 'delegate',
+      srcagent: 'threat-intel',
+      state: 'waiting_for_delegate_input',
+    });
+
+    submit('Inspect the second IOC set');
+    await waitFor(() => {
+      expect(socket.sent.filter((item) => JSON.parse(item).type === 'message.send')).toHaveLength(3);
+    });
+    const secondDelegateSend = socket.sent
+      .map((item) => JSON.parse(item))
+      .filter((item) => item.type === 'message.send')[2];
+    socket.emit({
+      type: 'message.accepted',
+      server_event_id: 'sess-a2a-loop:9',
+      ts: 9,
+      session_id: 'sess-a2a-loop',
+      turn_id: 'delegate-turn-2',
+      client_msg_id: secondDelegateSend.client_msg_id,
+      source: 'delegate',
+      srcagent: 'threat-intel',
+    });
+    socket.emit({
+      type: 'message.completed',
+      server_event_id: 'sess-a2a-loop:10',
+      ts: 10,
+      session_id: 'sess-a2a-loop',
+      turn_id: 'delegate-turn-2',
+      message_id: 'delegate-reply-2',
+      source: 'delegate',
+      srcagent: 'threat-intel',
+      content: 'Second IOC set completed',
+      completed: true,
+    });
+    socket.emit({
+      type: 'run.state',
+      server_event_id: 'sess-a2a-loop:11',
+      ts: 11,
+      session_id: 'sess-a2a-loop',
+      turn_id: 'delegate-turn-2',
+      source: 'delegate',
+      srcagent: 'threat-intel',
+      state: 'waiting_for_delegate_input',
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    const delegateId = 'delegate:main-turn:delegate-call';
+    expect(await screen.findByTestId(`workflow-node-${delegateId}`)).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-node-turn:delegate-turn-1')).toBeInTheDocument();
+    expect(screen.getByTestId('workflow-node-turn:delegate-turn-2')).toBeInTheDocument();
+    expect(screen.getByTestId(`workflow-node-end:delegate:${delegateId}:main-turn`)).toBeInTheDocument();
+    expect(screen.getByTestId(`workflow-node-end:delegate:${delegateId}:delegate-turn-1`)).toBeInTheDocument();
+    fireEvent.click(screen.getByTestId(`workflow-node-end:delegate:${delegateId}:delegate-turn-2`));
+    expect(screen.getByText('FINAL MESSAGE')).toBeInTheDocument();
+    expect(
+      within(screen.getByTestId('workflow-node-details-scroll')).getByText('Second IOC set completed'),
+    ).toBeInTheDocument();
+
+    await waitFor(() => {
+      const cached = JSON.parse(window.localStorage.getItem('aegis_convs') || '[]');
+      const trace = cached[0]?.workflowTrace || [];
+      expect(trace.filter((event: { type: string }) => event.type === 'message.accepted')).toHaveLength(3);
+      expect(trace.filter((event: { type: string }) => event.type === 'message.completed')).toHaveLength(2);
+      expect(trace.find((event: { id: string }) => event.id === 'sess-a2a-loop:9')).toMatchObject({
+        delegateId,
+        parentTurnId: 'main-turn',
+      });
+    });
   });
 
   it('sends clarify choices and routes Other into freeform clarify responses', async () => {

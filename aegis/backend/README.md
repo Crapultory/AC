@@ -96,6 +96,7 @@ The standalone backend currently supports these API areas:
 - Auth and session: `/api/auth/login`, `/api/auth/register`, `/api/auth/session`, `/api/auth/logout`, `/api/auth/password`
 - User management: `/api/users`, `/api/users/{uid}/status`, `/api/users/{uid}/password`, `/api/users/{uid}`
 - System: `/health`, `/api/system/bootstrap`
+- Overview: `/api/overview/agents`, `/api/overview/stats`
 - Agents: `/api/agents`, `/api/agents/{agent_id}`
 - Global routing: `/api/routing/global`, `/api/routing/global/{rule_id}`
 

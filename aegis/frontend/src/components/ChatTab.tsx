@@ -19,12 +19,14 @@ import {
   Send,
   ShieldAlert,
   Trash2,
+  Workflow,
 } from 'lucide-react';
 import {
   AegisChatProvider,
   useAegisChatRuntime,
   useOptionalAegisChatRuntime,
 } from '../lib/chatRuntime';
+import SessionWorkflow from './SessionWorkflow';
 
 interface ChatTabProps {
   agents: Agent[];
@@ -112,6 +114,8 @@ function ChatTabContent({ agents }: ChatTabProps) {
   const [copiedMessageId, setCopiedMessageId] = useState('');
   const [showDelegateTools, setShowDelegateTools] = useState(false);
   const [expandedMessageIds, setExpandedMessageIds] = useState<Record<string, boolean>>({});
+  const [workflowDrawerOpen, setWorkflowDrawerOpen] = useState(false);
+  const [workflowFullscreen, setWorkflowFullscreen] = useState(false);
   const bottomRef = useRef<HTMLDivElement>(null);
   const copyFeedbackTimeoutRef = useRef<number | null>(null);
 
@@ -126,6 +130,28 @@ function ChatTabContent({ agents }: ChatTabProps) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [conversations, activeConvId]);
+
+  useEffect(() => {
+    if (!workflowDrawerOpen) {
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        if (workflowFullscreen) {
+          setWorkflowFullscreen(false);
+        } else {
+          setWorkflowDrawerOpen(false);
+        }
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [workflowDrawerOpen, workflowFullscreen]);
+
+  function closeWorkflow() {
+    setWorkflowFullscreen(false);
+    setWorkflowDrawerOpen(false);
+  }
 
   function handleCreateNewConversation() {
     createConversation();
@@ -212,10 +238,12 @@ function ChatTabContent({ agents }: ChatTabProps) {
   const composerPlaceholder = activeConversation?.pendingClarify?.awaitingText
     ? 'Answer clarify prompt... 输入你的补充说明'
     : "Ask Aegis anything... 触发关键词：'钓鱼邮件', '勒索病毒', '敏感泄露'...";
-
   return (
-    <div className="flex h-full w-full bg-[#020408] items-stretch overflow-hidden text-xs">
-      <div className={`${sidebarCollapsed ? 'w-16' : 'w-80'} border-r border-slate-800 bg-[#05080F] flex flex-col pt-4 shrink-0 z-10 transition-[width] duration-200`}>
+    <div className={`flex bg-[#020408] items-stretch overflow-hidden text-xs ${
+      workflowDrawerOpen ? 'fixed inset-0 z-50 h-screen w-screen' : 'h-full w-full'
+    }`}>
+      {!workflowDrawerOpen ? (
+        <div className={`${sidebarCollapsed ? 'w-16' : 'w-80'} border-r border-slate-800 bg-[#05080F] flex flex-col pt-4 shrink-0 z-10 transition-[width] duration-200`}>
         <div className={`${sidebarCollapsed ? 'px-2 pb-3' : 'px-4 pb-3'} border-b border-slate-800 space-y-3`}>
           <div className={`flex ${sidebarCollapsed ? 'flex-col gap-2' : 'justify-between items-center'}`}>
             {!sidebarCollapsed ? (
@@ -230,6 +258,19 @@ function ChatTabContent({ agents }: ChatTabProps) {
                 title={sidebarCollapsed ? 'Expand session sidebar' : 'Collapse session sidebar'}
               >
                 {sidebarCollapsed ? <ChevronRight className="h-4 w-4" /> : <ChevronLeft className="h-4 w-4" />}
+              </button>
+              <button
+                type="button"
+                aria-label="Open workflow visualization"
+                aria-pressed={workflowDrawerOpen}
+                onClick={() => {
+                  setWorkflowFullscreen(false);
+                  setWorkflowDrawerOpen(true);
+                }}
+                className="p-2 rounded border border-slate-800 bg-[#080C14] text-slate-400 hover:text-cyan-300 hover:border-cyan-900/50 transition-all"
+                title="Open session workflow"
+              >
+                <Workflow className="h-4 w-4" aria-hidden="true" />
               </button>
               <button
                 type="button"
@@ -345,9 +386,23 @@ function ChatTabContent({ agents }: ChatTabProps) {
             {!sidebarCollapsed ? <span>清空运行环境缓存</span> : null}
           </button>
         </div>
-      </div>
+        </div>
+      ) : null}
 
-      <div className={`flex-1 flex flex-col h-full min-w-0 bg-[#020408] relative ${composerExpanded ? 'pb-32' : 'pb-16'}`}>
+      {workflowDrawerOpen ? (
+        <SessionWorkflow
+          conversation={activeConversation}
+          fullscreen={workflowFullscreen}
+          onFullscreenChange={setWorkflowFullscreen}
+          onClose={closeWorkflow}
+        />
+      ) : null}
+
+      {!workflowFullscreen ? (
+        <div
+          data-testid="chat-workspace"
+          className={`${workflowDrawerOpen ? 'w-1/2 shrink-0' : 'flex-1'} flex flex-col h-full min-w-0 bg-[#020408] relative ${composerExpanded ? 'pb-32' : 'pb-16'}`}
+        >
         <div className="p-4 border-b border-slate-800 bg-[#03060C] flex justify-between items-center">
           <div>
             <h3 className="text-sm font-bold text-white flex items-center gap-1.5 uppercase italic">
@@ -675,7 +730,8 @@ function ChatTabContent({ agents }: ChatTabProps) {
             <Send className="h-3 w-3" /> 发送
           </button>
         </div>
-      </div>
+        </div>
+      ) : null}
     </div>
   );
 }

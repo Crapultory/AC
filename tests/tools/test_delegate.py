@@ -47,6 +47,7 @@ def _make_mock_parent(depth=0):
     parent.api_mode = "chat_completions"
     parent.model = "anthropic/claude-sonnet-4"
     parent.platform = "cli"
+    parent._user_env_platform = None
     parent.providers_allowed = None
     parent.providers_ignored = None
     parent.providers_order = None
@@ -434,6 +435,28 @@ class TestDelegateTask(unittest.TestCase):
             )
 
         self.assertIs(mock_child._print_fn, sink)
+
+    def test_child_preserves_originating_user_platform(self):
+        parent = _make_mock_parent(depth=0)
+        parent.platform = "subagent"
+        parent._user_env_platform = "aegis"
+
+        with patch("run_agent.AIAgent") as MockAgent:
+            mock_child = MagicMock()
+            MockAgent.return_value = mock_child
+
+            _build_child_agent(
+                task_index=0,
+                goal="Preserve authorization identity",
+                context=None,
+                toolsets=None,
+                model=None,
+                max_iterations=10,
+                parent_agent=parent,
+                task_count=1,
+            )
+
+        self.assertEqual(mock_child._user_env_platform, "aegis")
 
     def test_child_uses_thinking_callback_when_progress_callback_available(self):
         parent = _make_mock_parent(depth=0)
