@@ -744,12 +744,17 @@ def test_chat_session_manager_injects_active_aegis_context_as_xml(
     assert captured["session_id"] == actor.session_id
     assert captured["platform"] == "aegis"
     prompt = captured["ephemeral_system_prompt"]
-    assert "<aegis>" in prompt
-    assert '<agent name="alpha" url="http://127.0.0.1:9001/a2a">' in prompt
+    assert "<aegis_context>" in prompt
+    assert (
+        '<agent name="alpha" url="http://127.0.0.1:9001/a2a" status="active" available="true">'
+        in prompt
+    )
     assert "<capability>name=triage | description=triage alerts</capability>" in prompt
     assert "<capability>triage alerts</capability>" in prompt
-    assert "SOC escalation" not in prompt
-    assert "route P1 alerts to alpha" not in prompt
+    assert "<global_routing>" in prompt
+    assert '<rule id="rule1234" status="active">' in prompt
+    assert "<name>SOC escalation</name>" in prompt
+    assert "<policy>route P1 alerts to alpha</policy>" in prompt
     assert "bravo" not in prompt
     assert "should not appear" not in prompt
     assert "Authorization" not in prompt

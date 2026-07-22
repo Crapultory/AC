@@ -62,13 +62,6 @@ const ROUTING_STATUS_TO_API: Record<RoutingRuleStatus, BackendRoutingStatus> = {
   Disabled: 'inactive',
 };
 
-export function parseCapabilities(text: string): string[] {
-  return text
-    .split(/\r?\n|,/)
-    .map((entry) => entry.trim())
-    .filter(Boolean);
-}
-
 export function backendAgentToUi(agent: BackendAgent | BackendOverviewAgent): Agent {
   const headerEntries = Object.entries(agent.headers || {});
   const [authHeaderKey = 'Authorization', authHeaderValue = ''] = headerEntries[0] || [];
@@ -99,7 +92,7 @@ export function uiAgentDraftToApi(agent: AgentDraft): Omit<BackendAgent, 'agent_
     description: agent.description.trim(),
     headers,
     status: AGENT_STATUS_TO_API[agent.status],
-    extcapabilities: parseCapabilities(agent.extCapabilitiesText),
+    extcapabilities: agent.extCapabilities.map((capability) => capability.trim()).filter(Boolean),
   };
 }
 

@@ -54,7 +54,7 @@ export interface AgentDraft {
   status: AgentStatus;
   authHeaderKey: string;
   authHeaderValue: string;
-  extCapabilitiesText: string;
+  extCapabilities: string[];
 }
 
 export interface RoutingRuleDraft {

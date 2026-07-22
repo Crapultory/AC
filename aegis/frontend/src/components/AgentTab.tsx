@@ -34,7 +34,7 @@ export default function AgentTab({
   const [formA2aAddr, setFormA2aAddr] = useState('');
   const [formAuthHeaderKey, setFormAuthHeaderKey] = useState('Authorization');
   const [formAuthHeaderValue, setFormAuthHeaderValue] = useState('');
-  const [formSkill, setFormSkill] = useState('');
+  const [formCapabilities, setFormCapabilities] = useState<string[]>([]);
 
   const total = agents.length;
   const active = agents.filter((agent) => agent.status === 'Active').length;
@@ -59,7 +59,7 @@ export default function AgentTab({
     setFormA2aAddr('');
     setFormAuthHeaderKey('Authorization');
     setFormAuthHeaderValue('');
-    setFormSkill('');
+    setFormCapabilities([]);
     setError('');
   }
 
@@ -77,7 +77,7 @@ export default function AgentTab({
     setFormA2aAddr(agent.a2aAddr || '');
     setFormAuthHeaderKey(agent.authHeaderKey || 'Authorization');
     setFormAuthHeaderValue(agent.authHeaderValue || '');
-    setFormSkill((agent.extCapabilities || []).join('\n'));
+    setFormCapabilities([...(agent.extCapabilities || [])]);
     setError('');
     setIsModalOpen(true);
   }
@@ -93,6 +93,20 @@ export default function AgentTab({
     } catch (caughtError) {
       alertApiError(caughtError, '删除智能体失败。');
     }
+  }
+
+  function handleAddCapability() {
+    setFormCapabilities((current) => [...current, '']);
+  }
+
+  function handleChangeCapability(index: number, value: string) {
+    setFormCapabilities((current) => current.map((capability, currentIndex) => (
+      currentIndex === index ? value : capability
+    )));
+  }
+
+  function handleRemoveCapability(index: number) {
+    setFormCapabilities((current) => current.filter((_, currentIndex) => currentIndex !== index));
   }
 
   async function handleSaveAgent(event: React.FormEvent) {
@@ -112,7 +126,7 @@ export default function AgentTab({
       status: formStatus,
       authHeaderKey: formAuthHeaderKey.trim() || 'Authorization',
       authHeaderValue: formAuthHeaderValue.trim(),
-      extCapabilitiesText: formSkill,
+      extCapabilities: formCapabilities,
     };
 
     try {
@@ -302,7 +316,7 @@ export default function AgentTab({
               initial={{ scale: 0.96, opacity: 0 }}
               animate={{ scale: 1, opacity: 1 }}
               exit={{ scale: 0.96, opacity: 0 }}
-              className="flex w-full max-w-lg flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#05080F] shadow-2xl"
+              className="flex max-h-[calc(100vh-2rem)] w-full max-w-lg flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#05080F] shadow-2xl"
             >
               <div className="flex items-center justify-between border-b border-slate-800/80 bg-[#03060C] p-4">
                 <h4 className="text-xs font-bold uppercase tracking-wider text-white">
@@ -316,7 +330,7 @@ export default function AgentTab({
                 </button>
               </div>
 
-              <form onSubmit={(event) => void handleSaveAgent(event)} className="flex-1 space-y-4 p-4">
+              <form onSubmit={(event) => void handleSaveAgent(event)} className="min-h-0 flex-1 space-y-4 overflow-y-auto p-4 scrollbar-thin">
                 <div className="grid grid-cols-2 gap-3.5">
                   <div className="col-span-2 space-y-1">
                     <label className="text-[9px] font-mono font-bold uppercase tracking-wider text-slate-500">Agent ID *</label>
@@ -391,16 +405,48 @@ export default function AgentTab({
                   </div>
 
                   <div className="col-span-2 space-y-1">
-                    <label className="text-[9px] font-mono font-bold uppercase tracking-wider text-slate-500">
-                      技能描述 / 能力列表
-                    </label>
-                    <textarea
-                      rows={4}
-                      value={formSkill}
-                      onChange={(event) => setFormSkill(event.target.value)}
-                      placeholder="每行一条 capability，或用逗号分隔"
-                      className="w-full rounded border border-slate-800 bg-[#020408] px-2.5 py-1.5 font-mono text-xs text-white placeholder-slate-700 focus:border-cyan-500 focus:outline-none"
-                    />
+                    <div className="flex items-center justify-between gap-3">
+                      <label className="text-[9px] font-mono font-bold uppercase tracking-wider text-slate-500">
+                        技能描述 / 能力列表
+                      </label>
+                      <button
+                        type="button"
+                        onClick={handleAddCapability}
+                        aria-label="添加能力描述"
+                        className="flex items-center gap-1 rounded border border-cyan-900/60 bg-cyan-950/20 px-2 py-1 text-[10px] font-mono font-semibold text-cyan-300 transition-colors hover:border-cyan-500 hover:bg-cyan-950/50 hover:text-cyan-100"
+                      >
+                        <Plus className="h-3 w-3" /> 添加能力
+                      </button>
+                    </div>
+                    <p className="text-[10px] leading-relaxed text-slate-600">一项能力对应一个输入框，可填写多行描述。</p>
+                    {formCapabilities.length === 0 ? (
+                      <div className="rounded border border-dashed border-slate-800 bg-[#020408]/60 px-3 py-2 font-mono text-[10px] text-slate-600">
+                        尚未添加能力描述
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {formCapabilities.map((capability, index) => (
+                          <div key={index} className="flex items-stretch gap-2 rounded border border-slate-800 bg-[#020408] p-1.5 focus-within:border-cyan-700">
+                            <textarea
+                              rows={1}
+                              value={capability}
+                              onChange={(event) => handleChangeCapability(index, event.target.value)}
+                              aria-label={`能力描述 ${index + 1}`}
+                              placeholder="描述该 Agent 可执行的单项能力"
+                              className="flex-1 resize-y bg-transparent px-1 py-0.5 font-mono text-xs leading-relaxed text-white placeholder-slate-700 focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => handleRemoveCapability(index)}
+                              aria-label={`删除能力描述 ${index + 1}`}
+                              className="self-start rounded p-1.5 text-slate-600 transition-colors hover:bg-rose-950/40 hover:text-rose-300"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
                 </div>
 

@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../App';
 import type { AuthenticatedUser } from '../../types';
@@ -151,7 +151,7 @@ describe('Aegis App integration', () => {
       },
     ];
     const users = [adminUser];
-    const requests: Array<{ url: string; method: string; auth: string | null }> = [];
+    const requests: Array<{ url: string; method: string; auth: string | null; body?: string }> = [];
 
     global.fetch = vi.fn(async (input, init) => {
       const url = typeof input === 'string' ? input : input.toString();
@@ -161,6 +161,7 @@ describe('Aegis App integration', () => {
         url,
         method,
         auth: headers.get('Authorization'),
+        body: typeof init?.body === 'string' ? init.body : undefined,
       });
 
       if (url === '/api/auth/session') {
@@ -197,9 +198,15 @@ describe('Aegis App integration', () => {
           description: 'New agent description',
           headers: { Authorization: 'Bearer abc' },
           status: 'idle',
-          extcapabilities: ['cap-a', 'cap-b'],
+          extcapabilities: ['cap-a\nwith details', 'cap-b'],
         });
         return jsonResponse(agents[agents.length - 1], 201);
+      }
+      if (url === '/api/agents/new-agent' && method === 'PUT') {
+        const requestBody = JSON.parse(String(init?.body));
+        const agentIndex = agents.findIndex((agent) => agent.agent_id === 'new-agent');
+        agents[agentIndex] = { ...agents[agentIndex], ...requestBody };
+        return jsonResponse(agents[agentIndex]);
       }
       if (url === '/api/routing/global' && method === 'POST') {
         rules.push({
@@ -285,11 +292,34 @@ describe('Aegis App integration', () => {
     fireEvent.change(screen.getByPlaceholderText(/审计服务器特权指令偏差/i), {
       target: { value: 'New agent description' },
     });
-    fireEvent.change(screen.getByPlaceholderText(/每行一条 capability/i), {
-      target: { value: 'cap-a\ncap-b' },
+    fireEvent.click(screen.getByRole('button', { name: /添加能力描述/i }));
+    fireEvent.click(screen.getByRole('button', { name: /添加能力描述/i }));
+    const capabilityInputs = screen.getAllByRole('textbox', { name: /能力描述/i });
+    fireEvent.change(capabilityInputs[0], {
+      target: { value: 'cap-a\nwith details' },
+    });
+    fireEvent.change(capabilityInputs[1], {
+      target: { value: 'cap-b' },
     });
     fireEvent.click(screen.getByRole('button', { name: /save/i }));
     await screen.findByText('new-agent');
+    expect(JSON.parse(requests.find(({ url, method }) => url === '/api/agents/new-agent' && method === 'POST')?.body || '{}'))
+      .toMatchObject({ extcapabilities: ['cap-a\nwith details', 'cap-b'] });
+
+    const newAgentRow = screen.getByText('new-agent').closest('tr');
+    expect(newAgentRow).not.toBeNull();
+    fireEvent.click(within(newAgentRow as HTMLTableRowElement).getByTitle('Edit Agent details'));
+    expect(screen.getAllByRole('textbox', { name: /能力描述/i })).toHaveLength(2);
+    expect(screen.getByRole('textbox', { name: '能力描述 1' })).toHaveValue('cap-a\nwith details');
+    fireEvent.click(screen.getByRole('button', { name: '删除能力描述 1' }));
+    fireEvent.click(screen.getByRole('button', { name: '删除能力描述 1' }));
+    fireEvent.click(screen.getByRole('button', { name: /添加能力描述/i }));
+    fireEvent.click(screen.getByRole('button', { name: /save/i }));
+    await waitFor(() => {
+      const updateRequest = requests.find(({ url, method }) => url === '/api/agents/new-agent' && method === 'PUT');
+      expect(updateRequest).toBeDefined();
+      expect(JSON.parse(updateRequest?.body || '{}')).toMatchObject({ extcapabilities: [] });
+    });
 
     fireEvent.click(screen.getByRole('button', { name: /routing policy/i }));
     fireEvent.click(await screen.findByRole('button', { name: /新建路由规则/i }));
