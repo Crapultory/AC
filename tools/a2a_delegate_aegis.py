@@ -8,7 +8,7 @@ import sqlite3
 import threading
 import uuid
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, Literal
 
@@ -355,6 +355,91 @@ class AegisDelegateStore:
             record["is_delegate_output"] = bool(record["is_delegate_output"])
             logs.append(record)
         return AuditPage(logs=logs, total=total, page=page, page_size=page_size)
+
+    def get_overview_stats(self, *, now: datetime | None = None) -> dict[str, Any]:
+        """Return aggregate A2A delegation metrics for the current and prior seven-day windows."""
+        window_end = now or datetime.now(UTC)
+        if window_end.tzinfo is None:
+            window_end = window_end.replace(tzinfo=UTC)
+        window_end = window_end.astimezone(UTC)
+        window_start = window_end - timedelta(days=7)
+        previous_start = window_start - timedelta(days=7)
+
+        with self._lock, self._connect() as conn:
+            current = self._aggregate_audits(conn, window_start, window_end)
+            previous = self._aggregate_audits(conn, previous_start, window_start)
+
+        success_rate = self._success_rate(current)
+        previous_success_rate = self._success_rate(previous)
+        previous_total = previous["delegation_total"]
+        volume_change = (
+            ((current["delegation_total"] - previous_total) / previous_total) * 100
+            if previous_total
+            else None
+        )
+        success_rate_change = (
+            (success_rate - previous_success_rate) * 100
+            if success_rate is not None and previous_success_rate is not None
+            else None
+        )
+
+        return {
+            "window_start": self._format_utc_timestamp(window_start),
+            "window_end": self._format_utc_timestamp(window_end),
+            "executing_agent_count": current["executing_agent_count"],
+            "source_platform_count": current["source_platform_count"],
+            "active_user_count": current["active_user_count"],
+            "delegation_total": current["delegation_total"],
+            "success_count": current["succ"],
+            "success_rate": success_rate,
+            "status_counts": {
+                "succ": current["succ"],
+                "fail": current["fail"],
+                "auth_denied": current["auth_denied"],
+            },
+            "comparison": {
+                "previous_delegation_total": previous_total,
+                "delegation_volume_change_percent": volume_change,
+                "previous_success_rate": previous_success_rate,
+                "success_rate_change_percentage_points": success_rate_change,
+            },
+        }
+
+    @staticmethod
+    def _aggregate_audits(
+        conn: sqlite3.Connection,
+        window_start: datetime,
+        window_end: datetime,
+    ) -> dict[str, int]:
+        row = conn.execute(
+            "SELECT "
+            "COUNT(*) AS delegation_total, "
+            "COUNT(DISTINCT CASE WHEN TRIM(agent_name) <> '' THEN TRIM(agent_name) END) "
+            "AS executing_agent_count, "
+            "COUNT(DISTINCT CASE WHEN TRIM(platform) <> '' THEN LOWER(TRIM(platform)) END) "
+            "AS source_platform_count, "
+            "COUNT(DISTINCT CASE WHEN TRIM(user_id) <> '' THEN TRIM(user_id) END) "
+            "AS active_user_count, "
+            "COALESCE(SUM(CASE WHEN status = 'succ' THEN 1 ELSE 0 END), 0) AS succ, "
+            "COALESCE(SUM(CASE WHEN status = 'fail' THEN 1 ELSE 0 END), 0) AS fail, "
+            "COALESCE(SUM(CASE WHEN status = 'auth_denied' THEN 1 ELSE 0 END), 0) "
+            "AS auth_denied "
+            "FROM a2a_delegate_audit WHERE timestamp >= ? AND timestamp < ?",
+            (
+                AegisDelegateStore._format_utc_timestamp(window_start),
+                AegisDelegateStore._format_utc_timestamp(window_end),
+            ),
+        ).fetchone()
+        return {key: int(row[key]) for key in row.keys()}
+
+    @staticmethod
+    def _success_rate(aggregate: dict[str, int]) -> float | None:
+        total = aggregate["delegation_total"]
+        return aggregate["succ"] / total if total else None
+
+    @staticmethod
+    def _format_utc_timestamp(value: datetime) -> str:
+        return value.astimezone(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z")
 
 
 _STORE_CACHE: dict[Path, AegisDelegateStore] = {}

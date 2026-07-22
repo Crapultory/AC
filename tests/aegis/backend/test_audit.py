@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from datetime import UTC, datetime
+
 import jwt
 from fastapi.testclient import TestClient
 
@@ -131,6 +133,64 @@ def test_audit_api_validates_pagination_and_status(client: TestClient) -> None:
         headers=AUTH_HEADERS,
         params={"page": 0},
     ).status_code == 422
+
+
+def test_overview_stats_api_returns_aggregates_to_authenticated_non_admin_users(
+    client: TestClient,
+    hermes_home,
+) -> None:
+    store = AegisDelegateStore(hermes_home / "aegis.db")
+    store.record_audit(
+        platform="slack",
+        user_id="u-1",
+        user_name="Alice",
+        agent_name="responder",
+        goal="Investigate phishing",
+        session_id="remote-1",
+        is_loop=False,
+        is_delegate_output=True,
+        status="succ",
+        timestamp=datetime.now(UTC).isoformat(timespec="microseconds").replace("+00:00", "Z"),
+    )
+    create = client.post(
+        "/api/users",
+        headers=AUTH_HEADERS,
+        json={
+            "username": "analyst",
+            "password": "Password123!",
+            "email": "analyst@example.com",
+            "status": "enabled",
+        },
+    )
+    assert create.status_code == 201
+    login = client.post(
+        "/api/auth/login",
+        json={"username": "analyst", "password": "Password123!"},
+    )
+    headers = {"Authorization": f"Bearer {login.json()['access_token']}"}
+
+    unauthenticated = client.get("/api/overview/stats")
+    assert unauthenticated.status_code == 401
+
+    response = client.get("/api/overview/stats", headers=headers)
+    assert response.status_code == 200
+    assert response.json() == {
+        "window_start": response.json()["window_start"],
+        "window_end": response.json()["window_end"],
+        "executing_agent_count": 1,
+        "source_platform_count": 1,
+        "active_user_count": 1,
+        "delegation_total": 1,
+        "success_count": 1,
+        "success_rate": 1.0,
+        "status_counts": {"succ": 1, "fail": 0, "auth_denied": 0},
+        "comparison": {
+            "previous_delegation_total": 0,
+            "delegation_volume_change_percent": None,
+            "previous_success_rate": None,
+            "success_rate_change_percentage_points": None,
+        },
+    }
     assert client.get(
         "/api/audit/a2a-delegates",
         headers=AUTH_HEADERS,

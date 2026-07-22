@@ -199,6 +199,32 @@ class OverviewAgentListResponse(BaseModel):
     agents: list[OverviewAgentResponse]
 
 
+class OverviewStatusCountsResponse(BaseModel):
+    succ: int = Field(ge=0)
+    fail: int = Field(ge=0)
+    auth_denied: int = Field(ge=0)
+
+
+class OverviewStatsComparisonResponse(BaseModel):
+    previous_delegation_total: int = Field(ge=0)
+    delegation_volume_change_percent: float | None = None
+    previous_success_rate: float | None = Field(default=None, ge=0, le=1)
+    success_rate_change_percentage_points: float | None = None
+
+
+class OverviewStatsResponse(BaseModel):
+    window_start: str
+    window_end: str
+    executing_agent_count: int = Field(ge=0)
+    source_platform_count: int = Field(ge=0)
+    active_user_count: int = Field(ge=0)
+    delegation_total: int = Field(ge=0)
+    success_count: int = Field(ge=0)
+    success_rate: float | None = Field(default=None, ge=0, le=1)
+    status_counts: OverviewStatusCountsResponse
+    comparison: OverviewStatsComparisonResponse
+
+
 class AgentDeleteResponse(BaseModel):
     deleted: bool
     agent_id: str

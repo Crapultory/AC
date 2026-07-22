@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import App from '../../App';
 import type { AuthenticatedUser } from '../../types';
@@ -85,6 +85,7 @@ describe('Aegis App integration', () => {
     cleanup();
     global.fetch = originalFetch;
     globalThis.WebSocket = originalWebSocket;
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -762,5 +763,56 @@ describe('Aegis App integration', () => {
 
     fireEvent.click(screen.getByRole('button', { name: /aegis chat/i }));
     expect(mainViewport?.firstElementChild).not.toHaveClass('select-none');
+  });
+
+  it('refreshes Overview delegation stats every 60 seconds', async () => {
+    vi.useFakeTimers();
+    seedStoredAuth(analystUser);
+    let statsCalls = 0;
+
+    global.fetch = vi.fn(async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/auth/session') {
+        return jsonResponse({ authenticated: true, user: analystUser, expires_in: 28800 });
+      }
+      if (url === '/api/overview/agents') {
+        return jsonResponse({ agents: [] });
+      }
+      if (url === '/api/overview/stats') {
+        statsCalls += 1;
+        return jsonResponse({
+          window_start: '2026-07-15T00:00:00.000000Z',
+          window_end: '2026-07-22T00:00:00.000000Z',
+          executing_agent_count: 1,
+          source_platform_count: 1,
+          active_user_count: 1,
+          delegation_total: statsCalls,
+          success_count: statsCalls,
+          success_rate: 1,
+          status_counts: { succ: statsCalls, fail: 0, auth_denied: 0 },
+          comparison: {
+            previous_delegation_total: 0,
+            delegation_volume_change_percent: null,
+            previous_success_rate: null,
+            success_rate_change_percentage_points: null,
+          },
+        });
+      }
+      throw new Error(`Unhandled request: GET ${url}`);
+    }) as typeof global.fetch;
+
+    render(<App />);
+
+    await act(async () => {
+      await Promise.resolve();
+      await Promise.resolve();
+      await Promise.resolve();
+    });
+    expect(statsCalls).toBe(1);
+
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(60_000);
+    });
+    expect(statsCalls).toBe(2);
   });
 });

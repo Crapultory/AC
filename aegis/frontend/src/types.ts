@@ -92,6 +92,32 @@ export interface DelegateAuditPage {
   page_size: number;
 }
 
+export interface OverviewStatusCounts {
+  succ: number;
+  fail: number;
+  auth_denied: number;
+}
+
+export interface OverviewStatsComparison {
+  previous_delegation_total: number;
+  delegation_volume_change_percent: number | null;
+  previous_success_rate: number | null;
+  success_rate_change_percentage_points: number | null;
+}
+
+export interface OverviewStats {
+  window_start: string;
+  window_end: string;
+  executing_agent_count: number;
+  source_platform_count: number;
+  active_user_count: number;
+  delegation_total: number;
+  success_count: number;
+  success_rate: number | null;
+  status_counts: OverviewStatusCounts;
+  comparison: OverviewStatsComparison;
+}
+
 export interface ChainStep {
   id?: string;
   agentName: string;

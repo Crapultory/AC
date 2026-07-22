@@ -11,6 +11,7 @@ from aegis.backend.models import (
     AgentPolicyUpsertRequest,
     DelegateAuditListResponse,
     DelegateAuditResponse,
+    OverviewStatsResponse,
 )
 from tools.a2a_delegate_aegis import (
     AegisDelegateStore,
@@ -68,6 +69,9 @@ class DelegateSecurityService:
             page=page.page,
             page_size=page.page_size,
         )
+
+    def get_overview_stats(self) -> OverviewStatsResponse:
+        return OverviewStatsResponse.model_validate(self._store.get_overview_stats())
 
     @staticmethod
     def _not_found(rank_id: int) -> HTTPException:
