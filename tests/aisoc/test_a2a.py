@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, replace
 import logging
+import re
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 from uuid import uuid4
@@ -267,7 +268,7 @@ def _auth_headers(token: str) -> dict[str, str]:
 
 
 @pytest.mark.asyncio
-async def test_a2a_executor_scopes_cached_agent_by_source_user() -> None:
+async def test_a2a_executor_uses_context_id_as_cached_agent_session() -> None:
     created: list[str] = []
 
     def _factory(session_id: str):
@@ -275,15 +276,65 @@ async def test_a2a_executor_scopes_cached_agent_by_source_user() -> None:
         return object()
 
     executor = a2a_executor.HermesA2AExecutor(agent_factory=_factory)
-    first_key = executor._agent_key("shared-context", {"platform": "slack", "uid": "user-a"})
-    second_key = executor._agent_key("shared-context", {"platform": "slack", "uid": "user-b"})
+    first_session_id = executor._resolve_agent_session_id("shared-context")
+    second_session_id = executor._resolve_agent_session_id("shared-context")
 
-    first = await executor._get_agent(first_key)
-    second = await executor._get_agent(second_key)
+    first = await executor._get_agent(first_session_id)
+    second = await executor._get_agent(second_session_id)
 
-    assert first is not second
-    assert first_key != second_key
-    assert created == [first_key, second_key]
+    assert first is second
+    assert first_session_id == second_session_id == "shared-context"
+    assert created == ["shared-context"]
+
+
+def test_a2a_executor_generates_a_prefixed_session_id_without_context() -> None:
+    executor = a2a_executor.HermesA2AExecutor()
+
+    session_id = executor._resolve_agent_session_id("")
+
+    assert re.fullmatch(r"a2a-[0-9a-f]{32}", session_id)
+
+
+@pytest.mark.asyncio
+async def test_a2a_explicit_context_is_used_as_internal_agent_session() -> None:
+    created: list[str] = []
+
+    def _factory(session_id: str):
+        created.append(session_id)
+        return _StreamingAgent()
+
+    bundle = await _task_bundle(_factory)
+    try:
+        task = await _send_text(
+            bundle.client,
+            '<source>{"platform":"slack","uid":"user-a"}</source>\nhello',
+            context_id="caller-context",
+        )
+        completed = await _wait_for_state(bundle.client, task.id, {TaskState.TASK_STATE_COMPLETED})
+
+        assert completed.context_id == "caller-context"
+        assert created == ["caller-context"]
+    finally:
+        await bundle.close()
+
+
+@pytest.mark.asyncio
+async def test_a2a_sdk_generated_context_is_used_as_internal_agent_session() -> None:
+    created: list[str] = []
+
+    def _factory(session_id: str):
+        created.append(session_id)
+        return _StreamingAgent()
+
+    bundle = await _task_bundle(_factory)
+    try:
+        task = await _send_text(bundle.client, "hello")
+        completed = await _wait_for_state(bundle.client, task.id, {TaskState.TASK_STATE_COMPLETED})
+
+        assert completed.context_id
+        assert created == [completed.context_id]
+    finally:
+        await bundle.close()
 
 
 async def _task_bundle(
@@ -671,6 +722,7 @@ async def test_a2a_continues_conversation_with_context_history() -> None:
         first_task = await _send_text(bundle.client, "first turn")
         first_done = await _wait_for_state(bundle.client, first_task.id, {TaskState.TASK_STATE_COMPLETED})
         assert first_done.status.message.parts[0].text == "history=0::first turn"
+        assert created_agents[0].session_id == first_done.context_id
 
         second_task = await _send_text(
             bundle.client,

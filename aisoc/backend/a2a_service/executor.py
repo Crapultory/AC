@@ -4,11 +4,11 @@ from __future__ import annotations
 
 import asyncio
 from collections.abc import Callable
-import hashlib
 import inspect
 import json
 import logging
 import re as _re
+import uuid
 
 from a2a.helpers.proto_helpers import new_task_from_user_message
 from a2a.server.agent_execution import AgentExecutor, RequestContext
@@ -150,10 +150,10 @@ class HermesA2AExecutor(AgentExecutor):
                 )
             return
 
-        agent_key = self._agent_key(task.context_id, _source_meta)
-        agent = await self._get_agent(agent_key)
+        agent_session_id = self._resolve_agent_session_id(task.context_id)
+        agent = await self._get_agent(agent_session_id)
         async with self._lock:
-            self._task_agent_keys[task.id] = agent_key
+            self._task_agent_keys[task.id] = agent_session_id
         agent._pending_source_meta = _source_meta  # per-request 注入，供 _run_agent_conversation 使用
 
         # ── 路径 C：构建 Session Context Prompt，动态注入 agent.ephemeral_system_prompt ──
@@ -306,23 +306,24 @@ class HermesA2AExecutor(AgentExecutor):
         return history_to_a2a(history, context_id=context_id, task_id=task_id)
 
     @staticmethod
-    def _agent_key(context_id: str, source_meta: dict[str, object]) -> str:
-        """Scope A2A cached agents by source user when one is available."""
-        user_id = str(source_meta.get("uid") or "").strip()
-        if not user_id:
-            return context_id
-        platform = str(source_meta.get("platform") or "a2a").strip() or "a2a"
-        digest = hashlib.sha256(
-            f"{platform}\0{user_id}\0{context_id}".encode("utf-8")
-        ).hexdigest()[:32]
-        return f"a2a-{digest}"
+    def _resolve_agent_session_id(context_id: object) -> str:
+        """Use the A2A context as the Hermes session identifier.
 
-    async def _get_agent(self, agent_key: str):
+        The normal A2A request path assigns a context ID before execution.
+        Retain a defensive fallback for direct executor invocations that do
+        not provide one.
+        """
+        normalized_context_id = str(context_id or "").strip()
+        if normalized_context_id:
+            return normalized_context_id
+        return f"a2a-{uuid.uuid4().hex}"
+
+    async def _get_agent(self, session_id: str):
         async with self._lock:
-            agent = self._agents.get(agent_key)
+            agent = self._agents.get(session_id)
             if agent is None:
-                agent = self._agent_factory(agent_key)
-                self._agents[agent_key] = agent
+                agent = self._agent_factory(session_id)
+                self._agents[session_id] = agent
             return agent
 
     def _agent_accepts_stream_callback(self, agent: object) -> bool:
