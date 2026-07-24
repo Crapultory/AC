@@ -196,3 +196,59 @@ def test_overview_stats_api_returns_aggregates_to_authenticated_non_admin_users(
         headers=AUTH_HEADERS,
         params={"status": "pending"},
     ).status_code == 422
+
+
+def test_overview_topology_api_returns_the_three_layer_starmapping(client: TestClient) -> None:
+    unauthenticated = client.get("/api/overview/topology")
+    assert unauthenticated.status_code == 401
+
+    response = client.get("/api/overview/topology", headers=AUTH_HEADERS)
+    assert response.status_code == 200
+    topology = response.json()
+
+    assert topology["center"] == {
+        "id": "aegis",
+        "layer": "center",
+        "name": "Aegis",
+        "symbol": "aegis-connection",
+        "role": "Security & Operations Orchestration Core",
+        "description": "跨域任务路由、策略约束、Agent 委派、证据汇聚、风险升级与可审计闭环的中枢。",
+        "capabilities": [
+            "intent-routing",
+            "policy-enforcement",
+            "agent-delegation",
+            "evidence-correlation",
+            "risk-prioritization",
+            "audit-trail",
+        ],
+        "layout": {"x": 0.5, "y": 0.5, "radius": "core"},
+    }
+    assert len(topology["agents"]) == 7
+    assert sum(len(agent["star_nodes"]) for agent in topology["agents"]) == 84
+    assert len(topology["edges"]) == 91
+    assert topology["agents"][0]["id"] == "ai-soc"
+    assert topology["agents"][0]["symbol"] == "argus-eyes"
+    assert topology["agents"][0]["runtime"] == {
+        "status": "planned",
+        "source": "starmapping_baseline",
+    }
+
+
+def test_overview_topology_api_overlays_matching_a2a_agent_runtime(client: TestClient) -> None:
+    created = client.post(
+        "/api/agents/ai-soc",
+        headers=AUTH_HEADERS,
+        json={
+            "url": "http://127.0.0.1:9086/a2a",
+            "description": "Argus runtime",
+            "headers": {},
+            "status": "active",
+            "extcapabilities": [],
+        },
+    )
+    assert created.status_code == 201
+
+    response = client.get("/api/overview/topology", headers=AUTH_HEADERS)
+    assert response.status_code == 200
+    argus = next(agent for agent in response.json()["agents"] if agent["id"] == "ai-soc")
+    assert argus["runtime"] == {"status": "active", "source": "a2a_registry"}

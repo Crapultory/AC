@@ -118,6 +118,60 @@ export interface OverviewStats {
   comparison: OverviewStatsComparison;
 }
 
+export type TopologyRuntimeStatus = 'active' | 'idle' | 'offline' | 'planned';
+export type TopologyStarKind = 'tool' | 'api' | 'data';
+
+export interface TopologyCenter {
+  id: string;
+  layer: 'center';
+  name: string;
+  symbol: string;
+  role: string;
+  description: string;
+  capabilities: string[];
+  layout: { x: number; y: number; radius: string };
+}
+
+export interface TopologyStarNode {
+  id: string;
+  layer: 'star_field';
+  kind: TopologyStarKind;
+  name: string;
+  integration: string;
+  purpose: string;
+  required: boolean;
+}
+
+export interface TopologyAgentNode {
+  id: string;
+  layer: 'agent_ring';
+  business_domain: string;
+  name: string;
+  display_name: string;
+  marketing_name: string;
+  symbol: string;
+  cultural_origin: string;
+  business_fit: string;
+  role: string;
+  layout: { ring_position: number; angle_degrees: number; radius: string };
+  star_nodes: TopologyStarNode[];
+  runtime: { status: TopologyRuntimeStatus; source: string };
+}
+
+export interface TopologyEdge {
+  source: string;
+  target: string;
+  mode: 'orchestrates' | 'requires';
+}
+
+export interface StarmappingTopology {
+  schema_version: string;
+  updated_at: string;
+  center: TopologyCenter;
+  agents: TopologyAgentNode[];
+  edges: TopologyEdge[];
+}
+
 export interface ChainStep {
   id?: string;
   agentName: string;

@@ -195,29 +195,17 @@
 }
 ```
 
-#### `GET /api/v1/topology`
+#### `GET /api/overview/topology`
 
-用途：返回总览星图需要的节点和边，不再由前端写死。
+用途：返回总览三层星图的中心、Agent 外环、群星节点及边，不再由前端写死。该接口需要认证；Agent 的 `runtime` 状态会叠加当前 A2A 注册表数据，未注册的设计基线 Agent 返回 `planned`。
 
-建议请求参数：
+响应字段：
 
-- `layout=star|force`
-- `include_runtime=true`
-
-建议返回字段：
-
-- `nodes[].id`
-- `nodes[].name`
-- `nodes[].type`
-- `nodes[].group`
-- `nodes[].status`
-- `nodes[].x`
-- `nodes[].y`
-- `nodes[].runtime.active_tasks`
-- `nodes[].runtime.last_heartbeat_at`
-- `edges[].source`
-- `edges[].target`
-- `edges[].mode`
+- `schema_version`、`updated_at`
+- `center`：Aegis 中心节点、连接符 `symbol`、职责和布局
+- `agents[]`：7 个业务域 Agent、神话 `symbol`、业务语义、`layout`、`runtime` 与 `star_nodes[]`
+- `agents[].star_nodes[]`：Tool、API、Data 节点的接入方式、用途和必需性
+- `edges[]`：`orchestrates`（Aegis → Agent）与 `requires`（Agent → 群星）边
 
 #### `GET /api/v1/agents`
 

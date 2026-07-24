@@ -34,6 +34,8 @@ describe('OverviewTab delegation metrics', () => {
         setTab={vi.fn()}
         stats={stats}
         statsError=""
+        topology={null}
+        topologyError=""
       />,
     );
 
@@ -75,6 +77,8 @@ describe('OverviewTab delegation metrics', () => {
           },
         }}
         statsError=""
+        topology={null}
+        topologyError=""
       />,
     );
 

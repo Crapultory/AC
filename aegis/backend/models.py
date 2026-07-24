@@ -225,6 +225,78 @@ class OverviewStatsResponse(BaseModel):
     comparison: OverviewStatsComparisonResponse
 
 
+TopologyRuntimeStatus = Literal["active", "idle", "offline", "planned"]
+TopologyStarKind = Literal["tool", "api", "data"]
+
+
+class TopologyCenterLayoutResponse(BaseModel):
+    x: float = Field(ge=0, le=1)
+    y: float = Field(ge=0, le=1)
+    radius: str
+
+
+class TopologyAgentLayoutResponse(BaseModel):
+    ring_position: int = Field(ge=0)
+    angle_degrees: float = Field(ge=0, lt=360)
+    radius: str
+
+
+class TopologyRuntimeResponse(BaseModel):
+    status: TopologyRuntimeStatus
+    source: str
+
+
+class TopologyCenterResponse(BaseModel):
+    id: str
+    layer: Literal["center"]
+    name: str
+    symbol: str
+    role: str
+    description: str
+    capabilities: list[str]
+    layout: TopologyCenterLayoutResponse
+
+
+class TopologyStarNodeResponse(BaseModel):
+    id: str
+    layer: Literal["star_field"]
+    kind: TopologyStarKind
+    name: str
+    integration: str
+    purpose: str
+    required: bool
+
+
+class TopologyAgentResponse(BaseModel):
+    id: str
+    layer: Literal["agent_ring"]
+    business_domain: str
+    name: str
+    display_name: str
+    marketing_name: str
+    symbol: str
+    cultural_origin: str
+    business_fit: str
+    role: str
+    layout: TopologyAgentLayoutResponse
+    star_nodes: list[TopologyStarNodeResponse] = Field(min_length=10, max_length=20)
+    runtime: TopologyRuntimeResponse
+
+
+class TopologyEdgeResponse(BaseModel):
+    source: str
+    target: str
+    mode: Literal["orchestrates", "requires"]
+
+
+class TopologyStarmappingResponse(BaseModel):
+    schema_version: str
+    updated_at: str
+    center: TopologyCenterResponse
+    agents: list[TopologyAgentResponse] = Field(min_length=7, max_length=7)
+    edges: list[TopologyEdgeResponse]
+
+
 class AgentDeleteResponse(BaseModel):
     deleted: bool
     agent_id: str

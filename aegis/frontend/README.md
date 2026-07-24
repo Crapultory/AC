@@ -4,7 +4,7 @@
 
 ## 当前能力
 
-- `Overview`：展示安全中枢总览、拓扑星图、Agent 索引，以及基于近 7 天 A2A 委派审计的运行指标。
+- `Overview`：展示安全中枢总览、拓扑星图、Agent 索引，以及基于近 7 天 A2A 委派审计的运行指标。三层星图的设计基线见 [`../aegis_starmapping.json`](../aegis_starmapping.json)。
 - `Aegis Chat`：提供本地模拟的安全分析会话流，按预设场景回放 Agent/VIP Tool 协同链路。
 - `Agent Orchestration`：支持登录后对 `/api/agents` 执行新增、编辑、删除。
 - `Routing Policy`：支持登录后对 `/api/routing/global` 执行新增、编辑、删除。
@@ -108,4 +108,4 @@ aegis/frontend
 ## 已知边界
 
 - 当前只对接了 `Agent Orchestration` 和 `Routing Policy` 两个后端模块。
-- 拓扑星图与 Aegis Chat 仍然偏演示态，尚未接真实安全执行链路；Overview 的近 7 天委派指标已接入审计日志。
+- 拓扑星图与 Aegis Chat 仍然偏演示态，尚未接真实安全执行链路；Overview 的近 7 天委派指标已接入审计日志。旧拓扑渲染仍在组件中写死，后续将按 [`../aegis_starmapping.json`](../aegis_starmapping.json) 的 Aegis 中心、7 个业务域 Agent 外环和 84 个群星节点重构。

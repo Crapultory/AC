@@ -25,7 +25,7 @@ import {
   uiAgentDraftToApi,
   uiRoutingDraftToApi,
 } from './lib/adapters';
-import { Agent, AgentDraft, AuthenticatedUser, OverviewStats, RoutingRule, RoutingRuleDraft, UserDraft } from './types';
+import { Agent, AgentDraft, AuthenticatedUser, OverviewStats, RoutingRule, RoutingRuleDraft, StarmappingTopology, UserDraft } from './types';
 
 type AppTab = 'overview' | 'chat' | 'orchestration' | 'policy' | 'users' | 'settings' | 'audit';
 
@@ -135,6 +135,8 @@ function AuthenticatedAppShell({
   overviewAgents,
   overviewStats,
   overviewStatsError,
+  topology,
+  topologyError,
   rules,
   syncError,
   users,
@@ -162,6 +164,8 @@ function AuthenticatedAppShell({
   overviewAgents: Agent[];
   overviewStats: OverviewStats | null;
   overviewStatsError: string;
+  topology: StarmappingTopology | null;
+  topologyError: string;
   rules: RoutingRule[];
   syncError: string;
   users: AuthenticatedUser[];
@@ -282,6 +286,8 @@ function AuthenticatedAppShell({
               isAdmin={isAdmin}
               stats={overviewStats}
               statsError={overviewStatsError}
+              topology={topology}
+              topologyError={topologyError}
               setTab={(tab) => navigateTo(tab as AppTab)}
             />
           ) : null}
@@ -334,6 +340,8 @@ export default function App() {
   const [overviewAgents, setOverviewAgents] = useState<Agent[]>([]);
   const [overviewStats, setOverviewStats] = useState<OverviewStats | null>(null);
   const [overviewStatsError, setOverviewStatsError] = useState('');
+  const [topology, setTopology] = useState<StarmappingTopology | null>(null);
+  const [topologyError, setTopologyError] = useState('');
   const [rules, setRules] = useState<RoutingRule[]>([]);
   const [users, setUsers] = useState<AuthenticatedUser[]>([]);
   const [currentUser, setCurrentUser] = useState<AuthenticatedUser | null>(() => getStoredUser());
@@ -460,9 +468,10 @@ export default function App() {
     setIsSyncing(true);
     setSyncError('');
     try {
-      const [overviewAgentsResult, overviewStatsResult] = await Promise.allSettled([
+      const [overviewAgentsResult, overviewStatsResult, topologyResult] = await Promise.allSettled([
         fetchJSON<BackendOverviewAgentList>('/api/overview/agents'),
         fetchJSON<OverviewStats>('/api/overview/stats'),
+        fetchJSON<StarmappingTopology>('/api/overview/topology'),
       ]);
       if (overviewAgentsResult.status === 'rejected') {
         throw overviewAgentsResult.reason;
@@ -477,6 +486,16 @@ export default function App() {
         return;
       } else {
         setOverviewStatsError(getApiErrorMessage(overviewStatsResult.reason, 'Overview metrics unavailable.'));
+      }
+
+      if (topologyResult.status === 'fulfilled') {
+        setTopology(topologyResult.value);
+        setTopologyError('');
+      } else if (topologyResult.reason instanceof ApiError && topologyResult.reason.status === 401) {
+        handleAuthExpired();
+        return;
+      } else {
+        setTopologyError(getApiErrorMessage(topologyResult.reason, 'Topology data unavailable.'));
       }
 
       if (!activeUser.is_admin) {
@@ -534,6 +553,8 @@ export default function App() {
     setOverviewAgents([]);
     setOverviewStats(null);
     setOverviewStatsError('');
+    setTopology(null);
+    setTopologyError('');
     setRules([]);
     setUsers([]);
     setAuthNotice('');
@@ -542,9 +563,14 @@ export default function App() {
 
   async function refreshOverviewStats() {
     try {
-      const response = await fetchJSON<OverviewStats>('/api/overview/stats');
-      setOverviewStats(response);
+      const [statsResponse, topologyResponse] = await Promise.all([
+        fetchJSON<OverviewStats>('/api/overview/stats'),
+        fetchJSON<StarmappingTopology>('/api/overview/topology'),
+      ]);
+      setOverviewStats(statsResponse);
       setOverviewStatsError('');
+      setTopology(topologyResponse);
+      setTopologyError('');
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         handleAuthExpired();
@@ -609,6 +635,8 @@ export default function App() {
     setOverviewAgents([]);
     setOverviewStats(null);
     setOverviewStatsError('');
+    setTopology(null);
+    setTopologyError('');
     setRules([]);
     setUsers([]);
     setShowPasswordDialog(false);
@@ -900,6 +928,8 @@ export default function App() {
           overviewAgents={overviewAgents}
           overviewStats={overviewStats}
           overviewStatsError={overviewStatsError}
+          topology={topology}
+          topologyError={topologyError}
           rules={rules}
           syncError={syncError}
           users={users}
