@@ -40,7 +40,8 @@ describe('StarmappingTopology', () => {
 
     const background = screen.getByTestId('star-map-background');
     expect(background).toBeInTheDocument();
-    expect(background.tagName).toBe('DIV');
+    expect(background.tagName).toBe('CANVAS');
+    expect(background).toHaveAttribute('aria-hidden', 'true');
     expect(screen.getByRole('img', { name: 'Aegis three-layer orchestration topology' })).toHaveAttribute('preserveAspectRatio', 'xMidYMid meet');
     expect(screen.getByTestId('topology-symbol-aegis')).toBeInTheDocument();
     expect(screen.getByTestId('topology-symbol-ai-soc')).toBeInTheDocument();

@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { Maximize2, Minimize2 } from 'lucide-react';
-import starfieldBackground from '../assets/starmapping/starmapping-starfield-background.png';
 import aegisConnection from '../assets/starmapping/aegis-connection.svg';
 import argusEyes from '../assets/starmapping/argus-eyes.svg';
 import themisScales from '../assets/starmapping/themis-scales.svg';
@@ -9,6 +8,7 @@ import vulcanAnvil from '../assets/starmapping/vulcan-anvil.svg';
 import heimdallEye from '../assets/starmapping/heimdall-eye.svg';
 import janusDuality from '../assets/starmapping/janus-duality.svg';
 import wedjatEye from '../assets/starmapping/wedjat-eye.svg';
+import StarmappingStarfieldCanvas from './StarmappingStarfieldCanvas';
 import type { StarmappingTopology, TopologyAgentNode, TopologyStarKind } from '../types';
 
 interface StarmappingTopologyProps {
@@ -310,7 +310,7 @@ export default function StarmappingTopology({ topology, error }: StarmappingTopo
 
   return (
     <div ref={containerRef} className={`relative overflow-hidden bg-[#02060d] ${isFullscreen ? 'h-screen w-screen' : 'min-h-[560px]'}`}>
-      <div data-testid="star-map-background" className="absolute inset-0 bg-center bg-cover bg-no-repeat" style={{ backgroundImage: `url(${starfieldBackground})` }} />
+      <StarmappingStarfieldCanvas isFullscreen={isFullscreen} />
       <div className="absolute inset-0 bg-[#02060d]/25" />
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_48%,rgba(23,83,118,0.2),transparent_39%),radial-gradient(ellipse_at_50%_80%,rgba(23,35,76,0.23),transparent_48%)]" />
       <svg className={`relative h-full w-full ${isFullscreen ? 'min-h-full' : 'min-h-[560px]'}`} viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Aegis three-layer orchestration topology">
