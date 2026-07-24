@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import StarmappingTopology from '../StarmappingTopology';
@@ -28,17 +28,33 @@ const topology: StarmappingTopologyData = {
   ],
 };
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+  vi.useRealTimers();
+});
 
 describe('StarmappingTopology', () => {
   it('shows and illuminates API-backed node details on hover', () => {
     render(<StarmappingTopology topology={topology} error="" />);
 
-    expect(screen.getByTestId('star-map-background')).toBeInTheDocument();
+    const background = screen.getByTestId('star-map-background');
+    expect(background).toBeInTheDocument();
+    expect(background.tagName).toBe('DIV');
+    expect(screen.getByRole('img', { name: 'Aegis three-layer orchestration topology' })).toHaveAttribute('preserveAspectRatio', 'xMidYMid meet');
     expect(screen.getByTestId('topology-symbol-aegis')).toBeInTheDocument();
     expect(screen.getByTestId('topology-symbol-ai-soc')).toBeInTheDocument();
+    expect(screen.getByTestId('topology-core-halo')).toHaveClass('starmapping-core-halo');
+    expect(screen.getByTestId('topology-core-orbit')).toHaveClass('starmapping-core-orbit');
+    expect(screen.getByTestId('topology-agent-orbit-ai-soc')).toHaveClass('starmapping-agent-orbit');
+    expect(screen.getByTestId('topology-agent-scout-ai-soc')).toHaveClass('starmapping-agent-scout');
     expect(screen.getAllByTestId('topology-flow')).toHaveLength(1);
-    expect(screen.getAllByTestId('topology-twinkle')).toHaveLength(10);
+    const twinkleNodes = screen.getAllByTestId('topology-twinkle');
+    expect(twinkleNodes).toHaveLength(2);
+    expect(twinkleNodes.every((node) => node.getAttribute('filter') === 'url(#star-map-glow)')).toBe(true);
+    expect(twinkleNodes.every((node) => node.getAttribute('style')?.includes('animation-name: starmapping-star-twinkle'))).toBe(true);
+    const twinkleDurations = twinkleNodes.map((node) => Number.parseFloat(node.getAttribute('style')?.match(/animation-duration: ([\d.]+)s/)?.[1] || '0'));
+    expect(twinkleDurations.every((duration) => duration >= 1.42 && duration <= 1.58)).toBe(true);
 
     const agent = screen.getByLabelText(/AI-SOC · Argus/);
     fireEvent.pointerEnter(agent, { clientX: 100, clientY: 100 });
@@ -61,5 +77,29 @@ describe('StarmappingTopology', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Enter topology fullscreen' }));
     expect(requestFullscreen).toHaveBeenCalledTimes(1);
+  });
+
+  it('splits each 30 percent selection into overlapping waves without a dark gap', () => {
+    vi.useFakeTimers();
+    vi.spyOn(Math, 'random').mockReturnValue(0.25);
+    render(<StarmappingTopology topology={topology} error="" />);
+
+    const firstWave = screen.getAllByTestId('topology-twinkle').map((node) => node.getAttribute('data-star-id'));
+    expect(firstWave).toHaveLength(2);
+
+    act(() => vi.advanceTimersByTime(800));
+    const fullFirstBatch = screen.getAllByTestId('topology-twinkle').map((node) => node.getAttribute('data-star-id'));
+    expect(fullFirstBatch).toHaveLength(3);
+    const lingeringSecondWave = fullFirstBatch.filter((id) => !firstWave.includes(id));
+    expect(lingeringSecondWave).toHaveLength(1);
+
+    act(() => vi.advanceTimersByTime(1_000));
+    expect(screen.getAllByTestId('topology-twinkle').map((node) => node.getAttribute('data-star-id'))).toEqual(lingeringSecondWave);
+
+    act(() => vi.advanceTimersByTime(200));
+    const bridgeBatch = screen.getAllByTestId('topology-twinkle').map((node) => node.getAttribute('data-star-id'));
+    expect(bridgeBatch).toHaveLength(3);
+    expect(bridgeBatch).toEqual(expect.arrayContaining(lingeringSecondWave));
+    expect(bridgeBatch.filter((id) => !lingeringSecondWave.includes(id))).toHaveLength(2);
   });
 });

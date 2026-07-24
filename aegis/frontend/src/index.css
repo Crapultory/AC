@@ -23,6 +23,84 @@ body {
   }
 }
 
+@keyframes starmapping-star-twinkle {
+  0%, 100% {
+    opacity: 0.08;
+  }
+  32% {
+    opacity: 0.7;
+  }
+  58% {
+    opacity: 0.16;
+  }
+  78% {
+    opacity: 0.48;
+  }
+}
+
+@keyframes starmapping-core-breathe {
+  0%, 100% {
+    opacity: 0.18;
+    transform: scale(0.96);
+  }
+  50% {
+    opacity: 0.6;
+    transform: scale(1.06);
+  }
+}
+
+@keyframes starmapping-core-orbit {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -130; }
+}
+
+@keyframes starmapping-agent-float {
+  0%, 100% { translate: 0 0; }
+  50% { translate: 0 -1.5px; }
+}
+
+@keyframes starmapping-agent-orbit-clockwise {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: -110; }
+}
+
+@keyframes starmapping-agent-orbit-counterclockwise {
+  from { stroke-dashoffset: 0; }
+  to { stroke-dashoffset: 92; }
+}
+
+@keyframes starmapping-agent-scout {
+  from { stroke-dashoffset: 0; opacity: 0.28; }
+  48% { opacity: 0.9; }
+  to { stroke-dashoffset: -220; opacity: 0.28; }
+}
+
+.starmapping-core-halo {
+  transform-box: fill-box;
+  transform-origin: center;
+  animation: starmapping-core-breathe 4.8s ease-in-out infinite;
+}
+
+.starmapping-core-orbit {
+  animation: starmapping-core-orbit 16s linear infinite;
+}
+
+.starmapping-agent-assembly {
+  animation: starmapping-agent-float 6.4s ease-in-out infinite;
+}
+
+.starmapping-agent-orbit--outer {
+  animation: starmapping-agent-orbit-clockwise 14s linear infinite;
+}
+
+.starmapping-agent-orbit--inner {
+  animation: starmapping-agent-orbit-counterclockwise 11s linear infinite;
+}
+
+.starmapping-agent-scout {
+  animation: starmapping-agent-scout 13s linear infinite;
+}
+
 .aegis-btn {
   position: relative;
   border-radius: 0.5rem;
@@ -408,6 +486,12 @@ body {
 }
 
 @media (prefers-reduced-motion: reduce) {
+  .starmapping-star-twinkle,
+  .starmapping-core-halo,
+  .starmapping-core-orbit,
+  .starmapping-agent-assembly,
+  .starmapping-agent-orbit,
+  .starmapping-agent-scout,
   .workflow-edge-flow,
   .workflow-edge-flow--live,
   .workflow-edge-flow--surge {

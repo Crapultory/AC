@@ -54,6 +54,11 @@ const STAR_COLORS: Record<TopologyStarKind, string> = {
   data: '#7796b8',
 };
 
+const TWINKLE_INTERVAL_MS = 2_000;
+const TWINKLE_WAVE_STAGGER_MS = 800;
+const TWINKLE_WAVE_LIFETIME_MS = 1_800;
+const TWINKLE_BATCH_RATIO = 0.3;
+
 const SYMBOL_ASSETS: Record<string, string> = {
   'aegis-connection': aegisConnection,
   'argus-eyes': argusEyes,
@@ -93,9 +98,28 @@ function StarGlyph({ symbol, color, size, lit }: { symbol: string; color: string
 function starTwinkle(id: string) {
   const hash = [...id].reduce((value, character) => ((value * 31) + character.charCodeAt(0)) >>> 0, 7);
   return {
-    duration: `${2.4 + (hash % 190) / 100}s`,
-    delay: `-${(hash % 720) / 100}s`,
+    duration: `${1.42 + (hash % 17) / 100}s`,
+    delay: `${(hash % 220) / 1000}s`,
   };
+}
+
+function selectTwinklingStars(starIds: string[], activeStarIds: Set<string>): string[] {
+  const batchSize = Math.max(1, Math.round(starIds.length * TWINKLE_BATCH_RATIO));
+  const candidates = starIds.filter((id) => !activeStarIds.has(id));
+  const pool = candidates.length >= batchSize ? candidates : starIds;
+  const shuffled = [...pool];
+
+  for (let index = shuffled.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(Math.random() * (index + 1));
+    [shuffled[index], shuffled[swapIndex]] = [shuffled[swapIndex], shuffled[index]];
+  }
+
+  return shuffled.slice(0, batchSize);
+}
+
+function splitTwinkleWaves(starIds: string[]): [string[], string[]] {
+  const firstWaveSize = Math.ceil(starIds.length / 2);
+  return [starIds.slice(0, firstWaveSize), starIds.slice(firstWaveSize)];
 }
 
 function buildRenderNodes(topology: StarmappingTopology): RenderNode[] {
@@ -173,6 +197,9 @@ export default function StarmappingTopology({ topology, error }: StarmappingTopo
   const [tooltip, setTooltip] = useState<{ id: string; x: number; y: number } | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const nodes = useMemo(() => topology ? buildRenderNodes(topology) : [], [topology]);
+  const starNodeIds = useMemo(() => nodes.filter((node) => node.kind === 'star').map((node) => node.id), [nodes]);
+  const [twinklingStarIds, setTwinklingStarIds] = useState<Set<string>>(() => new Set());
+  const twinklingStarIdsRef = useRef<Set<string>>(new Set());
   const nodeById = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const activeNodeId = hoveredNodeId;
   const activeNode = activeNodeId ? nodeById.get(activeNodeId) : undefined;
@@ -196,6 +223,47 @@ export default function StarmappingTopology({ topology, error }: StarmappingTopo
     syncFullscreenState();
     return () => document.removeEventListener('fullscreenchange', syncFullscreenState);
   }, []);
+
+  useEffect(() => {
+    if (starNodeIds.length === 0) {
+      twinklingStarIdsRef.current = new Set();
+      setTwinklingStarIds(new Set());
+      return undefined;
+    }
+
+    const timeoutIds = new Set<number>();
+    const schedule = (callback: () => void, delay: number) => {
+      const timeoutId = window.setTimeout(() => {
+        timeoutIds.delete(timeoutId);
+        callback();
+      }, delay);
+      timeoutIds.add(timeoutId);
+    };
+    const publishActiveStars = () => setTwinklingStarIds(new Set(twinklingStarIdsRef.current));
+    const activateWave = (starIds: string[]) => {
+      if (starIds.length === 0) return;
+      starIds.forEach((id) => twinklingStarIdsRef.current.add(id));
+      publishActiveStars();
+      schedule(() => {
+        starIds.forEach((id) => twinklingStarIdsRef.current.delete(id));
+        publishActiveStars();
+      }, TWINKLE_WAVE_LIFETIME_MS);
+    };
+    const selectNextBatch = () => {
+      const [firstWave, secondWave] = splitTwinkleWaves(selectTwinklingStars(starNodeIds, twinklingStarIdsRef.current));
+      activateWave(firstWave);
+      schedule(() => activateWave(secondWave), TWINKLE_WAVE_STAGGER_MS);
+    };
+
+    twinklingStarIdsRef.current = new Set();
+    selectNextBatch();
+    const interval = window.setInterval(selectNextBatch, TWINKLE_INTERVAL_MS);
+    return () => {
+      window.clearInterval(interval);
+      timeoutIds.forEach((timeoutId) => window.clearTimeout(timeoutId));
+      twinklingStarIdsRef.current = new Set();
+    };
+  }, [starNodeIds]);
 
   const showTooltip = (id: string, event: PointerEvent<SVGGElement>) => {
     const bounds = containerRef.current?.getBoundingClientRect();
@@ -242,15 +310,15 @@ export default function StarmappingTopology({ topology, error }: StarmappingTopo
 
   return (
     <div ref={containerRef} className={`relative overflow-hidden bg-[#02060d] ${isFullscreen ? 'h-screen w-screen' : 'min-h-[560px]'}`}>
+      <div data-testid="star-map-background" className="absolute inset-0 bg-center bg-cover bg-no-repeat" style={{ backgroundImage: `url(${starfieldBackground})` }} />
+      <div className="absolute inset-0 bg-[#02060d]/25" />
       <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_48%,rgba(23,83,118,0.2),transparent_39%),radial-gradient(ellipse_at_50%_80%,rgba(23,35,76,0.23),transparent_48%)]" />
-      <svg className={`relative h-full w-full ${isFullscreen ? 'min-h-full' : 'min-h-[560px]'}`} viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`} role="img" aria-label="Aegis three-layer orchestration topology">
+      <svg className={`relative h-full w-full ${isFullscreen ? 'min-h-full' : 'min-h-[560px]'}`} viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Aegis three-layer orchestration topology">
         <defs>
           <radialGradient id="star-map-core" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="#1d75a5" stopOpacity="0.26" /><stop offset="100%" stopColor="#02060d" stopOpacity="0" /></radialGradient>
           <filter id="star-map-glow" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="4" result="blur" /><feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
           <pattern id="star-map-hex" width="36" height="31" patternUnits="userSpaceOnUse"><path d="M9 1h18l9 15-9 14H9L0 16z" fill="none" stroke="#365876" strokeOpacity="0.2" strokeWidth="0.7" /></pattern>
         </defs>
-        <image data-testid="star-map-background" href={starfieldBackground} x="0" y="0" width={CANVAS.width} height={CANVAS.height} preserveAspectRatio="xMidYMid slice" opacity="0.9" />
-        <rect width={CANVAS.width} height={CANVAS.height} fill="#02060d" fillOpacity="0.22" />
         <rect width={CANVAS.width} height={CANVAS.height} fill="url(#star-map-core)" />
         <path d="M 16 680 Q 500 -114 984 680" fill="none" stroke="#4b94bb" strokeOpacity="0.1" strokeWidth="1.25" />
         <path d="M 66 674 Q 500 -58 934 674" fill="none" stroke="#355f88" strokeOpacity="0.12" strokeWidth="1" strokeDasharray="4 9" />
@@ -277,8 +345,9 @@ export default function StarmappingTopology({ topology, error }: StarmappingTopo
           const lit = litIds.has(node.id);
           const isActive = activeNode?.id === node.id;
           const opacity = node.kind === 'star' ? (lit ? 1 : 0.64) : 1;
-          const twinkle = node.kind === 'star' ? starTwinkle(node.id) : null;
+          const twinkle = node.kind === 'star' && twinklingStarIds.has(node.id) ? starTwinkle(node.id) : null;
           const symbolAsset = node.kind === 'star' ? undefined : SYMBOL_ASSETS[node.symbol];
+          const agentPhase = node.agent?.layout.ring_position ?? 0;
           return (
             <g
               key={node.id}
@@ -296,11 +365,22 @@ export default function StarmappingTopology({ topology, error }: StarmappingTopo
               className="cursor-pointer outline-none"
               opacity={opacity}
             >
-              {node.kind !== 'star' ? <circle r={node.r + (isActive ? 10 : 6)} fill="none" stroke={node.color} strokeOpacity={lit ? 0.55 : 0.22} strokeWidth={lit ? 1.35 : 0.7} /> : null}
-              {node.kind === 'star' && twinkle ? <circle data-testid="topology-twinkle" r={node.r + 4} fill={node.color} opacity="0.12" filter="url(#star-map-glow)"><animate attributeName="opacity" values="0.08;0.7;0.16;0.48;0.08" dur={twinkle.duration} begin={twinkle.delay} repeatCount="indefinite" /></circle> : null}
-              <circle r={node.r} fill="#07111d" fillOpacity={node.kind === 'star' ? 0.96 : 0.9} stroke={node.color} strokeOpacity={lit ? 0.95 : 0.48} strokeWidth={isActive ? 1.7 : node.kind === 'star' ? 0.8 : 1.1} filter={lit ? 'url(#star-map-glow)' : undefined} />
-              {symbolAsset ? <image data-testid={`topology-symbol-${node.id}`} href={symbolAsset} x={node.kind === 'center' ? -20 : -14} y={node.kind === 'center' ? -20 : -14} width={node.kind === 'center' ? 40 : 28} height={node.kind === 'center' ? 40 : 28} opacity={lit || node.kind !== 'star' ? 1 : 0.74} filter={lit ? 'url(#star-map-glow)' : undefined} /> : <StarGlyph symbol={node.symbol} color={node.color} size={8} lit={lit} />}
-              {node.kind === 'agent' ? <text y={node.r + 17} textAnchor="middle" fill={lit ? '#d9f3ff' : '#7f9bb0'} fontSize="9.5" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" letterSpacing="0.8">{node.label}</text> : null}
+              <g className={node.kind === 'agent' ? 'starmapping-agent-assembly' : undefined} style={node.kind === 'agent' ? { animationDelay: `${-(agentPhase * 0.82)}s` } : undefined}>
+                {node.kind === 'center' ? <>
+                  <circle data-testid="topology-core-halo" className="starmapping-core-halo" r={node.r + 14} fill="none" stroke={node.color} strokeOpacity="0.22" strokeWidth="1.3" filter="url(#star-map-glow)" />
+                  <circle data-testid="topology-core-orbit" className="starmapping-core-orbit" r={node.r + 20} fill="none" stroke={node.color} strokeOpacity="0.52" strokeWidth="0.9" strokeDasharray="3 10" />
+                </> : null}
+                {node.kind === 'agent' ? <>
+                  <circle data-testid={`topology-agent-orbit-${node.id}`} className="starmapping-agent-orbit starmapping-agent-orbit--outer" r={node.r + 7} fill="none" stroke={node.color} strokeOpacity="0.34" strokeWidth="0.75" strokeDasharray="3 11" style={{ animationDelay: `${-(agentPhase * 1.5)}s` }} />
+                  <circle className="starmapping-agent-orbit starmapping-agent-orbit--inner" r={node.r + 3.5} fill="none" stroke={node.color} strokeOpacity="0.23" strokeWidth="0.65" strokeDasharray="1.5 9" style={{ animationDelay: `${-(agentPhase * 0.9)}s` }} />
+                  <circle data-testid={`topology-agent-scout-${node.id}`} className="starmapping-agent-scout" r={node.r + 8.5} fill="none" stroke={node.color} strokeOpacity="0.82" strokeWidth="1.35" strokeDasharray="1.5 34" style={{ animationDelay: `${-(agentPhase * 1.2)}s` }} filter="url(#star-map-glow)" />
+                </> : null}
+                {node.kind !== 'star' ? <circle r={node.r + (isActive ? 10 : 6)} fill="none" stroke={node.color} strokeOpacity={lit ? 0.55 : 0.22} strokeWidth={lit ? 1.35 : 0.7} /> : null}
+                {node.kind === 'star' && twinkle ? <circle data-testid="topology-twinkle" data-star-id={node.id} className="starmapping-star-twinkle" r={node.r + 4} fill={node.color} opacity="0.08" filter="url(#star-map-glow)" style={{ animationName: 'starmapping-star-twinkle', animationDuration: twinkle.duration, animationDelay: twinkle.delay, animationTimingFunction: 'cubic-bezier(0.22, 1, 0.36, 1)', animationIterationCount: 1, animationFillMode: 'both' }} /> : null}
+                <circle r={node.r} fill="#07111d" fillOpacity={node.kind === 'star' ? 0.96 : 0.9} stroke={node.color} strokeOpacity={lit ? 0.95 : 0.48} strokeWidth={isActive ? 1.7 : node.kind === 'star' ? 0.8 : 1.1} filter={lit ? 'url(#star-map-glow)' : undefined} />
+                {symbolAsset ? <image data-testid={`topology-symbol-${node.id}`} href={symbolAsset} x={node.kind === 'center' ? -20 : -14} y={node.kind === 'center' ? -20 : -14} width={node.kind === 'center' ? 40 : 28} height={node.kind === 'center' ? 40 : 28} opacity={lit || node.kind !== 'star' ? 1 : 0.74} filter={lit ? 'url(#star-map-glow)' : undefined} /> : <StarGlyph symbol={node.symbol} color={node.color} size={8} lit={lit} />}
+                {node.kind === 'agent' ? <text y={node.r + 17} textAnchor="middle" fill={lit ? '#d9f3ff' : '#7f9bb0'} fontSize="9.5" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" letterSpacing="0.8">{node.label}</text> : null}
+              </g>
             </g>
           );
         })}
