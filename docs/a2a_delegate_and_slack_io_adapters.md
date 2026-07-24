@@ -72,8 +72,10 @@ a2a_delegate(
 | `context` | 可选补充上下文，首轮会与目标合并发送。 |
 | `agent_name` | `a2a.json` 中的目标 Agent 名称。 |
 | `session_id` | 可选远端 context id；未提供时生成 `delegate_{profile}_a2a_YYYYmmdd_HHMMSS_{01-99}`。 |
-| `is_delegate_output` | 是否通过 output adapter 发送 delegate 事件。 |
-| `is_loop` | 是否在首轮完成后保留前台输入循环。 |
+| `is_delegate_output` | 非 loop 模式下是否通过 output adapter 发送 delegate 事件；设置为 `false` 时不发送任何 adapter 事件。默认值为 `true`。 |
+| `is_loop` | 是否在首轮完成后保留前台输入循环；loop 模式会强制通过 output adapter 发送事件，不受 `is_delegate_output` 影响。 |
+
+`is_delegate_output` 在 Aegis 审计中记录调用方传入的原始值。因此，`is_loop=true` 且 `is_delegate_output=false` 时，实际会发送 adapter 事件，但审计字段仍为 `false`。
 
 调用必须经 `AIAgent._dispatch_a2a_delegate()`，该入口向工具传入：
 

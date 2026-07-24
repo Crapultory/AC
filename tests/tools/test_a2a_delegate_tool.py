@@ -678,7 +678,8 @@ def test_a2a_loop_requires_input_adapter(monkeypatch):
     assert "input adapter" in result["error"].lower()
 
 
-def test_remote_loop_reuses_session_and_routes_foreground_input(monkeypatch):
+@pytest.mark.parametrize("is_delegate_output", [True, False])
+def test_remote_loop_reuses_session_and_routes_foreground_input(monkeypatch, is_delegate_output):
     import tools.a2a_delegate_tool as a2a_delegate_tool
     from tools.a2a_delegate_tool import A2A_REGISTRY, a2a_delegate
 
@@ -745,6 +746,7 @@ def test_remote_loop_reuses_session_and_routes_foreground_input(monkeypatch):
             agent_name="remote",
             session_id="seed-session",
             is_loop=True,
+            is_delegate_output=is_delegate_output,
             input=input_adapter,
             output=sink,
             parent_agent=parent,
@@ -757,6 +759,7 @@ def test_remote_loop_reuses_session_and_routes_foreground_input(monkeypatch):
     assert input_adapter.entered is True
     assert input_adapter.exited is True
     assert parent._touch_activity.call_count == 1
+    assert [turn[1] for turn in sessions[0].turns] == [True, True]
     assert sessions[0].turns[0][2] == "seed-session"
     assert sessions[0].turns[1][2] == "ctx-remote"
     assert "<source>" in sessions[0].turns[0][0]
@@ -768,6 +771,73 @@ def test_remote_loop_reuses_session_and_routes_foreground_input(monkeypatch):
         ("delegate", "ai", "response-2", "ctx-remote"),
         ("delegate", "status", "return to main", "ctx-remote"),
     ]
+
+
+def test_remote_non_loop_disables_all_output_events(monkeypatch):
+    import tools.a2a_delegate_tool as a2a_delegate_tool
+    from tools.a2a_delegate_tool import A2A_REGISTRY, a2a_delegate
+
+    A2A_REGISTRY.clear()
+    A2A_REGISTRY["remote"] = {
+        "name": "remote",
+        "url": "http://agent.local/a2a",
+        "available": True,
+        "agent_card": {"supported_interfaces": [{"url": "http://agent.local/a2a"}]},
+        "error": None,
+    }
+    monkeypatch.setattr("tools.a2a_delegate_tool._a2a_sdk_available", lambda: True)
+
+    sessions = []
+
+    class FakeSession:
+        def __init__(self, base_url, *, output=None, session_id=None, headers=None, **kwargs):
+            del base_url, headers, kwargs
+            self.output = output
+            self.context_id = session_id
+            sessions.append(self)
+
+        async def send_turn(self, text, *, is_delegate_output=True):
+            del text
+            assert is_delegate_output is False
+            self.context_id = "ctx-remote"
+            if self.output:
+                for event_type, content in (
+                    ("status", "working"),
+                    ("ai_delta", "partial"),
+                    ("tool_call", "terminal {}"),
+                    ("ai", "done"),
+                    ("error", "failed"),
+                ):
+                    self.output.emit("delegate", event_type, content, session_id=self.context_id)
+            return {
+                "final_response": "done",
+                "state": "completed",
+                "state_name": "completed",
+                "context_id": self.context_id,
+                "task_id": "task-1",
+            }
+
+        async def close(self):
+            return None
+
+    monkeypatch.setattr(a2a_delegate_tool, "_A2ADelegateSession", FakeSession)
+    sink = _OutputSink()
+
+    result = json.loads(
+        a2a_delegate(
+            goal="start",
+            agent_name="remote",
+            is_loop=False,
+            is_delegate_output=False,
+            output=sink,
+            parent_agent=_make_parent(),
+        )
+    )
+
+    assert result["success"] is True
+    assert result["final_response"] == "done"
+    assert sessions[0].output is None
+    assert sink.events == []
 
 
 def test_remote_loop_timeout_returns_clear_payload(monkeypatch):

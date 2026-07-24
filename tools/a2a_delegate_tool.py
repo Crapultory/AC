@@ -1190,6 +1190,12 @@ def _run_remote_delegate(
             "error": "A2A SDK is not installed. Install the configured a2a SDK package to use remote delegation.",
         }
 
+    # When output is disabled for a non-looping delegation, suppress the
+    # adapter at the session boundary so every event type (including status,
+    # tool calls, deltas, and errors) follows the same policy.
+    if not is_delegate_output:
+        output = None
+
     remote_session_id = _resolve_delegate_session_id(session_id)
     session = _A2ADelegateSession(
         _resolve_a2a_remote_url(entry),
@@ -1379,8 +1385,9 @@ def a2a_delegate(
     if not goal_text:
         return tool_error("a2a_delegate requires a non-empty goal")
 
-    delegate_output = bool(is_delegate_output)
+    requested_delegate_output = bool(is_delegate_output)
     loop_mode = bool(is_loop)
+    effective_delegate_output = loop_mode or requested_delegate_output
     security_enabled = a2a_delegate_aegis.is_aegis_delegate_security_enabled()
     if security_enabled:
         aegis_check = a2a_delegate_aegis.run_aegis_checked_delegate(
@@ -1389,7 +1396,7 @@ def a2a_delegate(
             agent_name=agent_name,
             session_id=session_id,
             is_loop=loop_mode,
-            is_delegate_output=delegate_output,
+            is_delegate_output=requested_delegate_output,
         )
         if not aegis_check.allowed:
             return _json_result(**(aegis_check.failure_payload or {}))
@@ -1399,7 +1406,7 @@ def a2a_delegate(
         context=context,
         agent_name=agent_name,
         session_id=session_id,
-        is_delegate_output=delegate_output,
+        is_delegate_output=effective_delegate_output,
         is_loop=loop_mode,
         input=input,
         output=output,
@@ -1425,7 +1432,7 @@ A2A_DELEGATE_SCHEMA = {
             "context": {"type": "string", "description": "Optional context for the delegate."},
             "agent_name": {"type": "string", "description": "Remote A2A agent name."},
             "session_id": {"type": "string", "description": "Optional delegate session/context id."},
-            "is_delegate_output": {"type": "boolean", "description": "Whether to forward delegate output."},
+            "is_delegate_output": {"type": "boolean", "description": "Whether to forward delegate output for non-looping delegation; loop mode always forwards output. Default: true."},
             "is_loop": {"type": "boolean", "description": "Whether to keep foreground input loop active."},
         },
         "required": ["goal", "agent_name"],
