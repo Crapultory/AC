@@ -34,6 +34,12 @@ describe('StarmappingTopology', () => {
   it('shows and illuminates API-backed node details on hover', () => {
     render(<StarmappingTopology topology={topology} error="" />);
 
+    expect(screen.getByTestId('star-map-background')).toBeInTheDocument();
+    expect(screen.getByTestId('topology-symbol-aegis')).toBeInTheDocument();
+    expect(screen.getByTestId('topology-symbol-ai-soc')).toBeInTheDocument();
+    expect(screen.getAllByTestId('topology-flow')).toHaveLength(1);
+    expect(screen.getAllByTestId('topology-twinkle')).toHaveLength(10);
+
     const agent = screen.getByLabelText(/AI-SOC · Argus/);
     fireEvent.pointerEnter(agent, { clientX: 100, clientY: 100 });
     expect(screen.getByText('全天候、零死角威胁监控与感知')).toBeInTheDocument();

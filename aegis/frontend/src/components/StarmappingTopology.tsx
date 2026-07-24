@@ -1,5 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type KeyboardEvent, type PointerEvent } from 'react';
 import { Maximize2, Minimize2 } from 'lucide-react';
+import starfieldBackground from '../assets/starmapping/starmapping-starfield-background.png';
+import aegisConnection from '../assets/starmapping/aegis-connection.svg';
+import argusEyes from '../assets/starmapping/argus-eyes.svg';
+import themisScales from '../assets/starmapping/themis-scales.svg';
+import lokiKnot from '../assets/starmapping/loki-knot.svg';
+import vulcanAnvil from '../assets/starmapping/vulcan-anvil.svg';
+import heimdallEye from '../assets/starmapping/heimdall-eye.svg';
+import janusDuality from '../assets/starmapping/janus-duality.svg';
+import wedjatEye from '../assets/starmapping/wedjat-eye.svg';
 import type { StarmappingTopology, TopologyAgentNode, TopologyStarKind } from '../types';
 
 interface StarmappingTopologyProps {
@@ -45,6 +54,17 @@ const STAR_COLORS: Record<TopologyStarKind, string> = {
   data: '#7796b8',
 };
 
+const SYMBOL_ASSETS: Record<string, string> = {
+  'aegis-connection': aegisConnection,
+  'argus-eyes': argusEyes,
+  'themis-scales': themisScales,
+  'loki-knot': lokiKnot,
+  'vulcan-anvil': vulcanAnvil,
+  'heimdall-eye': heimdallEye,
+  'janus-duality': janusDuality,
+  'wedjat-eye': wedjatEye,
+};
+
 function radians(degrees: number): number {
   return (degrees * Math.PI) / 180;
 }
@@ -53,7 +73,7 @@ function nodeStatusLabel(status: TopologyAgentNode['runtime']['status']): string
   return status === 'planned' ? 'BASELINE' : status.toUpperCase();
 }
 
-function TopologyGlyph({ symbol, color, size, lit }: { symbol: string; color: string; size: number; lit: boolean }) {
+function StarGlyph({ symbol, color, size, lit }: { symbol: string; color: string; size: number; lit: boolean }) {
   const stroke = lit ? color : `${color}cc`;
   const common = {
     fill: 'none',
@@ -65,41 +85,17 @@ function TopologyGlyph({ symbol, color, size, lit }: { symbol: string; color: st
   const dot = (x: number, y: number, r = size * 0.07) => <circle cx={x} cy={y} r={r} fill={stroke} />;
   const half = size / 2;
 
-  if (symbol === 'aegis-connection') {
-    const points = [[-0.32, -0.25], [0.3, -0.2], [-0.25, 0.28], [0.02, 0.04], [0.35, 0.3], [0.05, 0.43]];
-    const point = (index: number) => ({ x: points[index][0] * size, y: points[index][1] * size });
-    return (
-      <g>
-        <path d={`M ${point(0).x} ${point(0).y} L ${point(3).x} ${point(3).y} L ${point(1).x} ${point(1).y} M ${point(2).x} ${point(2).y} L ${point(3).x} ${point(3).y} L ${point(4).x} ${point(4).y} M ${point(3).x} ${point(3).y} L ${point(5).x} ${point(5).y}`} {...common} />
-        {points.map(([x, y], index) => <circle key={index} cx={x * size} cy={y * size} r={size * 0.085} fill="#07111f" stroke={stroke} strokeWidth={common.strokeWidth} />)}
-      </g>
-    );
-  }
-
-  if (symbol === 'argus-eyes') {
-    return <g>{[-0.25, 0, 0.25].map((x) => [-0.2, 0.18].map((y) => <g key={`${x}-${y}`} transform={`translate(${x * size} ${y * size})`}><path d={`M ${-size * 0.1} 0 Q 0 ${-size * 0.09} ${size * 0.1} 0 Q 0 ${size * 0.09} ${-size * 0.1} 0`} {...common} />{dot(0, 0, size * 0.028)}</g>))}</g>;
-  }
-  if (symbol === 'themis-scales') {
-    return <g><path d={`M 0 ${-half * 0.34} V ${half * 0.36} M ${-half * 0.34} ${-half * 0.2} H ${half * 0.34} M ${-half * 0.31} ${-half * 0.2} L ${-half * 0.45} ${half * 0.11} H ${-half * 0.17} Z M ${half * 0.31} ${-half * 0.2} L ${half * 0.17} ${half * 0.11} H ${half * 0.45} Z M ${-half * 0.17} ${half * 0.36} H ${half * 0.17}`} {...common} /></g>;
-  }
-  if (symbol === 'loki-knot') {
-    return <g><path d={`M ${-half * 0.32} ${half * 0.28} C ${-half * 0.55} ${-half * 0.05}, ${-half * 0.12} ${-half * 0.45}, 0 ${-half * 0.1} C ${half * 0.12} ${-half * 0.45}, ${half * 0.55} ${-half * 0.05}, ${half * 0.32} ${half * 0.28} M ${-half * 0.37} ${-half * 0.34} C ${-half * 0.06} ${-half * 0.2}, ${half * 0.06} ${-half * 0.2}, ${half * 0.37} ${-half * 0.34} M ${-half * 0.12} ${half * 0.37} Q 0 ${half * 0.14} ${half * 0.12} ${half * 0.37}`} {...common} /></g>;
-  }
-  if (symbol === 'vulcan-anvil') {
-    return <g><path d={`M ${-half * 0.48} ${half * 0.06} H ${half * 0.18} L ${half * 0.42} ${half * 0.23} H ${-half * 0.3} L ${-half * 0.12} ${half * 0.06} M ${-half * 0.2} ${half * 0.23} L ${-half * 0.28} ${half * 0.43} H ${half * 0.21} L ${half * 0.13} ${half * 0.23} M ${half * 0.16} ${-half * 0.45} L ${half * 0.43} ${-half * 0.18} M ${half * 0.28} ${-half * 0.33} L ${half * 0.45} ${-half * 0.5}`} {...common} /></g>;
-  }
-  if (symbol === 'heimdall-eye') {
-    return <g><path d={`M ${-half * 0.48} 0 Q 0 ${-half * 0.34} ${half * 0.48} 0 Q 0 ${half * 0.34} ${-half * 0.48} 0`} {...common} />{dot(0, 0, size * 0.09)}<path d={`M ${-half * 0.4} ${-half * 0.31} Q 0 ${-half * 0.56} ${half * 0.4} ${-half * 0.31}`} {...common} /></g>;
-  }
-  if (symbol === 'janus-duality') {
-    return <g><path d={`M 0 ${-half * 0.45} C ${-half * 0.38} ${-half * 0.33}, ${-half * 0.42} ${half * 0.15}, 0 ${half * 0.42} M 0 ${-half * 0.45} C ${half * 0.38} ${-half * 0.33}, ${half * 0.42} ${half * 0.15}, 0 ${half * 0.42} M 0 ${-half * 0.38} V ${half * 0.31} M ${-half * 0.23} ${-half * 0.04} H ${-half * 0.08} M ${half * 0.08} ${-half * 0.04} H ${half * 0.23}`} {...common} /></g>;
-  }
-  if (symbol === 'wedjat-eye') {
-    return <g><path d={`M ${-half * 0.5} ${-half * 0.03} Q 0 ${-half * 0.36} ${half * 0.5} ${-half * 0.03} Q 0 ${half * 0.31} ${-half * 0.5} ${-half * 0.03} M ${half * 0.24} ${half * 0.16} Q ${half * 0.45} ${half * 0.23} ${half * 0.31} ${half * 0.43} M ${-half * 0.12} ${half * 0.23} Q 0 ${half * 0.43} ${half * 0.1} ${half * 0.3}`} {...common} />{dot(0, -half * 0.03, size * 0.09)}</g>;
-  }
   if (symbol === 'tool') return <g><path d={`M ${-half * 0.32} ${-half * 0.35} L ${half * 0.27} ${half * 0.25} M ${half * 0.32} ${-half * 0.33} L ${-half * 0.28} ${half * 0.27}`} {...common} />{dot(-half * 0.32, -half * 0.35, size * 0.055)}{dot(half * 0.32, -half * 0.33, size * 0.055)}</g>;
   if (symbol === 'api') return <g><path d={`M ${-half * 0.4} 0 H ${half * 0.4} M ${-half * 0.1} ${-half * 0.25} L ${-half * 0.4} 0 L ${-half * 0.1} ${half * 0.25} M ${half * 0.1} ${-half * 0.25} L ${half * 0.4} 0 L ${half * 0.1} ${half * 0.25}`} {...common} /></g>;
   return <g><ellipse cx="0" cy={-half * 0.22} rx={half * 0.32} ry={half * 0.13} {...common} /><path d={`M ${-half * 0.32} ${-half * 0.22} V ${half * 0.25} Q 0 ${half * 0.47} ${half * 0.32} ${half * 0.25} V ${-half * 0.22}`} {...common} /></g>;
+}
+
+function starTwinkle(id: string) {
+  const hash = [...id].reduce((value, character) => ((value * 31) + character.charCodeAt(0)) >>> 0, 7);
+  return {
+    duration: `${2.4 + (hash % 190) / 100}s`,
+    delay: `-${(hash % 720) / 100}s`,
+  };
 }
 
 function buildRenderNodes(topology: StarmappingTopology): RenderNode[] {
@@ -195,7 +191,7 @@ export default function StarmappingTopology({ topology, error }: StarmappingTopo
   }, [activeNode, topology]);
 
   useEffect(() => {
-    const syncFullscreenState = () => setIsFullscreen(document.fullscreenElement === containerRef.current);
+    const syncFullscreenState = () => setIsFullscreen(Boolean(containerRef.current && document.fullscreenElement === containerRef.current));
     document.addEventListener('fullscreenchange', syncFullscreenState);
     syncFullscreenState();
     return () => document.removeEventListener('fullscreenchange', syncFullscreenState);
@@ -225,8 +221,9 @@ export default function StarmappingTopology({ topology, error }: StarmappingTopo
   };
 
   const toggleFullscreen = async () => {
-    if (document.fullscreenElement) {
+    if (isFullscreen || document.fullscreenElement) {
       await document.exitFullscreen();
+      setIsFullscreen(false);
       return;
     }
     await containerRef.current?.requestFullscreen();
@@ -252,25 +249,36 @@ export default function StarmappingTopology({ topology, error }: StarmappingTopo
           <filter id="star-map-glow" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="4" result="blur" /><feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
           <pattern id="star-map-hex" width="36" height="31" patternUnits="userSpaceOnUse"><path d="M9 1h18l9 15-9 14H9L0 16z" fill="none" stroke="#365876" strokeOpacity="0.2" strokeWidth="0.7" /></pattern>
         </defs>
+        <image data-testid="star-map-background" href={starfieldBackground} x="0" y="0" width={CANVAS.width} height={CANVAS.height} preserveAspectRatio="xMidYMid slice" opacity="0.9" />
+        <rect width={CANVAS.width} height={CANVAS.height} fill="#02060d" fillOpacity="0.22" />
         <rect width={CANVAS.width} height={CANVAS.height} fill="url(#star-map-core)" />
-        <path d="M 16 680 Q 500 -114 984 680" fill="none" stroke="#4b94bb" strokeOpacity="0.17" strokeWidth="1.25" />
-        <path d="M 66 674 Q 500 -58 934 674" fill="none" stroke="#355f88" strokeOpacity="0.18" strokeWidth="1" strokeDasharray="4 9" />
-        <path d="M 16 680 Q 500 -114 984 680 L 984 700 L 16 700 Z" fill="url(#star-map-hex)" opacity="0.72" />
+        <path d="M 16 680 Q 500 -114 984 680" fill="none" stroke="#4b94bb" strokeOpacity="0.1" strokeWidth="1.25" />
+        <path d="M 66 674 Q 500 -58 934 674" fill="none" stroke="#355f88" strokeOpacity="0.12" strokeWidth="1" strokeDasharray="4 9" />
+        <path d="M 16 680 Q 500 -114 984 680 L 984 700 L 16 700 Z" fill="url(#star-map-hex)" opacity="0.38" />
         <circle cx={CANVAS.centerX} cy={CANVAS.centerY} r={CANVAS.agentRadius} fill="none" stroke="#5b88aa" strokeOpacity="0.55" strokeWidth="1" />
         <circle cx={CANVAS.centerX} cy={CANVAS.centerY} r="70" fill="none" stroke="#2f658c" strokeOpacity="0.4" strokeWidth="1" strokeDasharray="3 7" />
 
-        {topology.edges.map((edge) => {
+        {topology.edges.map((edge, index) => {
           const source = nodeById.get(edge.source);
           const target = nodeById.get(edge.target);
           if (!source || !target) return null;
           const active = litIds.has(edge.source) && litIds.has(edge.target);
-          return <line key={`${edge.source}-${edge.target}`} x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke={active ? '#68d8f7' : '#31526c'} strokeOpacity={active ? 0.9 : edge.mode === 'requires' ? 0.28 : 0.48} strokeWidth={active ? 1.5 : 0.7} strokeDasharray={edge.mode === 'requires' ? '2 5' : undefined} />;
+          const showFlow = edge.mode === 'orchestrates' || active;
+          const flowPath = `M ${source.x} ${source.y} L ${target.x} ${target.y}`;
+          return (
+            <g key={`${edge.source}-${edge.target}`}>
+              <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke={active ? '#68d8f7' : '#31526c'} strokeOpacity={active ? 0.9 : edge.mode === 'requires' ? 0.28 : 0.48} strokeWidth={active ? 1.5 : 0.7} strokeDasharray={edge.mode === 'requires' ? '2 5' : undefined} />
+              {showFlow ? <circle data-testid="topology-flow" r={active ? 2.25 : 1.35} fill={active ? '#b9f6ff' : '#63c8ff'} fillOpacity={active ? 0.95 : 0.6} filter="url(#star-map-glow)"><animateMotion path={flowPath} dur={`${active ? 1.5 : 2.8 + (index % 3) * 0.25}s`} begin={`-${(index % 7) * 0.36}s`} repeatCount="indefinite" /></circle> : null}
+            </g>
+          );
         })}
 
         {nodes.map((node) => {
           const lit = litIds.has(node.id);
           const isActive = activeNode?.id === node.id;
           const opacity = node.kind === 'star' ? (lit ? 1 : 0.64) : 1;
+          const twinkle = node.kind === 'star' ? starTwinkle(node.id) : null;
+          const symbolAsset = node.kind === 'star' ? undefined : SYMBOL_ASSETS[node.symbol];
           return (
             <g
               key={node.id}
@@ -289,8 +297,9 @@ export default function StarmappingTopology({ topology, error }: StarmappingTopo
               opacity={opacity}
             >
               {node.kind !== 'star' ? <circle r={node.r + (isActive ? 10 : 6)} fill="none" stroke={node.color} strokeOpacity={lit ? 0.55 : 0.22} strokeWidth={lit ? 1.35 : 0.7} /> : null}
+              {node.kind === 'star' && twinkle ? <circle data-testid="topology-twinkle" r={node.r + 4} fill={node.color} opacity="0.12" filter="url(#star-map-glow)"><animate attributeName="opacity" values="0.08;0.7;0.16;0.48;0.08" dur={twinkle.duration} begin={twinkle.delay} repeatCount="indefinite" /></circle> : null}
               <circle r={node.r} fill="#07111d" fillOpacity={node.kind === 'star' ? 0.96 : 0.9} stroke={node.color} strokeOpacity={lit ? 0.95 : 0.48} strokeWidth={isActive ? 1.7 : node.kind === 'star' ? 0.8 : 1.1} filter={lit ? 'url(#star-map-glow)' : undefined} />
-              <TopologyGlyph symbol={node.symbol} color={node.color} size={node.kind === 'center' ? 39 : node.kind === 'agent' ? 28 : 8} lit={lit} />
+              {symbolAsset ? <image data-testid={`topology-symbol-${node.id}`} href={symbolAsset} x={node.kind === 'center' ? -20 : -14} y={node.kind === 'center' ? -20 : -14} width={node.kind === 'center' ? 40 : 28} height={node.kind === 'center' ? 40 : 28} opacity={lit || node.kind !== 'star' ? 1 : 0.74} filter={lit ? 'url(#star-map-glow)' : undefined} /> : <StarGlyph symbol={node.symbol} color={node.color} size={8} lit={lit} />}
               {node.kind === 'agent' ? <text y={node.r + 17} textAnchor="middle" fill={lit ? '#d9f3ff' : '#7f9bb0'} fontSize="9.5" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" letterSpacing="0.8">{node.label}</text> : null}
             </g>
           );

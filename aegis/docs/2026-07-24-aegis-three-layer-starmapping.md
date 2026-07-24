@@ -12,6 +12,16 @@
 
 该图为 2048 × 1152 的视觉方向稿：适度放大的 Aegis 连接符核心作为视觉锚点；七个业务域 Agent 环绕互联；每个 Agent 对应一个低亮度群星簇，细粒度能量流从群星汇入 Agent，再连接至核心。七个星环节点以多眼（Argus）、天秤（Themis）、北欧结/面具（Loki）、铁砧（Vulcan）、守望之眼（Heimdall）、双面（Janus）和荷鲁斯之眼（Wedjat）区分，深色星空中若隐若现的全幅数字化护盾由星环与群星共同构成，表达在危险与未知环境中覆盖全区的守护。图中没有文字标签，正式产品实现应从 JSON 读取真实名称、能力和运行状态。
 
+## 前端视觉素材
+
+`frontend/src/assets/starmapping/` 提供可直接用于运行时星图的素材，而非把视觉符号重新硬编码在组件中：
+
+- `starmapping-starfield-background.png`：从 V3 意境图中移除 Aegis、7 个星环和相应连线后生成的 2048 × 1152 群星背景；保留暗色星云、散点群星与隐约数字化护盾。
+- `aegis-connection.svg`：Aegis 的简约连接符核心。
+- `argus-eyes.svg`、`themis-scales.svg`、`loki-knot.svg`、`vulcan-anvil.svg`、`heimdall-eye.svg`、`janus-duality.svg`、`wedjat-eye.svg`：7 个 Agent 的独立神话符号，颜色与其星环一致。
+
+`StarmappingTopology.tsx` 以背景图铺陈星空，以 SVG 作为中心和星环节点的图标；中心至星环始终存在低亮度流光，命中节点后其完整路径会提升亮度并增加流光。群星节点采用按稳定 ID 派生的错峰闪耀时间，视觉上呈现随机星闪而不会在每次渲染时跳变。
+
 ## 三层模型
 
 ```mermaid
