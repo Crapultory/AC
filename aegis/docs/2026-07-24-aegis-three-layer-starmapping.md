@@ -16,7 +16,7 @@
 
 `frontend/src/assets/starmapping/` 提供可直接用于运行时星图的素材，而非把视觉符号重新硬编码在组件中：
 
-- `starmapping-starfield-background.png`：从 V3 意境图中移除 Aegis、7 个星环和相应连线后生成的 2048 × 1152 群星背景；保留暗色星云、散点群星与隐约数字化护盾。
+- `starmapping-starfield-background.webp`：从 V3 意境图中移除 Aegis、7 个星环和相应连线后生成的 2048 × 1152 群星背景；采用逐像素一致的无损 WebP 压缩，保留暗色星云、散点群星与隐约数字化护盾。
 - `aegis-connection.svg`：Aegis 的简约连接符核心。
 - `argus-eyes.svg`、`themis-scales.svg`、`loki-knot.svg`、`vulcan-anvil.svg`、`heimdall-eye.svg`、`janus-duality.svg`、`wedjat-eye.svg`：7 个 Agent 的独立神话符号，颜色与其星环一致。
 

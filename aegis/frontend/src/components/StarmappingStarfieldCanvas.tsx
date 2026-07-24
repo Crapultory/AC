@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 
-import starfieldBackground from '../assets/starmapping/starmapping-starfield-background.png';
+import starfieldBackground from '../assets/starmapping/starmapping-starfield-background.webp';
 
 interface StarfieldPoint {
   x: number;
