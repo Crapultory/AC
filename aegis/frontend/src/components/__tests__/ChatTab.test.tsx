@@ -95,6 +95,64 @@ describe('ChatTab', () => {
     expect(screen.getByText('CENTRAL ARCHIVE')).toBeInTheDocument();
   });
 
+  it('groups prompt templates in a drawer and appends the selected prompt without sending it', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      templates: [
+        { id: 'tpl-1', tag: 'Triage', desc: 'Alert triage', prompt: 'Assess this alert.', create_time: '2026-01-01T00:00:00Z', update_time: '2026-01-02T00:00:00Z' },
+        { id: 'tpl-2', tag: 'Triage', desc: 'Severity', prompt: 'Set a severity.', create_time: '2026-01-01T00:00:00Z', update_time: '2026-01-01T00:00:00Z' },
+      ],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    render(<ChatTab agents={[]} />);
+
+    const composer = screen.getByPlaceholderText(/ask aegis anything/i);
+    fireEvent.change(composer, { target: { value: 'Existing draft' } });
+    fireEvent.click(screen.getByRole('button', { name: /open prompt templates/i }));
+
+    expect(await screen.findByRole('complementary', { name: /prompt templates/i })).toBeInTheDocument();
+    expect(screen.getByRole('region', { name: /triage templates/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /alert triage/i }));
+
+    expect(screen.queryByRole('complementary', { name: /prompt templates/i })).not.toBeInTheDocument();
+    expect(screen.getByPlaceholderText(/ask aegis anything/i)).toHaveValue('Existing draft Assess this alert.');
+    expect(MockWebSocket.instances).toHaveLength(0);
+  });
+
+  it('browses cached A2A agents in a dialog without sending a chat message', async () => {
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        agents: [{
+          name: 'aisoc', url: 'http://127.0.0.1:9086/a2a', status: 'active', available: true,
+          description: 'SOC investigation agent', capabilities: ['Investigate security incidents'], error: null,
+        }], global_routing: [], refreshed_at: '2026-01-01T00:00:00Z', stale: false, refresh_error: null,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        agents: [{
+          name: 'aisoc', url: 'http://127.0.0.1:9086/a2a', status: 'active', available: true,
+          description: 'SOC investigation agent', capabilities: ['Investigate security incidents', 'Respond to alerts'], error: null,
+        }], global_routing: [], refreshed_at: '2026-01-01T00:01:00Z', stale: false, refresh_error: null,
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ChatTab agents={[]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /open a2a agents/i }));
+    const dialog = await screen.findByRole('dialog', { name: /a2a agents/i });
+    expect(within(dialog).getByRole('button', { name: /view agent aisoc/i })).toBeInTheDocument();
+    expect(fetchMock.mock.calls[0][0]).toBe('/api/a2a/context');
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /view agent aisoc/i }));
+    expect(within(dialog).getByText('Investigate security incidents')).toBeInTheDocument();
+    expect(within(dialog).getByText('http://127.0.0.1:9086/a2a')).toBeInTheDocument();
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /back to agents/i }));
+    fireEvent.click(within(dialog).getByRole('button', { name: /refresh a2a agents/i }));
+    await waitFor(() => expect(fetchMock.mock.calls[1][0]).toBe('/api/a2a/context/refresh'));
+    expect(fetchMock.mock.calls[1][1]).toMatchObject({ method: 'POST' });
+    expect(MockWebSocket.instances).toHaveLength(0);
+
+    fireEvent.click(within(dialog).getByRole('button', { name: /close a2a agents/i }));
+    expect(screen.queryByRole('dialog', { name: /a2a agents/i })).not.toBeInTheDocument();
+  });
+
   it('exits workflow fullscreen before Escape closes the workflow drawer', () => {
     render(<ChatTab agents={[]} />);
 

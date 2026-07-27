@@ -21,6 +21,48 @@ export interface UserDraft {
   status: UserStatus;
 }
 
+export interface PromptTemplate {
+  id: string;
+  tag: string;
+  desc: string;
+  prompt: string;
+  create_time: string;
+  update_time: string;
+}
+
+export interface PromptTemplateDraft {
+  tag: string;
+  desc: string;
+  prompt: string;
+}
+
+export interface UserManualSummary {
+  id: string;
+  title: string;
+}
+
+export interface UserManual extends UserManualSummary {
+  content: string;
+}
+
+export interface A2AContextAgent {
+  name: string;
+  url: string | null;
+  status: string | null;
+  available: boolean;
+  description: string | null;
+  capabilities: string[];
+  error: string | null;
+}
+
+export interface A2AContext {
+  agents: A2AContextAgent[];
+  global_routing: Array<{ id: string; name: string; policy: string; status: string }>;
+  refreshed_at: string | null;
+  stale: boolean;
+  refresh_error: string | null;
+}
+
 export interface Agent {
   id: string;
   name: string;

@@ -11,6 +11,8 @@ import UserManagementTab from './components/UserManagementTab';
 import ChangePasswordDialog from './components/ChangePasswordDialog';
 import SettingsTab from './components/SettingsTab';
 import AuditLogsTab from './components/AuditLogsTab';
+import PromptTemplateTab from './components/PromptTemplateTab';
+import UserManualTab from './components/UserManualTab';
 import { AegisChatProvider, useAegisChatRuntime } from './lib/chatRuntime';
 import { clearStoredAuth, getStoredUser, hasStoredToken, setStoredAuth, setStoredUser } from './lib/auth';
 import { fetchJSON, ApiError, alertApiError, getApiErrorMessage } from './lib/api';
@@ -27,7 +29,7 @@ import {
 } from './lib/adapters';
 import { Agent, AgentDraft, AuthenticatedUser, OverviewStats, RoutingRule, RoutingRuleDraft, StarmappingTopology, UserDraft } from './types';
 
-type AppTab = 'overview' | 'chat' | 'orchestration' | 'policy' | 'users' | 'settings' | 'audit';
+type AppTab = 'overview' | 'chat' | 'prompt_templates' | 'user_manual' | 'orchestration' | 'policy' | 'users' | 'settings' | 'audit';
 
 type AuthLoginResponse = {
   authenticated: boolean;
@@ -50,6 +52,8 @@ type BackendUserList = {
 const TAB_TO_PATH: Record<AppTab, string> = {
   overview: '/overview',
   chat: '/chat',
+  prompt_templates: '/prompt-templates',
+  user_manual: '/user-manual',
   orchestration: '/orchestration',
   policy: '/policy',
   users: '/users',
@@ -69,6 +73,12 @@ function resolveTabFromPath(pathname: string): AppTab | null {
   }
   if (pathname === '/chat') {
     return 'chat';
+  }
+  if (pathname === '/prompt-templates') {
+    return 'prompt_templates';
+  }
+  if (pathname === '/user-manual') {
+    return 'user_manual';
   }
   if (pathname === '/orchestration') {
     return 'orchestration';
@@ -292,6 +302,8 @@ function AuthenticatedAppShell({
             />
           ) : null}
           {activeTab === 'chat' ? <ChatTab agents={agents} /> : null}
+          {activeTab === 'prompt_templates' ? <PromptTemplateTab /> : null}
+          {activeTab === 'user_manual' ? <UserManualTab /> : null}
           {activeTab === 'orchestration' ? (
             <AgentTab
               agents={agents}

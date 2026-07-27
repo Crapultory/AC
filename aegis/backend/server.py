@@ -18,13 +18,20 @@ from aegis.backend.chat.routes import build_chat_router
 from aegis.backend.chat.service import ChatSessionManager
 from aegis.backend.config import AegisSettings, is_loopback_host, load_aegis_settings
 from aegis.backend.routes.agents import build_agents_router
+from aegis.backend.routes.a2a_context import build_a2a_context_router
 from aegis.backend.routes.audit import build_audit_router
 from aegis.backend.routes.auth import build_auth_router
 from aegis.backend.routes.overview import build_overview_router
+from aegis.backend.routes.prompt_templates import build_prompt_templates_router
 from aegis.backend.routes.routing import build_routing_router
 from aegis.backend.routes.system import build_system_router
+from aegis.backend.routes.user_manuals import build_user_manuals_router
 from aegis.backend.routes.users import build_users_router
 from aegis.backend.services.user_service import UserService
+from aegis.backend.services.a2a_context_service import A2AContextService
+from aegis.backend.services.prompt_template_service import PromptTemplateService
+from aegis.backend.services.prompt_template_store import PromptTemplateStore
+from aegis.backend.services.user_manual_service import UserManualService
 
 
 PUBLIC_API_PATHS = frozenset(
@@ -88,11 +95,15 @@ def create_app(settings: AegisSettings | None = None) -> FastAPI:
     app = FastAPI(title="Aegis Backend")
     app.state.aegis_settings = active_settings
     user_service = UserService()
+    prompt_template_service = PromptTemplateService(PromptTemplateStore())
+    user_manual_service = UserManualService()
+    a2a_context_service = A2AContextService()
     admin_ready = user_service.ensure_bootstrap_admin()
     app.state.user_service = user_service
     app.state.admin_setup_required = not admin_ready
     chat_manager = ChatSessionManager()
     app.state.chat_manager = chat_manager
+    app.state.user_manual_service = user_manual_service
 
     app.add_middleware(
         CORSMiddleware,
@@ -122,6 +133,9 @@ def create_app(settings: AegisSettings | None = None) -> FastAPI:
     app.include_router(build_auth_router(active_settings, user_service))
     app.include_router(build_overview_router(active_settings, user_service))
     app.include_router(build_users_router(active_settings, user_service))
+    app.include_router(build_prompt_templates_router(active_settings, user_service, prompt_template_service))
+    app.include_router(build_user_manuals_router(active_settings, user_service, user_manual_service))
+    app.include_router(build_a2a_context_router(active_settings, user_service, a2a_context_service))
     app.include_router(build_agents_router(active_settings, user_service))
     app.include_router(build_routing_router(active_settings, user_service))
     app.include_router(build_audit_router(active_settings, user_service))

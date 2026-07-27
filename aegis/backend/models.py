@@ -107,6 +107,102 @@ class UserDeleteResponse(BaseModel):
     uid: str
 
 
+class PromptTemplateRequest(BaseModel):
+    """Payload used to create or update one user's reusable prompt."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tag: str = Field(min_length=1, max_length=64)
+    desc: str = Field(default="", max_length=512)
+    prompt: str = Field(min_length=1, max_length=20_000)
+
+    @field_validator("tag", "prompt", mode="before")
+    @classmethod
+    def require_nonblank_value(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("Value must not be blank.")
+        return normalized
+
+    @field_validator("desc", mode="before")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str:
+        return str(value or "").strip()
+
+
+class PromptTemplateResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    tag: str
+    desc: str
+    prompt: str
+    create_time: str
+    update_time: str
+
+
+class PromptTemplateListResponse(BaseModel):
+    templates: list[PromptTemplateResponse]
+
+
+class PromptTemplateDeleteResponse(BaseModel):
+    deleted: bool
+    id: str
+
+
+class UserManualSummary(BaseModel):
+    """One published, read-only Markdown manual."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    title: str
+
+
+class UserManualListResponse(BaseModel):
+    manuals: list[UserManualSummary] = Field(default_factory=list)
+    default_manual_id: str | None = None
+
+
+class UserManualResponse(UserManualSummary):
+    content: str
+
+
+class A2AContextAgentResponse(BaseModel):
+    """One active A2A registry entry rendered in the chat agent browser."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    url: str | None = None
+    status: str | None = None
+    available: bool = False
+    description: str | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    error: str | None = None
+
+
+class A2AGlobalRoutingRuleResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    policy: str
+    status: str
+
+
+class A2AContextResponse(BaseModel):
+    """Cached, structured form of the existing ``/a2a`` registry context."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agents: list[A2AContextAgentResponse] = Field(default_factory=list)
+    global_routing: list[A2AGlobalRoutingRuleResponse] = Field(default_factory=list)
+    refreshed_at: str | None = None
+    stale: bool = False
+    refresh_error: str | None = None
+
+
 class HealthResponse(BaseModel):
     status: str
     pid: int

@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Agent, Conversation, Message } from '../types';
+import { A2AContext, A2AContextAgent, Agent, Conversation, Message, PromptTemplate } from '../types';
 import {
+  ArrowLeft,
+  Bot,
   Check,
   CheckCircle,
   ChevronDown,
@@ -15,22 +17,28 @@ import {
   Maximize2,
   Minimize2,
   Paperclip,
+  PanelRightOpen,
   Plus,
+  RefreshCw,
   Send,
   ShieldAlert,
   Trash2,
   Workflow,
+  X,
 } from 'lucide-react';
 import {
   AegisChatProvider,
   useAegisChatRuntime,
   useOptionalAegisChatRuntime,
 } from '../lib/chatRuntime';
+import { fetchJSON, getApiErrorMessage } from '../lib/api';
 import SessionWorkflow from './SessionWorkflow';
 
 interface ChatTabProps {
   agents: Agent[];
 }
+
+type PromptTemplateListResponse = { templates: PromptTemplate[] };
 
 function isConversationBusy(conversation: Conversation | undefined): boolean {
   if (!conversation) {
@@ -116,6 +124,16 @@ function ChatTabContent({ agents }: ChatTabProps) {
   const [expandedMessageIds, setExpandedMessageIds] = useState<Record<string, boolean>>({});
   const [workflowDrawerOpen, setWorkflowDrawerOpen] = useState(false);
   const [workflowFullscreen, setWorkflowFullscreen] = useState(false);
+  const [promptTemplateDrawerOpen, setPromptTemplateDrawerOpen] = useState(false);
+  const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([]);
+  const [promptTemplateLoading, setPromptTemplateLoading] = useState(false);
+  const [promptTemplateError, setPromptTemplateError] = useState('');
+  const [a2aDialogOpen, setA2ADialogOpen] = useState(false);
+  const [a2aContext, setA2AContext] = useState<A2AContext | null>(null);
+  const [a2aLoading, setA2ALoading] = useState(false);
+  const [a2aRefreshing, setA2ARefreshing] = useState(false);
+  const [a2aError, setA2AError] = useState('');
+  const [selectedA2AAgent, setSelectedA2AAgent] = useState<A2AContextAgent | null>(null);
   const bottomRef = useRef<HTMLDivElement>(null);
   const copyFeedbackTimeoutRef = useRef<number | null>(null);
 
@@ -147,6 +165,19 @@ function ChatTabContent({ agents }: ChatTabProps) {
     document.addEventListener('keydown', handleKeyDown);
     return () => document.removeEventListener('keydown', handleKeyDown);
   }, [workflowDrawerOpen, workflowFullscreen]);
+
+  useEffect(() => {
+    if (!a2aDialogOpen) {
+      return;
+    }
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') {
+        setA2ADialogOpen(false);
+      }
+    };
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [a2aDialogOpen]);
 
   function closeWorkflow() {
     setWorkflowFullscreen(false);
@@ -195,6 +226,53 @@ function ChatTabContent({ agents }: ChatTabProps) {
     resumeActiveConversation();
   }
 
+  async function openPromptTemplateDrawer() {
+    setPromptTemplateDrawerOpen(true);
+    setPromptTemplateLoading(true);
+    setPromptTemplateError('');
+    try {
+      const response = await fetchJSON<PromptTemplateListResponse>('/api/prompt-templates');
+      setPromptTemplates(response.templates);
+    } catch (loadError) {
+      setPromptTemplateError(getApiErrorMessage(loadError, 'Unable to load prompt templates.'));
+    } finally {
+      setPromptTemplateLoading(false);
+    }
+  }
+
+  function appendPromptTemplate(template: PromptTemplate) {
+    setInputVal((current) => current ? `${current} ${template.prompt}` : template.prompt);
+    setPromptTemplateDrawerOpen(false);
+  }
+
+  async function loadA2AContext(refresh = false) {
+    if (refresh) {
+      setA2ARefreshing(true);
+    } else {
+      setA2ALoading(true);
+    }
+    setA2AError('');
+    try {
+      const response = await fetchJSON<A2AContext>(
+        refresh ? '/api/a2a/context/refresh' : '/api/a2a/context',
+        refresh ? { method: 'POST' } : undefined,
+      );
+      setA2AContext(response);
+      setSelectedA2AAgent(null);
+    } catch (loadError) {
+      setA2AError(getApiErrorMessage(loadError, 'Unable to load A2A agents.'));
+    } finally {
+      setA2ALoading(false);
+      setA2ARefreshing(false);
+    }
+  }
+
+  function openA2AAgents() {
+    setA2ADialogOpen(true);
+    setSelectedA2AAgent(null);
+    void loadA2AContext();
+  }
+
   async function handleCopyMessage(message: Message) {
     try {
       await writeClipboardText(getMessageCopyText(message));
@@ -238,6 +316,10 @@ function ChatTabContent({ agents }: ChatTabProps) {
   const composerPlaceholder = activeConversation?.pendingClarify?.awaitingText
     ? 'Answer clarify prompt... 输入你的补充说明'
     : "Ask Aegis anything... 触发关键词：'钓鱼邮件', '勒索病毒', '敏感泄露'...";
+  const templatesByTag = promptTemplates.reduce<Record<string, PromptTemplate[]>>((groups, template) => {
+    (groups[template.tag] ||= []).push(template);
+    return groups;
+  }, {});
   return (
     <div className={`flex bg-[#020408] items-stretch overflow-hidden text-xs ${
       workflowDrawerOpen ? 'fixed inset-0 z-50 h-screen w-screen' : 'h-full w-full'
@@ -274,13 +356,22 @@ function ChatTabContent({ agents }: ChatTabProps) {
               </button>
               <button
                 type="button"
+                aria-label="Open A2A agents"
+                aria-pressed={a2aDialogOpen}
+                onClick={openA2AAgents}
+                className="p-2 rounded border border-slate-800 bg-[#080C14] text-slate-400 hover:text-cyan-300 hover:border-cyan-900/50 transition-all"
+                title="Browse A2A agents"
+              >
+                <Bot className="h-4 w-4" aria-hidden="true" />
+              </button>
+              <button
+                type="button"
                 aria-label="新建对话"
                 onClick={handleCreateNewConversation}
-                className="text-cyan-400 hover:text-cyan-300 p-2 hover:bg-slate-800/50 rounded transition-all flex items-center gap-1 text-[11px] font-bold"
+                className="rounded border border-slate-800 bg-[#080C14] p-2 text-cyan-400 transition-all hover:border-cyan-900/50 hover:text-cyan-300"
                 title="New chat thread"
               >
-                <Plus className="h-3.5 w-3.5" />
-                {!sidebarCollapsed ? <span>新建</span> : null}
+                <Plus className="h-4 w-4" aria-hidden="true" />
               </button>
             </div>
           </div>
@@ -408,7 +499,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
             <h3 className="text-sm font-bold text-white flex items-center gap-1.5 uppercase italic">
               {activeConversation ? activeConversation.title : '安全事件会话'}
               <span className="text-[9px] font-mono text-cyan-400 py-0.5 px-2 bg-[#080C14] rounded border border-slate-800 font-bold">
-                AEGIS PROCESSOR v2.8.0
+                AEGIS PROCESSOR v0.2.3
               </span>
             </h3>
             <p className="text-[10px] text-slate-500 mt-0.5">
@@ -723,6 +814,16 @@ function ChatTabContent({ agents }: ChatTabProps) {
 
           <button
             type="button"
+            aria-label="Open prompt templates"
+            onClick={() => void openPromptTemplateDrawer()}
+            className="p-2 bg-[#05080F] hover:bg-slate-800/80 border border-slate-800 rounded text-slate-400 hover:text-cyan-300 hover:border-cyan-900/50 transition-all shrink-0"
+            title="Prompt templates"
+          >
+            <PanelRightOpen className="h-4 w-4" />
+          </button>
+
+          <button
+            type="button"
             onClick={handleSubmit}
             disabled={sendDisabled}
             className="px-4 py-2 bg-cyan-500 text-white hover:bg-cyan-600 disabled:bg-[#080C14] disabled:text-slate-600 rounded font-bold transition-all flex items-center gap-1.5 shrink-0 text-xs"
@@ -730,6 +831,122 @@ function ChatTabContent({ agents }: ChatTabProps) {
             <Send className="h-3 w-3" /> 发送
           </button>
         </div>
+        {promptTemplateDrawerOpen ? (
+          <aside aria-label="Prompt templates" className="absolute inset-y-0 right-0 z-30 flex w-full max-w-md flex-col border-l border-slate-700 bg-[#05080F] shadow-[-20px_0_55px_rgba(0,0,0,0.45)]">
+            <header className="flex items-start justify-between gap-4 border-b border-slate-800 px-5 py-4">
+              <div>
+                <p className="font-mono text-[10px] font-bold tracking-[0.16em] text-cyan-400">USER PROMPT LIBRARY</p>
+                <h4 className="mt-1 text-sm font-semibold text-white">选择模版</h4>
+                <p className="mt-1 text-[11px] text-slate-500">点击后追加到当前消息草稿，不会自动发送。</p>
+              </div>
+              <button type="button" aria-label="Close prompt templates" onClick={() => setPromptTemplateDrawerOpen(false)} className="rounded p-2 text-slate-500 hover:bg-slate-800 hover:text-white"><ChevronRight className="h-4 w-4" /></button>
+            </header>
+            <div className="flex-1 overflow-y-auto p-4 scrollbar-thin">
+              {promptTemplateLoading ? <div className="py-10 text-center font-mono text-xs text-slate-500">LOADING TEMPLATES…</div> : null}
+              {promptTemplateError ? <div role="alert" className="rounded border border-rose-900/50 bg-rose-950/20 px-3 py-2 text-xs text-rose-200">{promptTemplateError}</div> : null}
+              {!promptTemplateLoading && !promptTemplateError && promptTemplates.length === 0 ? <div className="rounded border border-dashed border-slate-700 p-6 text-center text-xs text-slate-500">No templates yet. Create them from User Profile / Prompt Template.</div> : null}
+              {!promptTemplateLoading && !promptTemplateError ? Object.entries(templatesByTag).map(([tag, templates]) => (
+                <section key={tag} className="mb-5 last:mb-0" aria-label={`${tag} templates`}>
+                  <h5 className="mb-2 flex items-center gap-2 font-mono text-[10px] font-bold tracking-widest text-cyan-400"><span className="h-px flex-1 bg-cyan-950" />{tag}<span className="h-px flex-1 bg-cyan-950" /></h5>
+                  <div className="space-y-2">
+                    {templates.map((template) => (
+                      <button key={template.id} type="button" onClick={() => appendPromptTemplate(template)} className="w-full rounded-lg border border-slate-800 bg-[#03060C] p-3 text-left transition hover:border-cyan-700 hover:bg-cyan-950/20">
+                        <div className="text-xs font-medium text-slate-200">{template.desc || template.tag}</div>
+                        <div className="mt-1 line-clamp-3 whitespace-pre-wrap break-words font-mono text-[10px] leading-relaxed text-slate-500">{template.prompt}</div>
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              )) : null}
+            </div>
+          </aside>
+        ) : null}
+        </div>
+      ) : null}
+      {a2aDialogOpen ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[#020408]/80 p-4 backdrop-blur-sm" role="presentation">
+          <section
+            role="dialog"
+            aria-modal="true"
+            aria-label="A2A agents"
+            className="flex max-h-[min(720px,calc(100vh-2rem))] w-full max-w-4xl flex-col overflow-hidden rounded-xl border border-slate-700 bg-[#05080F] shadow-[0_25px_90px_rgba(0,0,0,0.68)]"
+          >
+            <header className="flex items-start justify-between gap-4 border-b border-slate-800 px-5 py-4">
+              <div>
+                <p className="font-mono text-[10px] font-bold tracking-[0.16em] text-cyan-400">A2A AGENT CONTEXT</p>
+                <h4 className="mt-1 text-sm font-semibold text-white">
+                  {selectedA2AAgent ? selectedA2AAgent.name : 'Active Agents'}
+                </h4>
+                <p className="mt-1 text-[11px] text-slate-500">
+                  {selectedA2AAgent ? 'Inspect the available capability set for this agent.' : 'Live registry snapshot; opening this window does not send a chat message.'}
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  aria-label="Refresh A2A agents"
+                  onClick={() => void loadA2AContext(true)}
+                  disabled={a2aLoading || a2aRefreshing}
+                  className="rounded border border-slate-800 bg-[#080C14] p-2 text-slate-400 transition hover:border-cyan-900/50 hover:text-cyan-300 disabled:cursor-not-allowed disabled:opacity-50"
+                  title="Refresh A2A agents"
+                >
+                  <RefreshCw className={`h-4 w-4 ${a2aRefreshing ? 'animate-spin' : ''}`} />
+                </button>
+                <button
+                  type="button"
+                  aria-label="Close A2A agents"
+                  onClick={() => setA2ADialogOpen(false)}
+                  className="rounded border border-slate-800 bg-[#080C14] p-2 text-slate-400 transition hover:border-slate-600 hover:text-white"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            </header>
+            <div className="min-h-0 flex-1 overflow-y-auto p-5 scrollbar-thin">
+              {a2aLoading ? <div className="py-14 text-center font-mono text-xs text-slate-500">LOADING AGENT CONTEXT…</div> : null}
+              {a2aError ? <div role="alert" className="rounded border border-rose-900/50 bg-rose-950/20 px-3 py-2 text-xs text-rose-200">{a2aError}</div> : null}
+              {!a2aLoading && !a2aError && a2aContext?.refresh_error ? (
+                <div role="alert" className="mb-4 rounded border border-amber-900/50 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
+                  Showing the last successful snapshot. Refresh failed: {a2aContext.refresh_error}
+                </div>
+              ) : null}
+              {!a2aLoading && !a2aError && selectedA2AAgent ? (
+                <div className="space-y-5">
+                  <button type="button" aria-label="Back to agents" onClick={() => setSelectedA2AAgent(null)} className="inline-flex items-center gap-1.5 rounded border border-slate-800 bg-[#080C14] px-3 py-1.5 text-[11px] font-medium text-slate-300 transition hover:border-cyan-900/50 hover:text-cyan-300">
+                    <ArrowLeft className="h-3.5 w-3.5" /> Back to agents
+                  </button>
+                  <div className="grid gap-3 rounded-lg border border-slate-800 bg-[#03060C] p-4 sm:grid-cols-2">
+                    <div><p className="font-mono text-[10px] tracking-widest text-slate-500">URL</p><p className="mt-1 break-all text-xs text-slate-200">{selectedA2AAgent.url || 'Not provided'}</p></div>
+                    <div><p className="font-mono text-[10px] tracking-widest text-slate-500">STATUS</p><p className={`mt-1 text-xs font-semibold ${selectedA2AAgent.available ? 'text-emerald-400' : 'text-amber-300'}`}>{selectedA2AAgent.status || 'unknown'} · {selectedA2AAgent.available ? 'available' : 'unavailable'}</p></div>
+                    <div className="sm:col-span-2"><p className="font-mono text-[10px] tracking-widest text-slate-500">DESCRIPTION</p><p className="mt-1 text-xs leading-relaxed text-slate-300">{selectedA2AAgent.description || 'No description provided.'}</p></div>
+                    {selectedA2AAgent.error ? <div className="sm:col-span-2 rounded border border-rose-900/50 bg-rose-950/20 px-3 py-2 text-xs text-rose-200">{selectedA2AAgent.error}</div> : null}
+                  </div>
+                  <div>
+                    <p className="font-mono text-[10px] font-bold tracking-[0.16em] text-cyan-400">CAPABILITIES · {selectedA2AAgent.capabilities.length}</p>
+                    {selectedA2AAgent.capabilities.length === 0 ? <p className="mt-3 rounded border border-dashed border-slate-700 p-4 text-xs text-slate-500">No capabilities were published by this agent.</p> : (
+                      <ul className="mt-3 space-y-2">
+                        {selectedA2AAgent.capabilities.map((capability, index) => <li key={`${capability}-${index}`} className="rounded border border-slate-800 bg-[#03060C] px-3 py-2 text-xs leading-relaxed text-slate-300">{capability}</li>)}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+              ) : null}
+              {!a2aLoading && !a2aError && !selectedA2AAgent && a2aContext && a2aContext.agents.length === 0 ? (
+                <div className="rounded border border-dashed border-slate-700 p-8 text-center text-xs text-slate-500">No active A2A agents are available in the current registry snapshot.</div>
+              ) : null}
+              {!a2aLoading && !a2aError && !selectedA2AAgent && a2aContext && a2aContext.agents.length > 0 ? (
+                <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                  {a2aContext.agents.map((agent) => (
+                    <button key={`${agent.name}-${agent.url || ''}`} type="button" aria-label={`View agent ${agent.name}`} onClick={() => setSelectedA2AAgent(agent)} className="group flex min-h-44 flex-col rounded-lg border border-slate-800 bg-[#03060C] p-4 text-left transition hover:border-cyan-700 hover:bg-cyan-950/15">
+                      <div className="flex items-start justify-between gap-3"><span className="text-sm font-semibold text-white group-hover:text-cyan-200">{agent.name}</span><span className={`rounded border px-1.5 py-0.5 font-mono text-[9px] uppercase ${agent.available ? 'border-emerald-900/50 bg-emerald-950/20 text-emerald-300' : 'border-amber-900/50 bg-amber-950/20 text-amber-300'}`}>{agent.available ? 'available' : 'unavailable'}</span></div>
+                      <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-slate-400">{agent.description || 'No description provided.'}</p>
+                      <div className="mt-auto flex items-center justify-between border-t border-slate-800 pt-3 font-mono text-[10px] text-slate-500"><span>{agent.status || 'unknown'}</span><span>{agent.capabilities.length} capabilities</span></div>
+                    </button>
+                  ))}
+                </div>
+              ) : null}
+            </div>
+          </section>
         </div>
       ) : null}
     </div>
