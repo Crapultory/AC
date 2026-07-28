@@ -1,4 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
 import { A2AContext, A2AContextAgent, Agent, Conversation, Message, PromptTemplate } from '../types';
 import {
   ArrowLeft,
@@ -10,6 +12,7 @@ import {
   ChevronRight,
   ChevronUp,
   Clock,
+  Code2,
   Copy,
   Eye,
   EyeOff,
@@ -40,6 +43,35 @@ interface ChatTabProps {
 
 type PromptTemplateListResponse = { templates: PromptTemplate[] };
 
+function ChatMarkdown({ content }: { content: string }) {
+  return (
+    <ReactMarkdown
+      remarkPlugins={[remarkGfm]}
+      components={{
+        h1: ({ children }) => <h1 className="mb-3 border-b border-cyan-900/50 pb-2 font-mono text-lg font-bold text-cyan-100">{children}</h1>,
+        h2: ({ children }) => <h2 className="mb-2 mt-4 border-l-2 border-cyan-500 pl-2 text-base font-bold text-slate-100 first:mt-0">{children}</h2>,
+        h3: ({ children }) => <h3 className="mb-2 mt-3 text-sm font-semibold text-slate-100 first:mt-0">{children}</h3>,
+        p: ({ children }) => <p className="mb-2 leading-relaxed last:mb-0">{children}</p>,
+        ul: ({ children }) => <ul className="mb-2 list-disc space-y-1 pl-5 marker:text-cyan-400 last:mb-0">{children}</ul>,
+        ol: ({ children }) => <ol className="mb-2 list-decimal space-y-1 pl-5 marker:text-cyan-300 last:mb-0">{children}</ol>,
+        li: ({ children }) => <li className="pl-1">{children}</li>,
+        blockquote: ({ children }) => <blockquote className="mb-2 border-l-2 border-amber-400/70 bg-amber-950/20 px-3 py-2 text-slate-200 last:mb-0">{children}</blockquote>,
+        pre: ({ children }) => <pre className="mb-2 overflow-x-auto rounded border border-slate-800 bg-[#010309] p-3 font-mono text-xs leading-6 text-cyan-100 last:mb-0">{children}</pre>,
+        code: ({ children }) => <code className="rounded bg-cyan-950/30 px-1 py-0.5 font-mono text-[0.9em] text-cyan-100">{children}</code>,
+        table: ({ children }) => <div className="mb-2 overflow-x-auto rounded border border-slate-800 last:mb-0"><table className="min-w-full text-left text-xs">{children}</table></div>,
+        th: ({ children }) => <th className="border-b border-slate-700 bg-slate-900/80 px-2.5 py-2 font-semibold text-cyan-100">{children}</th>,
+        td: ({ children }) => <td className="border-b border-slate-800 px-2.5 py-2 align-top text-slate-300">{children}</td>,
+        a: ({ href, children }) => {
+          const external = Boolean(href && /^https?:\/\//i.test(href));
+          return <a href={href} target={external ? '_blank' : undefined} rel={external ? 'noreferrer' : undefined} className="text-cyan-300 underline decoration-cyan-700 underline-offset-4 hover:text-cyan-100">{children}</a>;
+        },
+      }}
+    >
+      {content}
+    </ReactMarkdown>
+  );
+}
+
 function isConversationBusy(conversation: Conversation | undefined): boolean {
   if (!conversation) {
     return false;
@@ -53,16 +85,111 @@ function isConversationBusy(conversation: Conversation | undefined): boolean {
   return false;
 }
 
-function buildStateLabel(conversation?: Conversation): string {
-  if (!conversation?.lastKnownRunState) {
-    return 'MAIN.IDLE';
+function agentLabel(srcagent?: string): string {
+  return srcagent?.trim() || 'AEGIS';
+}
+
+function describeRunState(
+  state?: string,
+  source: 'main' | 'delegate' = 'main',
+  srcagent?: string,
+): string {
+  const actor = agentLabel(srcagent);
+  switch (state) {
+    case 'idle':
+      return 'SESSION COMPLETE · AWAITING NEXT REQUEST';
+    case 'running':
+      return `${actor} · ${source === 'delegate' ? 'DELEGATE' : 'MAIN'} EXECUTION IN PROGRESS`;
+    case 'waiting_for_delegate_input':
+      return `${actor} · DELEGATE AWAITING INPUT`;
+    case 'waiting_for_approval':
+      return `${actor} · APPROVAL REQUIRED TO CONTINUE`;
+    case 'waiting_for_clarify':
+      return `${actor} · CLARIFICATION REQUIRED TO CONTINUE`;
+    case 'interrupted':
+      return `${actor} · SESSION INTERRUPTED`;
+    case 'error':
+      return `${actor} · SESSION ERROR · REVIEW WORKFLOW`;
+    default:
+      return `${actor} · ${state?.replace(/_/g, ' ').toUpperCase() || 'AWAITING FIRST TURN'}`;
   }
-  const source = conversation.foregroundSource || 'main';
-  const srcagent = conversation.foregroundAgentName;
-  return [source, srcagent, conversation.lastKnownRunState]
-    .filter((part) => !!part)
-    .join('.')
-    .toUpperCase();
+}
+
+function buildSessionStatus(conversation?: Conversation): string {
+  const hasRecordedActivity = Boolean(
+    conversation?.sessionId || conversation?.messages.length || conversation?.workflowTrace?.length,
+  );
+  if (!hasRecordedActivity) {
+    return 'AWAITING FIRST TURN';
+  }
+
+  const latestEvent = conversation?.workflowTrace?.at(-1);
+  if (latestEvent) {
+    const actor = agentLabel(latestEvent.srcagent);
+    if (latestEvent.type === 'delegate.entered') {
+      return `${actor} · DELEGATED AND ENTERED FOREGROUND`;
+    }
+    if (latestEvent.type === 'delegate.exited') {
+      return `${actor} · DELEGATION COMPLETE · CONTROL RETURNED TO MAIN`;
+    }
+    if (latestEvent.type === 'tool.started') {
+      return `${actor} · TOOL CALL RUNNING · ${latestEvent.toolName || 'TOOL'}`;
+    }
+    if (latestEvent.type === 'tool.completed') {
+      return `${actor} · TOOL CALL COMPLETED · ${latestEvent.toolName || 'TOOL'}`;
+    }
+    if (latestEvent.type === 'run.state') {
+      return describeRunState(latestEvent.state, latestEvent.source, latestEvent.srcagent);
+    }
+    if (latestEvent.type === 'message.completed' || latestEvent.type === 'message.stream.completed') {
+      return `${actor} · RESPONSE RECEIVED`;
+    }
+    if (latestEvent.type === 'message.accepted') {
+      return `${actor} · REQUEST ACCEPTED`;
+    }
+  }
+
+  if (conversation?.lastKnownRunState) {
+    return describeRunState(
+      conversation.lastKnownRunState,
+      conversation.foregroundSource,
+      conversation.foregroundAgentName,
+    );
+  }
+  return 'AWAITING FIRST TURN';
+}
+
+function statusSegmentTone(segment: string, index: number): string {
+  if (/ERROR|INTERRUPTED/.test(segment)) {
+    return 'critical';
+  }
+  if (/COMPLETE|COMPLETED/.test(segment)) {
+    return 'complete';
+  }
+  if (/REQUIRED|AWAITING/.test(segment)) {
+    return 'attention';
+  }
+  if (/RUNNING|EXECUTION|PROCESSING|DELEGATED|CONTROL RETURNED/.test(segment)) {
+    return 'activity';
+  }
+  if (/TOOL|RESPONSE|REQUEST/.test(segment)) {
+    return 'object';
+  }
+  if (index === 0) {
+    return 'actor';
+  }
+  return index === 1 ? 'detail' : 'object';
+}
+
+function renderSessionStatus(status: string) {
+  return status.split(' · ').map((segment, index) => (
+    <React.Fragment key={`${index}:${segment}`}>
+      {index > 0 ? <span className="aegis-session-status-ticker__separator" aria-hidden="true"> · </span> : null}
+      <span className={`aegis-session-status-ticker__part aegis-session-status-ticker__part--${statusSegmentTone(segment, index)}`}>
+        {segment}
+      </span>
+    </React.Fragment>
+  ));
 }
 
 async function writeClipboardText(text: string): Promise<void> {
@@ -121,7 +248,9 @@ function ChatTabContent({ agents }: ChatTabProps) {
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState('');
   const [showDelegateTools, setShowDelegateTools] = useState(false);
+  const [markdownRenderingEnabled, setMarkdownRenderingEnabled] = useState(true);
   const [expandedMessageIds, setExpandedMessageIds] = useState<Record<string, boolean>>({});
+  const [sessionStatusPhase, setSessionStatusPhase] = useState<'announce' | 'scroll'>('announce');
   const [workflowDrawerOpen, setWorkflowDrawerOpen] = useState(false);
   const [workflowFullscreen, setWorkflowFullscreen] = useState(false);
   const [promptTemplateDrawerOpen, setPromptTemplateDrawerOpen] = useState(false);
@@ -148,6 +277,14 @@ function ChatTabContent({ agents }: ChatTabProps) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [conversations, activeConvId]);
+
+  const sessionStatus = buildSessionStatus(activeConversation);
+
+  useEffect(() => {
+    setSessionStatusPhase('announce');
+    const tickerTimer = window.setTimeout(() => setSessionStatusPhase('scroll'), 1500);
+    return () => window.clearTimeout(tickerTimer);
+  }, [sessionStatus]);
 
   useEffect(() => {
     if (!workflowDrawerOpen) {
@@ -182,6 +319,18 @@ function ChatTabContent({ agents }: ChatTabProps) {
   function closeWorkflow() {
     setWorkflowFullscreen(false);
     setWorkflowDrawerOpen(false);
+  }
+
+  function openWorkflowFromSessionStatus() {
+    setWorkflowFullscreen(false);
+    setWorkflowDrawerOpen(true);
+  }
+
+  function handleSessionStatusKeyDown(event: React.KeyboardEvent<HTMLButtonElement>) {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault();
+      openWorkflowFromSessionStatus();
+    }
   }
 
   function handleCreateNewConversation() {
@@ -312,7 +461,6 @@ function ChatTabContent({ agents }: ChatTabProps) {
   const activeMessages = (activeConversation?.messages || []).filter(
     (message) => showDelegateTools || message.kind !== 'delegate-tools',
   );
-  const stateLabel = buildStateLabel(activeConversation);
   const composerPlaceholder = activeConversation?.pendingClarify?.awaitingText
     ? 'Answer clarify prompt... 输入你的补充说明'
     : "Ask Aegis anything... 触发关键词：'钓鱼邮件', '勒索病毒', '敏感泄露'...";
@@ -494,19 +642,36 @@ function ChatTabContent({ agents }: ChatTabProps) {
           data-testid="chat-workspace"
           className={`${workflowDrawerOpen ? 'w-1/2 shrink-0' : 'flex-1'} flex flex-col h-full min-w-0 bg-[#020408] relative ${composerExpanded ? 'pb-32' : 'pb-16'}`}
         >
-        <div className="p-4 border-b border-slate-800 bg-[#03060C] flex justify-between items-center">
-          <div>
-            <h3 className="text-sm font-bold text-white flex items-center gap-1.5 uppercase italic">
-              {activeConversation ? activeConversation.title : '安全事件会话'}
-              <span className="text-[9px] font-mono text-cyan-400 py-0.5 px-2 bg-[#080C14] rounded border border-slate-800 font-bold">
-                AEGIS PROCESSOR v0.2.3
-              </span>
-            </h3>
-            <p className="text-[10px] text-slate-500 mt-0.5">
-              INTENT ROUTING | A2A FLOW | VIP INTEGRATION PIPELINE
-            </p>
-          </div>
-          <div className="text-[10px] font-mono text-slate-500 flex items-center gap-3">
+        <div className="min-h-16 p-4 border-b border-slate-800 bg-[#03060C] flex items-center gap-3">
+          <h3 className="shrink-0 max-w-[34%] truncate text-sm font-bold text-white uppercase italic" title={activeConversation ? activeConversation.title : '安全事件会话'}>
+            {activeConversation ? activeConversation.title : '安全事件会话'}
+          </h3>
+          <button
+            type="button"
+            data-testid="session-status-ticker"
+            aria-label={`Open session workflow. Latest status: ${sessionStatus}`}
+            onClick={openWorkflowFromSessionStatus}
+            onKeyDown={handleSessionStatusKeyDown}
+            className="aegis-session-status-ticker min-w-0 flex-1 rounded border border-cyan-950/70 bg-cyan-950/10 px-2.5 py-1.5 text-left font-mono text-[10px] text-cyan-200 transition-colors hover:border-cyan-700/70 hover:bg-cyan-950/25 focus-visible:border-cyan-400 focus-visible:outline-none"
+            title="Open session workflow"
+          >
+            <span
+              className={`aegis-session-status-ticker__viewport aegis-session-status-ticker__viewport--${sessionStatusPhase}`}
+              aria-live="polite"
+            >
+              {sessionStatusPhase === 'announce' ? (
+                <span key={sessionStatus} className="aegis-session-status-ticker__announcement">
+                  {renderSessionStatus(sessionStatus)}
+                </span>
+              ) : (
+                <span key={sessionStatus} className="aegis-session-status-ticker__track">
+                  <span className="aegis-session-status-ticker__item">{renderSessionStatus(sessionStatus)}</span>
+                  <span className="aegis-session-status-ticker__item" aria-hidden="true">{renderSessionStatus(sessionStatus)}</span>
+                </span>
+              )}
+            </span>
+          </button>
+          <div className="shrink-0 text-[10px] font-mono text-slate-500 flex items-center gap-3">
             <button
               type="button"
               aria-label="Toggle delegate tool messages"
@@ -520,10 +685,20 @@ function ChatTabContent({ agents }: ChatTabProps) {
               {showDelegateTools ? <Eye className="h-3.5 w-3.5" /> : <EyeOff className="h-3.5 w-3.5" />}
               <span>{showDelegateTools ? 'DELEGATE TOOLS ON' : 'DELEGATE TOOLS OFF'}</span>
             </button>
-            <span>State:</span>
-            <span className="text-emerald-400 font-bold bg-emerald-950/30 px-2 py-0.5 border border-emerald-900/40 rounded">
-              {stateLabel}
-            </span>
+            <button
+              type="button"
+              aria-label={markdownRenderingEnabled ? 'Disable Markdown rendering' : 'Enable Markdown rendering'}
+              aria-pressed={markdownRenderingEnabled}
+              onClick={() => setMarkdownRenderingEnabled((current) => !current)}
+              className={`inline-flex h-7 w-7 items-center justify-center rounded border transition-all ${
+                markdownRenderingEnabled
+                  ? 'border-cyan-900/60 bg-cyan-950/30 text-cyan-300 hover:border-cyan-700 hover:text-cyan-100'
+                  : 'border-slate-800 bg-[#080C14] text-slate-500 hover:border-cyan-900/50 hover:text-cyan-300'
+              }`}
+              title={markdownRenderingEnabled ? 'Disable Markdown rendering' : 'Enable Markdown rendering'}
+            >
+              <Code2 className="h-3.5 w-3.5" aria-hidden="true" />
+            </button>
           </div>
         </div>
 
@@ -683,8 +858,12 @@ function ChatTabContent({ agents }: ChatTabProps) {
                         </div>
                       </div>
                     ) : (
-                      <div data-testid="message-text" className="whitespace-pre-wrap text-sm leading-relaxed select-text cursor-text">
-                        {message.text}
+                      <div
+                        data-testid="message-text"
+                        data-markdown-rendered={markdownRenderingEnabled}
+                        className={`${markdownRenderingEnabled ? '' : 'whitespace-pre-wrap'} text-sm leading-relaxed select-text cursor-text`}
+                      >
+                        {markdownRenderingEnabled ? <ChatMarkdown content={message.text} /> : message.text}
                       </div>
                     )}
                     <button

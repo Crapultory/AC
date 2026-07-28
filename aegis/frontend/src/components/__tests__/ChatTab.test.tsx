@@ -1,4 +1,4 @@
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatTab from '../ChatTab';
 
@@ -66,13 +66,101 @@ describe('ChatTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /新建对话/i }));
     const composer = screen.getByPlaceholderText(/ask aegis anything/i);
     fireEvent.change(composer, { target: { value: 'keep this draft' } });
+    expect(screen.getByTestId('session-status-ticker')).toHaveTextContent('AWAITING FIRST TURN');
 
     fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
 
     expect(screen.getByRole('complementary', { name: /workflow for new investigation/i })).toBeInTheDocument();
-    expect(screen.getByText('AWAITING FIRST TURN')).toBeInTheDocument();
+    expect(within(screen.getByTestId('session-workflow')).getByText('AWAITING FIRST TURN')).toBeInTheDocument();
     expect(screen.getByPlaceholderText(/ask aegis anything/i)).toHaveValue('keep this draft');
     expect(screen.getByTestId('chat-workspace')).toHaveClass('w-1/2');
+  });
+
+  it('uses the status ticker as the accessible workflow entry point', () => {
+    render(<ChatTab agents={[]} />);
+
+    expect(screen.getByTestId('session-status-ticker')).toHaveTextContent('AWAITING FIRST TURN');
+    expect(screen.queryByText('AEGIS PROCESSOR v0.2.3')).not.toBeInTheDocument();
+    expect(screen.queryByText('INTENT ROUTING | A2A FLOW | VIP INTEGRATION PIPELINE')).not.toBeInTheDocument();
+
+    const statusTicker = screen.getByTestId('session-status-ticker');
+    fireEvent.keyDown(statusTicker, { key: 'Enter' });
+
+    expect(screen.getByRole('complementary', { name: /workflow for current session/i })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /close workflow visualization/i }));
+    fireEvent.keyDown(statusTicker, { key: ' ' });
+    expect(screen.getByRole('complementary', { name: /workflow for current session/i })).toBeInTheDocument();
+  });
+
+  it('renders every ordinary chat message as GFM Markdown and can switch back to plain text', () => {
+    window.localStorage.setItem('aegis_convs', JSON.stringify([{
+      id: 'markdown-session',
+      title: 'Markdown session',
+      timestamp: '10:00',
+      lastKnownRunState: 'idle',
+      foregroundSource: 'main',
+      foregroundAgentName: '',
+      messages: [
+        {
+          id: 'markdown-user', sender: 'user', timestamp: '10:00', source: 'main',
+          text: '## Operator brief\n\n- Verify the [reference](https://example.com)\n\n<img src="https://example.com/unsafe.png" alt="unsafe" />',
+        },
+        {
+          id: 'markdown-main', sender: 'aegis', timestamp: '10:01', source: 'main',
+          text: '**Confirmed**\n\n```bash\npwd\n```\n\n| IOC | Status |\n| --- | --- |\n| example.com | blocked |',
+        },
+        {
+          id: 'markdown-delegate', sender: 'aegis', timestamp: '10:02', source: 'delegate', srcagent: 'threat-intel',
+          text: '> Delegated finding',
+        },
+      ],
+    }]));
+    render(<ChatTab agents={[]} />);
+
+    const [userCard, mainCard, delegateCard] = screen.getAllByTestId('chat-message');
+    expect(within(userCard).getByRole('heading', { name: 'Operator brief', level: 2 })).toBeInTheDocument();
+    const reference = within(userCard).getByRole('link', { name: 'reference' });
+    expect(reference).toHaveAttribute('target', '_blank');
+    expect(reference).toHaveAttribute('rel', 'noreferrer');
+    expect(within(userCard).queryByRole('img', { name: 'unsafe' })).not.toBeInTheDocument();
+    expect(within(mainCard).getByText('Confirmed').tagName).toBe('STRONG');
+    expect(within(mainCard).getByText('pwd').closest('pre')).toBeInTheDocument();
+    expect(within(mainCard).getByRole('table')).toBeInTheDocument();
+    expect(within(delegateCard).getByText('Delegated finding').closest('blockquote')).toBeInTheDocument();
+    expect(screen.getAllByTestId('message-text')).toHaveLength(3);
+    screen.getAllByTestId('message-text').forEach((message) => {
+      expect(message).toHaveAttribute('data-markdown-rendered', 'true');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /disable markdown rendering/i }));
+    expect(screen.queryByRole('heading', { name: 'Operator brief', level: 2 })).not.toBeInTheDocument();
+    expect(within(userCard).getByTestId('message-text')).toHaveTextContent('## Operator brief');
+    expect(within(mainCard).queryByRole('table')).not.toBeInTheDocument();
+    screen.getAllByTestId('message-text').forEach((message) => {
+      expect(message).toHaveAttribute('data-markdown-rendered', 'false');
+      expect(message).toHaveClass('whitespace-pre-wrap');
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: /enable markdown rendering/i }));
+    expect(within(mainCard).getByRole('table')).toBeInTheDocument();
+  });
+
+  it('centres the current status before starting the marquee', () => {
+    vi.useFakeTimers();
+    try {
+      render(<ChatTab agents={[]} />);
+
+      const ticker = screen.getByTestId('session-status-ticker');
+      const viewport = ticker.querySelector('.aegis-session-status-ticker__viewport');
+      expect(viewport).toHaveClass('aegis-session-status-ticker__viewport--announce');
+      expect(within(ticker).getByText('AWAITING FIRST TURN')).toBeInTheDocument();
+
+      act(() => vi.advanceTimersByTime(1500));
+      expect(viewport).toHaveClass('aegis-session-status-ticker__viewport--scroll');
+      expect(ticker.querySelector('.aegis-session-status-ticker__track')).toBeInTheDocument();
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it('closes the global workflow drawer with its close control', () => {
@@ -233,7 +321,15 @@ describe('ChatTab', () => {
       state: 'running',
     });
     await waitFor(() => {
-      expect(screen.getByText('MAIN.RUNNING')).toBeInTheDocument();
+      const ticker = screen.getByTestId('session-status-ticker');
+      expect(ticker).toHaveTextContent('AEGIS · MAIN EXECUTION IN PROGRESS');
+      expect(within(ticker).getByText('AEGIS')).toHaveClass('aegis-session-status-ticker__part--actor');
+      expect(within(ticker).getByText('MAIN EXECUTION IN PROGRESS')).toHaveClass(
+        'aegis-session-status-ticker__part--activity',
+      );
+      expect(ticker.querySelector('.aegis-session-status-ticker__viewport')).toHaveClass(
+        'aegis-session-status-ticker__viewport--announce',
+      );
     });
 
     socket.emit({
@@ -252,6 +348,9 @@ describe('ChatTab', () => {
       tool_call_id: 'tool-1',
       args_preview: 'pwd',
     });
+    await waitFor(() => {
+      expect(screen.getByTestId('session-status-ticker')).toHaveTextContent('AEGIS · TOOL CALL RUNNING · terminal');
+    });
     socket.emit({
       type: 'tool.completed',
       session_id: 'sess-1',
@@ -262,8 +361,14 @@ describe('ChatTab', () => {
       result_preview: '/Users/demo',
     });
 
+    await waitFor(() => {
+      const ticker = screen.getByTestId('session-status-ticker');
+      expect(ticker).toHaveTextContent('AEGIS · TOOL CALL COMPLETED · terminal');
+      expect(within(ticker).getByText('terminal')).toHaveClass('aegis-session-status-ticker__part--object');
+    });
+
     expect(await screen.findByText(/orchestration chain/i)).toBeInTheDocument();
-    expect(screen.getByText('terminal')).toBeInTheDocument();
+    expect(within(screen.getByTestId('message-chain')).getByText('terminal')).toBeInTheDocument();
 
     socket.emit({
       type: 'message.delta',
@@ -304,7 +409,7 @@ describe('ChatTab', () => {
 
     expect(await screen.findByText('threat-intel entered foreground')).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByText('DELEGATE.THREAT-INTEL.WAITING_FOR_DELEGATE_INPUT')).toBeInTheDocument();
+      expect(screen.getByTestId('session-status-ticker')).toHaveTextContent('threat-intel · DELEGATE AWAITING INPUT');
     });
 
     socket.emit({
@@ -395,7 +500,23 @@ describe('ChatTab', () => {
     expect(await screen.findByText(/returned control to main/i)).toBeInTheDocument();
     expect(await screen.findByText('main agent resumed after /main')).toBeInTheDocument();
     await waitFor(() => {
-      expect(screen.getByText('MAIN.RUNNING')).toBeInTheDocument();
+      expect(screen.getByTestId('session-status-ticker')).toHaveTextContent(
+        'threat-intel · DELEGATION COMPLETE · CONTROL RETURNED TO MAIN',
+      );
+    });
+
+    socket.emit({
+      type: 'run.state',
+      session_id: 'sess-1',
+      turn_id: 'turn-1',
+      source: 'main',
+      state: 'idle',
+    });
+    await waitFor(() => {
+      const ticker = screen.getByTestId('session-status-ticker');
+      expect(ticker).toHaveTextContent('SESSION COMPLETE · AWAITING NEXT REQUEST');
+      expect(within(ticker).getByText('SESSION COMPLETE')).toHaveClass('aegis-session-status-ticker__part--complete');
+      expect(within(ticker).getByText('AWAITING NEXT REQUEST')).toHaveClass('aegis-session-status-ticker__part--attention');
     });
 
     fireEvent.click(screen.getByRole('button', { name: /collapse composer/i }));

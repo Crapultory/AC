@@ -23,6 +23,88 @@ body {
   }
 }
 
+@keyframes aegis-session-status-marquee {
+  from {
+    transform: translateX(0);
+  }
+  to {
+    transform: translateX(-50%);
+  }
+}
+
+.aegis-session-status-ticker__viewport {
+  display: flex;
+  align-items: center;
+  overflow: hidden;
+  white-space: nowrap;
+  mask-image: linear-gradient(to right, transparent, #000 7%, #000 93%, transparent);
+}
+
+.aegis-session-status-ticker__viewport--announce {
+  justify-content: center;
+}
+
+.aegis-session-status-ticker__viewport--scroll {
+  justify-content: flex-start;
+}
+
+.aegis-session-status-ticker__announcement {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.aegis-session-status-ticker__track {
+  display: inline-flex;
+  width: max-content;
+  animation: aegis-session-status-marquee 18s linear infinite;
+  will-change: transform;
+}
+
+.aegis-session-status-ticker__item {
+  flex: none;
+  padding-right: 3rem;
+}
+
+.aegis-session-status-ticker__separator {
+  color: #475569;
+}
+
+.aegis-session-status-ticker__part--actor {
+  color: #c4b5fd;
+}
+
+.aegis-session-status-ticker__part--activity {
+  color: #67e8f9;
+}
+
+.aegis-session-status-ticker__part--object {
+  color: #7dd3fc;
+}
+
+.aegis-session-status-ticker__part--attention {
+  color: #fcd34d;
+}
+
+.aegis-session-status-ticker__part--complete {
+  color: #6ee7b7;
+}
+
+.aegis-session-status-ticker__part--critical {
+  color: #fda4af;
+}
+
+.aegis-session-status-ticker__part--detail {
+  color: #cbd5e1;
+}
+
+.aegis-session-status-ticker:hover .aegis-session-status-ticker__track,
+.aegis-session-status-ticker:focus-visible .aegis-session-status-ticker__track {
+  animation-play-state: paused;
+}
+
 @keyframes starmapping-star-twinkle {
   0%, 100% {
     opacity: 0.08;
@@ -221,7 +303,8 @@ body {
 
   .aegis-btn--selected::after,
   .aegis-btn--busy::after,
-  .aegis-btn--busy * {
+  .aegis-btn--busy *,
+  .aegis-session-status-ticker__track {
     animation: none;
   }
 
