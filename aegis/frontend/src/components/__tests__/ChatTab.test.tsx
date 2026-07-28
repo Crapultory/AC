@@ -124,7 +124,9 @@ describe('ChatTab', () => {
     expect(reference).toHaveAttribute('rel', 'noreferrer');
     expect(within(userCard).queryByRole('img', { name: 'unsafe' })).not.toBeInTheDocument();
     expect(within(mainCard).getByText('Confirmed').tagName).toBe('STRONG');
-    expect(within(mainCard).getByText('pwd').closest('pre')).toBeInTheDocument();
+    const codeBlock = within(mainCard).getByText('pwd').closest('pre');
+    expect(codeBlock).toHaveClass('aegis-markdown__pre');
+    expect(within(mainCard).getByText('pwd')).toHaveClass('aegis-markdown__code');
     expect(within(mainCard).getByRole('table')).toBeInTheDocument();
     expect(within(delegateCard).getByText('Delegated finding').closest('blockquote')).toBeInTheDocument();
     expect(screen.getAllByTestId('message-text')).toHaveLength(3);
@@ -156,8 +158,8 @@ describe('ChatTab', () => {
       expect(within(ticker).getByText('AWAITING FIRST TURN')).toBeInTheDocument();
 
       act(() => vi.advanceTimersByTime(1500));
-      expect(viewport).toHaveClass('aegis-session-status-ticker__viewport--scroll');
-      expect(ticker.querySelector('.aegis-session-status-ticker__track')).toBeInTheDocument();
+      expect(viewport).toHaveClass('aegis-session-status-ticker__viewport--static');
+      expect(ticker.querySelector('.aegis-session-status-ticker__track')).not.toBeInTheDocument();
     } finally {
       vi.useRealTimers();
     }

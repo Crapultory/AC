@@ -99,43 +99,44 @@ export default function UserManagementTab({
   }
 
   return (
-    <div className="flex h-full flex-col overflow-hidden bg-[#020408]">
-      <div className="flex items-center justify-between border-b border-slate-800 px-6 py-4">
-        <div>
-          <p className="text-[11px] font-mono uppercase tracking-[0.32em] text-cyan-400">Administration</p>
-          <h2 className="mt-2 text-2xl font-black uppercase italic tracking-tight text-white">
-            User Management
-          </h2>
-          <p className="mt-2 text-sm text-slate-400">
-            管理注册账号、启停状态、管理员新增用户与密码重置。
-          </p>
-        </div>
-        <div className="flex items-center gap-3">
-          <button
-            type="button"
-            onClick={() => void onRefresh()}
-            className="rounded-lg border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-300 transition hover:border-cyan-500 hover:text-white"
-          >
-            Refresh
-          </button>
-          <button
-            type="button"
-            onClick={() => setShowCreateForm((current) => !current)}
-            className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-bold text-white transition hover:bg-cyan-600"
-          >
-            新增用户
-          </button>
-        </div>
-      </div>
+    <main className="aegis-admin-page" aria-labelledby="user-management-heading">
+      <div className="aegis-admin-page__inner">
+        <header className="aegis-page-intro">
+          <div>
+            <h1 id="user-management-heading" className="aegis-page-intro__title">User Management</h1>
+            <p className="aegis-page-intro__description">
+              管理注册账号、启停状态、管理员新增用户与密码重置。
+            </p>
+          </div>
+          <div className="aegis-page-intro__badge">
+            <span className="aegis-page-intro__badge-label">Directory:</span> {users.length} accounts
+          </div>
+        </header>
 
-      {showCreateForm ? (
-        <form className="grid gap-3 border-b border-slate-800 bg-[#05080F] px-6 py-4 md:grid-cols-5" onSubmit={handleCreate}>
+        <section className="aegis-page-content" aria-labelledby="user-directory-heading">
+          <header className="aegis-page-content__header">
+            <div>
+              <h2 id="user-directory-heading" className="aegis-page-content__title">User Directory</h2>
+              <p className="aegis-page-content__description">Review account access, reset credentials, and maintain account status.</p>
+            </div>
+            <div className="flex flex-wrap items-center gap-3">
+              <button type="button" onClick={() => void onRefresh()} className="aegis-btn aegis-btn--secondary px-4 py-2 text-sm">
+                Refresh
+              </button>
+              <button type="button" onClick={() => setShowCreateForm((current) => !current)} className="aegis-btn aegis-btn--primary px-4 py-2 text-sm">
+                新增用户
+              </button>
+            </div>
+          </header>
+
+          {showCreateForm ? (
+            <form className="grid gap-3 border-b border-slate-800 p-4 md:grid-cols-5" onSubmit={handleCreate}>
           <input
             aria-label="Create Username"
             value={draft.username}
             onChange={(event) => setDraft((current) => ({ ...current, username: event.target.value }))}
             placeholder="username"
-            className="rounded-lg border border-slate-800 bg-[#020408] px-3 py-2 text-sm text-white outline-none transition focus:border-cyan-500"
+            className="aegis-page-field px-3 py-2 text-sm"
           />
           <input
             aria-label="Create Password"
@@ -143,7 +144,7 @@ export default function UserManagementTab({
             value={draft.password}
             onChange={(event) => setDraft((current) => ({ ...current, password: event.target.value }))}
             placeholder="password"
-            className="rounded-lg border border-slate-800 bg-[#020408] px-3 py-2 text-sm text-white outline-none transition focus:border-cyan-500"
+            className="aegis-page-field px-3 py-2 text-sm"
           />
           <input
             aria-label="Create Email"
@@ -151,13 +152,13 @@ export default function UserManagementTab({
             value={draft.email}
             onChange={(event) => setDraft((current) => ({ ...current, email: event.target.value }))}
             placeholder="email@example.com"
-            className="rounded-lg border border-slate-800 bg-[#020408] px-3 py-2 text-sm text-white outline-none transition focus:border-cyan-500"
+            className="aegis-page-field px-3 py-2 text-sm"
           />
           <select
             aria-label="Create Status"
             value={draft.status}
             onChange={(event) => setDraft((current) => ({ ...current, status: event.target.value as 'enabled' | 'disabled' }))}
-            className="rounded-lg border border-slate-800 bg-[#020408] px-3 py-2 text-sm text-white outline-none transition focus:border-cyan-500"
+            className="aegis-page-field px-3 py-2 text-sm"
           >
             <option value="enabled">enabled</option>
             <option value="disabled">disabled</option>
@@ -165,21 +166,21 @@ export default function UserManagementTab({
           <button
             type="submit"
             disabled={busy}
-            className="rounded-lg bg-cyan-500 px-4 py-2 text-sm font-bold text-white transition hover:bg-cyan-600 disabled:cursor-not-allowed disabled:opacity-60"
+            className="aegis-btn aegis-btn--primary px-4 py-2 text-sm"
           >
             Create User
           </button>
-        </form>
-      ) : null}
+            </form>
+          ) : null}
 
-      {error ? (
-        <div className="border-b border-rose-900/30 bg-rose-950/20 px-6 py-3 text-sm text-rose-300">
-          {error}
-        </div>
-      ) : null}
+          {error ? (
+            <div className="border-b border-rose-900/30 bg-rose-950/20 px-6 py-3 text-sm text-rose-300">
+              {error}
+            </div>
+          ) : null}
 
-      <div className="flex-1 overflow-auto px-6 py-4">
-        <table className="w-full border-collapse text-left">
+          <div className="aegis-page-content__body overflow-auto px-6 py-4">
+            <table className="w-full border-collapse text-left">
           <thead>
             <tr className="border-b border-slate-800 font-mono text-[10px] uppercase tracking-[0.24em] text-slate-500">
               <th className="px-3 py-3">Username</th>
@@ -191,16 +192,16 @@ export default function UserManagementTab({
           </thead>
           <tbody className="divide-y divide-slate-800/60">
             {sortedUsers.map((user) => (
-              <tr key={user.uid} className="align-top text-sm text-slate-300">
+              <tr key={user.uid} className="aegis-table-row align-top text-sm text-slate-300">
                 <td className="px-3 py-4">
                   <div className="font-semibold text-white">{user.username}</div>
                 </td>
                 <td className="px-3 py-4">{user.email}</td>
                 <td className="px-3 py-4">
-                  <span className={`rounded-full border px-2.5 py-1 text-[11px] font-semibold ${
+                  <span className={`aegis-status-badge ${
                     user.status === 'enabled'
-                      ? 'border-emerald-900/40 bg-emerald-950/30 text-emerald-300'
-                      : 'border-amber-900/40 bg-amber-950/30 text-amber-300'
+                      ? 'aegis-status-badge--success'
+                      : 'aegis-status-badge--warning'
                   }`}>
                     {user.status}
                   </span>
@@ -208,29 +209,17 @@ export default function UserManagementTab({
                 <td className="px-3 py-4 text-slate-400">{user.last_login || 'Never'}</td>
                 <td className="px-3 py-4">
                   <div className="flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      onClick={() => void handleToggleStatus(user)}
-                      className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-300 transition hover:border-cyan-500 hover:text-white"
-                    >
+                    <button type="button" onClick={() => void handleToggleStatus(user)} className="aegis-btn aegis-btn--secondary px-3 py-1 text-xs">
                       {user.status === 'enabled' ? `Disable ${user.username}` : `Enable ${user.username}`}
                     </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        setResetPasswordUid(user.uid);
-                        setResetPasswordValue('');
-                      }}
-                      className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-300 transition hover:border-cyan-500 hover:text-white"
-                    >
+                    <button type="button" onClick={() => {
+                      setResetPasswordUid(user.uid);
+                      setResetPasswordValue('');
+                    }} className="aegis-btn aegis-btn--secondary px-3 py-1 text-xs">
                       {`Reset password ${user.username}`}
                     </button>
                     {!user.is_admin ? (
-                      <button
-                        type="button"
-                        onClick={() => void handleDelete(user.uid)}
-                        className="rounded border border-rose-900/40 px-3 py-1 text-xs font-semibold text-rose-300 transition hover:bg-rose-950/30"
-                      >
+                      <button type="button" onClick={() => void handleDelete(user.uid)} className="aegis-btn aegis-btn--danger px-3 py-1 text-xs">
                         {`Delete ${user.username}`}
                       </button>
                     ) : null}
@@ -243,12 +232,12 @@ export default function UserManagementTab({
                         value={resetPasswordValue}
                         onChange={(event) => setResetPasswordValue(event.target.value)}
                         placeholder="new password"
-                        className="rounded-lg border border-slate-800 bg-[#020408] px-3 py-2 text-sm text-white outline-none transition focus:border-cyan-500"
+                        className="aegis-page-field px-3 py-2 text-sm"
                       />
                       <button
                         type="button"
                         onClick={() => void handleResetPassword(user.uid)}
-                        className="rounded-lg bg-cyan-500 px-3 py-2 text-xs font-bold text-white transition hover:bg-cyan-600"
+                        className="aegis-btn aegis-btn--primary px-3 py-2 text-xs"
                       >
                         Save Password
                       </button>
@@ -258,8 +247,10 @@ export default function UserManagementTab({
               </tr>
             ))}
           </tbody>
-        </table>
+            </table>
+          </div>
+        </section>
       </div>
-    </div>
+    </main>
   );
 }

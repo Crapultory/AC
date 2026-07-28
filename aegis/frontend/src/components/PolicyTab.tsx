@@ -189,7 +189,7 @@ export default function PolicyTab({
                 </tr>
               ) : (
                 filteredRules.map((rule) => (
-                  <tr key={rule.id} className="transition-colors hover:bg-[#03060C]/60">
+                  <tr key={rule.id} className="aegis-table-row">
                     <td className="min-w-[160px] p-3">
                       <div>
                         <div className="text-xs font-bold text-slate-200">{rule.ruleName}</div>
@@ -206,11 +206,11 @@ export default function PolicyTab({
                     </td>
                     <td className="whitespace-nowrap p-3">
                       {rule.status === 'Enabled' ? (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-emerald-900/30 bg-emerald-950/20 px-2 py-0.5 font-mono text-[9px] font-bold text-emerald-400">
+                        <span className="aegis-status-badge aegis-status-badge--success">
                           ACTIVE (启用)
                         </span>
                       ) : (
-                        <span className="inline-flex items-center gap-1 rounded-full border border-slate-800/80 bg-slate-900/40 px-2 py-0.5 font-mono text-[9px] text-slate-500">
+                        <span className="aegis-status-badge aegis-status-badge--muted">
                           DISABLED (停用)
                         </span>
                       )}

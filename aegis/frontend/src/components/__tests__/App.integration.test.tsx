@@ -336,6 +336,8 @@ describe('Aegis App integration', () => {
     await screen.findByText('New Rule');
 
     fireEvent.click(screen.getByRole('button', { name: /user management/i }));
+    expect(await screen.findByRole('heading', { name: /user management/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /user directory/i })).toBeInTheDocument();
     fireEvent.click(await screen.findByRole('button', { name: /新增用户/i }));
     fireEvent.change(screen.getByLabelText(/create username/i), {
       target: { value: 'alice' },
@@ -572,6 +574,25 @@ describe('Aegis App integration', () => {
     render(<App />);
 
     await screen.findByRole('button', { name: /overview/i });
+    const themeButton = screen.getByRole('button', { name: /choose color theme/i });
+    expect(screen.getByText('UTC:').parentElement?.nextElementSibling).toContainElement(themeButton);
+    fireEvent.click(themeButton);
+
+    const dialog = screen.getByRole('dialog', { name: /choose your operating environment/i });
+    const radios = within(dialog).getAllByRole('radio');
+    expect(radios).toHaveLength(3);
+    expect(radios[2]).toHaveAttribute('aria-checked', 'true');
+    fireEvent.click(within(dialog).getByRole('radio', { name: /daylight signal/i }));
+    await waitFor(() => {
+      expect(document.documentElement).toHaveAttribute('data-aegis-theme', 'daylight-signal');
+      expect(window.localStorage.getItem('aegis_theme')).toBe('daylight-signal');
+    });
+    fireEvent.keyDown(within(dialog).getByRole('radio', { name: /daylight signal/i }), { key: 'ArrowRight' });
+    await waitFor(() => expect(document.documentElement).toHaveAttribute('data-aegis-theme', 'aegis-night'));
+    fireEvent.keyDown(document, { key: 'Escape' });
+    expect(screen.queryByRole('dialog', { name: /choose your operating environment/i })).not.toBeInTheDocument();
+    expect(themeButton).toHaveFocus();
+
     requests.length = 0;
     window.history.replaceState({}, '', '/settings');
     fireEvent(window, new PopStateEvent('popstate'));

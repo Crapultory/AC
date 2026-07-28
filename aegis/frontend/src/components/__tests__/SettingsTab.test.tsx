@@ -1,4 +1,4 @@
-import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import SettingsTab from '../SettingsTab';
@@ -25,6 +25,58 @@ describe('Aegis Settings restart controls', () => {
     global.fetch = originalFetch;
     vi.useRealTimers();
     vi.restoreAllMocks();
+  });
+
+  it('groups the current settings content in the selected Status tab', () => {
+    global.fetch = vi.fn(async () => jsonResponse({ status: 'ok', pid: 123 })) as typeof global.fetch;
+
+    render(<SettingsTab />);
+
+    const tab = screen.getByRole('tab', { name: 'Status' });
+    const panel = screen.getByRole('tabpanel');
+    expect(screen.getByRole('tablist')).toHaveClass('aegis-page-tabs--compact');
+    expect(tab).toHaveAttribute('aria-selected', 'true');
+    expect(tab).toHaveAttribute('aria-controls', panel.id);
+    expect(panel).toHaveAttribute('aria-labelledby', tab.id);
+    expect(within(panel).getByRole('heading', { name: /runtime status/i })).toBeInTheDocument();
+    expect(within(panel).getByRole('heading', { name: /dangerous actions/i })).toBeInTheDocument();
+  });
+
+  it('switches the local License mock with click and standard tab keyboard navigation', () => {
+    global.fetch = vi.fn(async () => jsonResponse({ status: 'ok', pid: 123 })) as typeof global.fetch;
+
+    render(<SettingsTab />);
+
+    const statusTab = screen.getByRole('tab', { name: 'Status' });
+    const licenseTab = screen.getByRole('tab', { name: 'LIC Management' });
+    expect(licenseTab).toHaveAttribute('aria-selected', 'false');
+
+    fireEvent.click(licenseTab);
+    const licensePanel = screen.getByRole('tabpanel');
+    expect(licenseTab).toHaveAttribute('aria-selected', 'true');
+    expect(licensePanel).toHaveAttribute('aria-labelledby', licenseTab.id);
+    expect(within(licensePanel).getByRole('heading', { name: /license management/i })).toBeInTheDocument();
+    expect(within(licensePanel).getByText('AEG-ENT-EVAL-2026-LOCAL')).toBeInTheDocument();
+    expect(within(licensePanel).getByText('A2A Orchestration')).toBeInTheDocument();
+    expect(screen.getByText('LOCAL MOCK / DEMO DATA')).toBeInTheDocument();
+    expect(global.fetch).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(licenseTab, { key: 'Home' });
+    expect(statusTab).toHaveFocus();
+    expect(statusTab).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.keyDown(statusTab, { key: 'ArrowRight' });
+    expect(licenseTab).toHaveFocus();
+    expect(licenseTab).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.keyDown(licenseTab, { key: 'ArrowLeft' });
+    expect(statusTab).toHaveFocus();
+    expect(statusTab).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.keyDown(statusTab, { key: 'End' });
+    expect(licenseTab).toHaveFocus();
+    expect(licenseTab).toHaveAttribute('aria-selected', 'true');
+    expect(global.fetch).toHaveBeenCalledTimes(1);
   });
 
   it('requires both confirmation stages and the exact phrase before an authenticated restart', async () => {

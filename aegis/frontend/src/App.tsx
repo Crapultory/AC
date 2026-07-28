@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Bell, ChevronDown, KeyRound, LogOut, Settings } from 'lucide-react';
+import { useEffect, useMemo, useRef, useState } from 'react';
+import { Bell, ChevronDown, KeyRound, LogOut, Palette, Settings } from 'lucide-react';
 import Sidebar from './components/Sidebar';
 import OverviewTab from './components/OverviewTab';
 import ChatTab from './components/ChatTab';
@@ -13,9 +13,11 @@ import SettingsTab from './components/SettingsTab';
 import AuditLogsTab from './components/AuditLogsTab';
 import PromptTemplateTab from './components/PromptTemplateTab';
 import UserManualTab from './components/UserManualTab';
+import ThemeDialog from './components/ThemeDialog';
 import { AegisChatProvider, useAegisChatRuntime } from './lib/chatRuntime';
 import { clearStoredAuth, getStoredUser, hasStoredToken, setStoredAuth, setStoredUser } from './lib/auth';
 import { fetchJSON, ApiError, alertApiError, getApiErrorMessage } from './lib/api';
+import { AegisTheme, applyTheme, getStoredTheme } from './lib/theme';
 import {
   BackendAgent,
   BackendAgentList,
@@ -149,6 +151,8 @@ function AuthenticatedAppShell({
   topologyError,
   rules,
   syncError,
+  theme,
+  onThemeChange,
   users,
 }: {
   activeTab: AppTab;
@@ -178,10 +182,14 @@ function AuthenticatedAppShell({
   topologyError: string;
   rules: RoutingRule[];
   syncError: string;
+  theme: AegisTheme;
+  onThemeChange: (theme: AegisTheme) => void;
   users: AuthenticatedUser[];
 }) {
   const { chatAttentionCount } = useAegisChatRuntime();
   const [menuOpen, setMenuOpen] = useState(false);
+  const [themeDialogOpen, setThemeDialogOpen] = useState(false);
+  const themeTriggerRef = useRef<HTMLButtonElement>(null);
   const isAdmin = currentUser.is_admin;
 
   useEffect(() => {
@@ -202,12 +210,12 @@ function AuthenticatedAppShell({
           <div className="flex items-center space-x-4">
             <span className="text-xs font-mono text-slate-500">PATH: ROOT/{activeTab.toUpperCase()}</span>
             <span className="h-4 w-px bg-slate-800" />
-            <span className={`flex items-center gap-1.5 rounded border px-2 py-0.5 text-[10px] font-mono font-bold ${
+            <span className={`aegis-header-sync ${
               syncError
-                ? 'border-amber-900/30 bg-amber-950/30 text-amber-400'
-                : 'border-emerald-900/30 bg-emerald-950/30 text-emerald-400'
+                ? 'aegis-header-sync--warning'
+                : 'aegis-header-sync--success'
             }`}>
-              <span className={`h-1.5 w-1.5 rounded-full ${syncError ? 'bg-amber-400' : 'bg-emerald-500 animate-pulse'}`} />
+              <span className={`aegis-header-sync__indicator ${syncError ? '' : 'animate-pulse'}`} />
               {isSyncing ? 'LIVE_SYNC: SYNCING' : syncError ? 'LIVE_SYNC: DEGRADED' : 'LIVE_SYNC: CONNECTED'}
             </span>
           </div>
@@ -217,6 +225,18 @@ function AuthenticatedAppShell({
               <span className="font-bold text-cyan-400">UTC:</span>
               <span className="text-white">{currentUtcTime}</span>
             </div>
+            <button
+              ref={themeTriggerRef}
+              type="button"
+              aria-label="Choose color theme"
+              aria-expanded={themeDialogOpen}
+              aria-haspopup="dialog"
+              title="Choose color theme"
+              onClick={() => setThemeDialogOpen(true)}
+              className="shrink-0 rounded border border-slate-800 bg-[#05080F] p-1.5 text-slate-400 transition-all hover:bg-[#080C14] hover:text-cyan-400 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
+            >
+              <Palette className="h-4 w-4" />
+            </button>
 
             <div className="flex items-center gap-2.5">
               <button
@@ -341,6 +361,14 @@ function AuthenticatedAppShell({
           {activeTab === 'audit' ? <AuditLogsTab onAuthExpired={onAuthExpired} /> : null}
         </main>
       </div>
+      {themeDialogOpen ? (
+        <ThemeDialog
+          selectedTheme={theme}
+          onThemeChange={onThemeChange}
+          onClose={() => setThemeDialogOpen(false)}
+          triggerRef={themeTriggerRef}
+        />
+      ) : null}
     </div>
   );
 }
@@ -366,6 +394,7 @@ export default function App() {
   const [syncError, setSyncError] = useState('');
   const [isSyncing, setIsSyncing] = useState(false);
   const [showPasswordDialog, setShowPasswordDialog] = useState(false);
+  const [theme, setTheme] = useState<AegisTheme>(() => getStoredTheme());
 
   const requestedTab = useMemo(() => resolveTabFromPath(pathname) || 'overview', [pathname]);
   const activeTab = isAdminOnlyTab(requestedTab) && !currentUser?.is_admin
@@ -379,6 +408,10 @@ export default function App() {
 
     return () => window.clearInterval(timer);
   }, []);
+
+  useEffect(() => {
+    applyTheme(theme);
+  }, [theme]);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -944,6 +977,8 @@ export default function App() {
           topologyError={topologyError}
           rules={rules}
           syncError={syncError}
+          theme={theme}
+          onThemeChange={setTheme}
           users={users}
         />
       </AegisChatProvider>

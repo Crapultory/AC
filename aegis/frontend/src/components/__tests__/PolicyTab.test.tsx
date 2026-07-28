@@ -25,6 +25,7 @@ describe('PolicyTab', () => {
     const globalTab = screen.getByRole('button', { name: /global routing rules/i });
     const agentTab = screen.getByRole('button', { name: /agent policy/i });
 
+    expect(globalTab.parentElement).not.toHaveClass('aegis-page-tabs--compact');
     expect(globalTab).toHaveAttribute('aria-pressed', 'true');
     expect(globalTab).toHaveClass('aegis-btn--selected');
     expect(agentTab).toHaveAttribute('aria-pressed', 'false');

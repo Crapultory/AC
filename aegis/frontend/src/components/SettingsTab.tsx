@@ -15,8 +15,21 @@ interface RestartResponse {
   pid: number;
 }
 
+type SettingsView = 'status' | 'license';
+
 const RESTART_CONFIRMATION_PHRASE = 'RESTART AEGIS';
 const DEFAULT_RECOVERY_POLL_MS = 1_000;
+const SETTINGS_VIEWS: SettingsView[] = ['status', 'license'];
+const LICENSE_MOCK = {
+  id: 'AEG-ENT-EVAL-2026-LOCAL',
+  edition: 'Enterprise Evaluation',
+  status: 'Active',
+  issuedTo: 'Aegis Local Security Console',
+  expiresAt: '2026-12-31 23:59 UTC',
+  seats: '12 / 25',
+  agentNodes: '8 / 16',
+  modules: ['A2A Orchestration', 'Audit Evidence', 'VIP Integration'],
+};
 
 interface SettingsTabProps {
   onAuthExpired?: () => void;
@@ -33,6 +46,7 @@ export default function SettingsTab({
   reloadPage = reloadWindow,
   recoveryPollMs = DEFAULT_RECOVERY_POLL_MS,
 }: SettingsTabProps) {
+  const [activeView, setActiveView] = useState<SettingsView>('status');
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthError, setHealthError] = useState(false);
   const [confirmationStage, setConfirmationStage] = useState<'warning' | 'phrase' | null>(null);
@@ -46,6 +60,7 @@ export default function SettingsTab({
   const phraseInputRef = useRef<HTMLInputElement>(null);
   const dialogWasOpenRef = useRef(false);
   const restartAbortControllerRef = useRef<AbortController | null>(null);
+  const settingsTabRefs = useRef<Array<HTMLButtonElement | null>>([]);
 
   useEffect(() => {
     let cancelled = false;
@@ -235,75 +250,153 @@ export default function SettingsTab({
     }
   }
 
+  function selectSettingsView(view: SettingsView) {
+    setActiveView(view);
+  }
+
+  function handleSettingsTabKeyDown(event: ReactKeyboardEvent<HTMLButtonElement>, currentView: SettingsView) {
+    const currentIndex = SETTINGS_VIEWS.indexOf(currentView);
+    let nextIndex = currentIndex;
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      nextIndex = (currentIndex + 1) % SETTINGS_VIEWS.length;
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      nextIndex = (currentIndex - 1 + SETTINGS_VIEWS.length) % SETTINGS_VIEWS.length;
+    } else if (event.key === 'Home') {
+      nextIndex = 0;
+    } else if (event.key === 'End') {
+      nextIndex = SETTINGS_VIEWS.length - 1;
+    } else {
+      return;
+    }
+
+    event.preventDefault();
+    const nextView = SETTINGS_VIEWS[nextIndex];
+    selectSettingsView(nextView);
+    settingsTabRefs.current[nextIndex]?.focus();
+  }
+
   return (
-    <div className="flex-1 overflow-y-auto bg-[#020408] p-6 lg:p-8">
-      <div className="mx-auto max-w-5xl">
-        <div className="border-b border-slate-800 pb-6">
-          <p className="font-mono text-[10px] font-bold uppercase tracking-[0.28em] text-cyan-500">
-            Restricted Control Plane
-          </p>
-          <h1 className="mt-2 text-2xl font-bold tracking-tight text-white">System Settings</h1>
-          <p className="mt-2 max-w-2xl text-sm text-slate-400">
-            Inspect the active Aegis runtime and perform guarded service operations.
-          </p>
+    <main className="aegis-admin-page" aria-labelledby="settings-heading">
+      <div className="aegis-admin-page__inner">
+        <header className="aegis-page-intro">
+          <div>
+            <h1 id="settings-heading" className="aegis-page-intro__title">System Settings</h1>
+            <p className="aegis-page-intro__description">Inspect the active Aegis runtime and perform guarded service operations.</p>
+          </div>
+          <div className="aegis-page-intro__badge"><span className="aegis-page-intro__badge-label">Access:</span> administrator only</div>
+        </header>
+
+        <div className="aegis-page-tabs aegis-page-tabs--compact" role="tablist" aria-label="System settings views">
+          <button
+            ref={(element) => { settingsTabRefs.current[0] = element; }}
+            id="settings-status-tab"
+            type="button"
+            role="tab"
+            tabIndex={activeView === 'status' ? 0 : -1}
+            aria-selected={activeView === 'status'}
+            aria-controls="settings-status-panel"
+            onClick={() => selectSettingsView('status')}
+            onKeyDown={(event) => handleSettingsTabKeyDown(event, 'status')}
+            className="aegis-page-tab"
+          >
+            Status
+          </button>
+          <button
+            ref={(element) => { settingsTabRefs.current[1] = element; }}
+            id="settings-license-tab"
+            type="button"
+            role="tab"
+            tabIndex={activeView === 'license' ? 0 : -1}
+            aria-selected={activeView === 'license'}
+            aria-controls="settings-license-panel"
+            onClick={() => selectSettingsView('license')}
+            onKeyDown={(event) => handleSettingsTabKeyDown(event, 'license')}
+            className="aegis-page-tab"
+          >
+            LIC Management
+          </button>
         </div>
 
-        <section className="mt-6 rounded-2xl border border-slate-800 bg-[#05080F] p-6" aria-labelledby="runtime-status-title">
-          <div className="flex items-center justify-between gap-4">
+        {activeView === 'status' ? <section id="settings-status-panel" role="tabpanel" aria-labelledby="settings-status-tab" className="aegis-page-content">
+          <header className="aegis-page-content__header">
             <div>
-              <p className="font-mono text-[10px] uppercase tracking-[0.24em] text-slate-500">System Telemetry</p>
-              <h2 id="runtime-status-title" className="mt-2 text-lg font-bold text-white">Runtime Status</h2>
+              <h2 id="runtime-status-title" className="aegis-page-content__title">Runtime Status</h2>
+              <p className="aegis-page-content__description">Current service availability and protected operational controls.</p>
             </div>
             <Activity className="h-5 w-5 text-cyan-400" aria-hidden="true" />
-          </div>
-          <dl className="mt-5 grid gap-3 sm:grid-cols-3">
-            <div className="rounded-xl border border-slate-800 bg-[#020408] p-4">
-              <dt className="font-mono text-[10px] uppercase tracking-widest text-slate-500">Service</dt>
-              <dd className="mt-2 flex items-center gap-2 text-sm font-semibold text-white">
-                <Server className="h-4 w-4 text-cyan-400" aria-hidden="true" /> Aegis
-              </dd>
-            </div>
-            <div className="rounded-xl border border-slate-800 bg-[#020408] p-4">
-              <dt className="font-mono text-[10px] uppercase tracking-widest text-slate-500">Health</dt>
-              <dd className={`mt-2 text-sm font-semibold ${healthError ? 'text-amber-300' : 'text-emerald-300'}`}>
-                {healthError ? 'Unavailable' : health?.status || 'Checking…'}
-              </dd>
-            </div>
-            <div className="rounded-xl border border-slate-800 bg-[#020408] p-4">
-              <dt className="font-mono text-[10px] uppercase tracking-widest text-slate-500">Process ID</dt>
-              <dd className="mt-2 font-mono text-sm font-semibold text-slate-200">
-                {typeof health?.pid === 'number' ? health.pid : 'Unavailable'}
-              </dd>
-            </div>
-          </dl>
-        </section>
+          </header>
+          <div className="aegis-page-content__body p-6">
+            <section aria-labelledby="runtime-status-title">
+              <dl className="grid gap-3 sm:grid-cols-3">
+                <div className="aegis-page-metric">
+                  <dt className="aegis-page-metric__label">Service</dt>
+                  <dd className="aegis-page-metric__value flex items-center gap-2">
+                    <Server className="h-4 w-4 text-cyan-400" aria-hidden="true" /> Aegis
+                  </dd>
+                </div>
+                <div className="aegis-page-metric">
+                  <dt className="aegis-page-metric__label">Health</dt>
+                  <dd className={`aegis-page-metric__value ${healthError ? 'aegis-page-metric__value--warning' : 'aegis-page-metric__value--success'}`}>
+                    {healthError ? 'Unavailable' : health?.status || 'Checking…'}
+                  </dd>
+                </div>
+                <div className="aegis-page-metric">
+                  <dt className="aegis-page-metric__label">Process ID</dt>
+                  <dd className="aegis-page-metric__value font-mono">
+                    {typeof health?.pid === 'number' ? health.pid : 'Unavailable'}
+                  </dd>
+                </div>
+              </dl>
+            </section>
 
-        <section className="mt-6 rounded-2xl border border-rose-950/60 bg-[#070509] p-6" aria-labelledby="dangerous-actions-title">
-          <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
-            <div>
-              <p className="font-mono text-[10px] font-bold uppercase tracking-[0.24em] text-rose-400">Restricted Operation</p>
-              <h2 id="dangerous-actions-title" className="mt-2 text-lg font-bold text-white">Dangerous Actions</h2>
-              <p className="mt-2 max-w-2xl text-sm text-slate-400">
-                Restarting temporarily disconnects this console and interrupts active operations.
-              </p>
-              {restartError ? <p className="mt-3 text-sm text-rose-300" role="alert">{restartError}</p> : null}
-              {restarting ? (
-                <p className="mt-3 font-mono text-xs text-amber-300" role="status">
-                  Restarting Aegis. Waiting for the replacement process…
-                </p>
-              ) : null}
-            </div>
-            <button
-              ref={restartButtonRef}
-              type="button"
-              onClick={() => setConfirmationStage('warning')}
-              disabled={restartSubmitting || restarting}
-              className="shrink-0 rounded-xl border border-rose-800 bg-rose-950/40 px-5 py-3 text-sm font-bold text-rose-200 transition hover:bg-rose-950/70 disabled:cursor-not-allowed disabled:opacity-60"
-            >
-              {restarting ? 'Restarting…' : 'Restart Aegis'}
-            </button>
+            <section className="aegis-danger-zone mt-6" aria-labelledby="dangerous-actions-title">
+              <div className="flex flex-col gap-5 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="aegis-danger-zone__eyebrow font-mono text-[10px] font-bold uppercase tracking-[0.24em]">Restricted Operation</p>
+                  <h2 id="dangerous-actions-title" className="mt-2 text-lg font-bold text-white">Dangerous Actions</h2>
+                  <p className="mt-2 max-w-2xl text-sm text-slate-400">
+                    Restarting temporarily disconnects this console and interrupts active operations.
+                  </p>
+                  {restartError ? <p className="aegis-status-text--danger mt-3 text-sm" role="alert">{restartError}</p> : null}
+                  {restarting ? <p className="aegis-status-text--warning mt-3 font-mono text-xs" role="status">Restarting Aegis. Waiting for the replacement process…</p> : null}
+                </div>
+                <button ref={restartButtonRef} type="button" onClick={() => setConfirmationStage('warning')} disabled={restartSubmitting || restarting} className="aegis-btn aegis-btn--danger shrink-0 px-5 py-3 text-sm">
+                  {restarting ? 'Restarting…' : 'Restart Aegis'}
+                </button>
+              </div>
+            </section>
           </div>
-        </section>
+        </section> : null}
+
+        {activeView === 'license' ? <section id="settings-license-panel" role="tabpanel" aria-labelledby="settings-license-tab" className="aegis-page-content">
+          <header className="aegis-page-content__header">
+            <div>
+              <h2 className="aegis-page-content__title">License Management</h2>
+              <p className="aegis-page-content__description">Read-only entitlement details for this local Aegis console.</p>
+            </div>
+            <span className="aegis-status-badge aegis-status-badge--warning">LOCAL MOCK / DEMO DATA</span>
+          </header>
+          <div className="aegis-page-content__body p-6">
+            <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+              <div className="aegis-page-metric"><dt className="aegis-page-metric__label">License ID</dt><dd className="aegis-page-metric__value break-all font-mono text-xs">{LICENSE_MOCK.id}</dd></div>
+              <div className="aegis-page-metric"><dt className="aegis-page-metric__label">Edition</dt><dd className="aegis-page-metric__value">{LICENSE_MOCK.edition}</dd></div>
+              <div className="aegis-page-metric"><dt className="aegis-page-metric__label">Status</dt><dd className="mt-2"><span className="aegis-status-badge aegis-status-badge--success">{LICENSE_MOCK.status}</span></dd></div>
+              <div className="aegis-page-metric"><dt className="aegis-page-metric__label">Expires</dt><dd className="aegis-page-metric__value font-mono text-xs">{LICENSE_MOCK.expiresAt}</dd></div>
+            </dl>
+
+            <div className="aegis-license-grid mt-6">
+              <div className="aegis-license-detail"><p className="aegis-page-metric__label">Issued To</p><p className="aegis-license-detail__value">{LICENSE_MOCK.issuedTo}</p></div>
+              <div className="aegis-license-detail"><p className="aegis-page-metric__label">Seat Allocation</p><p className="aegis-license-detail__value">{LICENSE_MOCK.seats} seats assigned</p></div>
+              <div className="aegis-license-detail"><p className="aegis-page-metric__label">Agent Node Allocation</p><p className="aegis-license-detail__value">{LICENSE_MOCK.agentNodes} nodes registered</p></div>
+            </div>
+
+            <section className="mt-6 border-t border-slate-800 pt-5" aria-labelledby="licensed-modules-title">
+              <h3 id="licensed-modules-title" className="aegis-page-content__title text-base">Licensed Modules</h3>
+              <p className="aegis-page-content__description">Enabled modules included in the mock entitlement.</p>
+              <ul className="mt-4 flex flex-wrap gap-2">{LICENSE_MOCK.modules.map((module) => <li key={module} className="aegis-license-module">{module}</li>)}</ul>
+            </section>
+          </div>
+        </section> : null}
       </div>
 
       {confirmationStage ? (
@@ -350,7 +443,7 @@ export default function SettingsTab({
                   Type <code className="rounded bg-[#020408] px-1.5 py-0.5 font-mono text-rose-300">{RESTART_CONFIRMATION_PHRASE}</code> exactly to authorize the restart.
                 </p>
                 {restartSubmitting ? (
-                  <p className="mt-4 font-mono text-xs text-amber-300" role="status">
+                  <p className="aegis-status-text--warning mt-4 font-mono text-xs" role="status">
                     Restart request in progress. Waiting for the server response…
                   </p>
                 ) : null}
@@ -386,6 +479,6 @@ export default function SettingsTab({
           </section>
         </div>
       ) : null}
-    </div>
+    </main>
   );
 }

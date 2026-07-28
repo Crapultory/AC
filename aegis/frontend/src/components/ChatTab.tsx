@@ -48,22 +48,23 @@ function ChatMarkdown({ content }: { content: string }) {
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
       components={{
-        h1: ({ children }) => <h1 className="mb-3 border-b border-cyan-900/50 pb-2 font-mono text-lg font-bold text-cyan-100">{children}</h1>,
-        h2: ({ children }) => <h2 className="mb-2 mt-4 border-l-2 border-cyan-500 pl-2 text-base font-bold text-slate-100 first:mt-0">{children}</h2>,
-        h3: ({ children }) => <h3 className="mb-2 mt-3 text-sm font-semibold text-slate-100 first:mt-0">{children}</h3>,
-        p: ({ children }) => <p className="mb-2 leading-relaxed last:mb-0">{children}</p>,
-        ul: ({ children }) => <ul className="mb-2 list-disc space-y-1 pl-5 marker:text-cyan-400 last:mb-0">{children}</ul>,
-        ol: ({ children }) => <ol className="mb-2 list-decimal space-y-1 pl-5 marker:text-cyan-300 last:mb-0">{children}</ol>,
-        li: ({ children }) => <li className="pl-1">{children}</li>,
-        blockquote: ({ children }) => <blockquote className="mb-2 border-l-2 border-amber-400/70 bg-amber-950/20 px-3 py-2 text-slate-200 last:mb-0">{children}</blockquote>,
-        pre: ({ children }) => <pre className="mb-2 overflow-x-auto rounded border border-slate-800 bg-[#010309] p-3 font-mono text-xs leading-6 text-cyan-100 last:mb-0">{children}</pre>,
-        code: ({ children }) => <code className="rounded bg-cyan-950/30 px-1 py-0.5 font-mono text-[0.9em] text-cyan-100">{children}</code>,
-        table: ({ children }) => <div className="mb-2 overflow-x-auto rounded border border-slate-800 last:mb-0"><table className="min-w-full text-left text-xs">{children}</table></div>,
-        th: ({ children }) => <th className="border-b border-slate-700 bg-slate-900/80 px-2.5 py-2 font-semibold text-cyan-100">{children}</th>,
-        td: ({ children }) => <td className="border-b border-slate-800 px-2.5 py-2 align-top text-slate-300">{children}</td>,
+        h1: ({ children }) => <h1 className="aegis-markdown__h1">{children}</h1>,
+        h2: ({ children }) => <h2 className="aegis-markdown__h2">{children}</h2>,
+        h3: ({ children }) => <h3 className="aegis-markdown__h3">{children}</h3>,
+        p: ({ children }) => <p className="aegis-markdown__paragraph">{children}</p>,
+        ul: ({ children }) => <ul className="aegis-markdown__list aegis-markdown__list--unordered">{children}</ul>,
+        ol: ({ children }) => <ol className="aegis-markdown__list aegis-markdown__list--ordered">{children}</ol>,
+        li: ({ children }) => <li className="aegis-markdown__list-item">{children}</li>,
+        blockquote: ({ children }) => <blockquote className="aegis-markdown__quote">{children}</blockquote>,
+        pre: ({ children }) => <pre className="aegis-markdown__pre">{children}</pre>,
+        code: ({ children }) => <code className="aegis-markdown__code">{children}</code>,
+        table: ({ children }) => <div className="aegis-markdown__table-wrap"><table className="aegis-markdown__table">{children}</table></div>,
+        tr: ({ children }) => <tr className="aegis-markdown__tr">{children}</tr>,
+        th: ({ children }) => <th className="aegis-markdown__th">{children}</th>,
+        td: ({ children }) => <td className="aegis-markdown__td">{children}</td>,
         a: ({ href, children }) => {
           const external = Boolean(href && /^https?:\/\//i.test(href));
-          return <a href={href} target={external ? '_blank' : undefined} rel={external ? 'noreferrer' : undefined} className="text-cyan-300 underline decoration-cyan-700 underline-offset-4 hover:text-cyan-100">{children}</a>;
+          return <a href={href} target={external ? '_blank' : undefined} rel={external ? 'noreferrer' : undefined} className="aegis-markdown__link">{children}</a>;
         },
       }}
     >
@@ -250,7 +251,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
   const [showDelegateTools, setShowDelegateTools] = useState(false);
   const [markdownRenderingEnabled, setMarkdownRenderingEnabled] = useState(true);
   const [expandedMessageIds, setExpandedMessageIds] = useState<Record<string, boolean>>({});
-  const [sessionStatusPhase, setSessionStatusPhase] = useState<'announce' | 'scroll'>('announce');
+  const [sessionStatusPhase, setSessionStatusPhase] = useState<'announce' | 'static' | 'scroll'>('announce');
   const [workflowDrawerOpen, setWorkflowDrawerOpen] = useState(false);
   const [workflowFullscreen, setWorkflowFullscreen] = useState(false);
   const [promptTemplateDrawerOpen, setPromptTemplateDrawerOpen] = useState(false);
@@ -279,12 +280,16 @@ function ChatTabContent({ agents }: ChatTabProps) {
   }, [conversations, activeConvId]);
 
   const sessionStatus = buildSessionStatus(activeConversation);
+  const sessionStatusNeedsMarquee = sessionStatus.length > 36;
 
   useEffect(() => {
     setSessionStatusPhase('announce');
-    const tickerTimer = window.setTimeout(() => setSessionStatusPhase('scroll'), 1500);
+    const tickerTimer = window.setTimeout(
+      () => setSessionStatusPhase(sessionStatusNeedsMarquee ? 'scroll' : 'static'),
+      1500,
+    );
     return () => window.clearTimeout(tickerTimer);
-  }, [sessionStatus]);
+  }, [sessionStatus, sessionStatusNeedsMarquee]);
 
   useEffect(() => {
     if (!workflowDrawerOpen) {
@@ -550,7 +555,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
                     onClick={() => setActiveConversation(conversation.id)}
                     className={`group p-3 rounded-lg cursor-pointer transition-all ${
                       isActive
-                        ? 'bg-[#080C14] border border-slate-800 text-white shadow-md'
+                        ? 'aegis-conversation--active border text-white shadow-md'
                         : 'hover:bg-[#03060C] text-slate-500 hover:text-slate-300 border border-transparent'
                     }`}
                   >
@@ -659,7 +664,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
               className={`aegis-session-status-ticker__viewport aegis-session-status-ticker__viewport--${sessionStatusPhase}`}
               aria-live="polite"
             >
-              {sessionStatusPhase === 'announce' ? (
+              {sessionStatusPhase !== 'scroll' ? (
                 <span key={sessionStatus} className="aegis-session-status-ticker__announcement">
                   {renderSessionStatus(sessionStatus)}
                 </span>
@@ -735,7 +740,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
             if (message.kind === 'delegate-event') {
               return (
                 <div key={message.id} className="flex justify-center">
-                  <div className="rounded-full border border-amber-900/40 bg-amber-950/20 px-4 py-2 text-[11px] font-mono text-amber-200">
+                  <div className="aegis-delegate-event">
                     {message.text}
                   </div>
                 </div>
@@ -749,17 +754,17 @@ function ChatTabContent({ agents }: ChatTabProps) {
             const agentBadge = isAegis ? (message.source === 'delegate' ? 'DG' : 'AE') : 'OP';
             const badgeClassName = isAegis
               ? message.source === 'delegate'
-                ? 'bg-emerald-950/20 border-emerald-900/40 text-emerald-300'
+                ? 'aegis-delegate-badge'
                 : 'bg-[#080C14] border-slate-800 text-cyan-400'
               : 'bg-[#03060C] border-slate-800 text-slate-400';
             const bubbleClassName = isAegis
               ? message.source === 'delegate'
-                ? 'bg-emerald-950/10 border border-emerald-800/60 shadow-[inset_0_0_0_1px_rgba(16,185,129,0.06)] before:absolute before:left-0 before:top-3 before:bottom-3 before:w-[3px] before:rounded-full before:bg-emerald-400/70 before:content-[\"\"]'
+                ? 'aegis-delegate-bubble'
                 : 'bg-cyan-950/10 border border-cyan-800/60 shadow-[inset_0_0_0_1px_rgba(34,211,238,0.06)]'
               : 'bg-[#080C14] border border-slate-800/80';
             const actorLabelClassName = isAegis
               ? message.source === 'delegate'
-                ? 'text-emerald-300'
+                ? 'aegis-delegate-label'
                 : 'text-cyan-300'
               : 'text-slate-300';
             const actorLabel = isAegis
@@ -812,7 +817,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
                                 <div className="flex items-center justify-between gap-3">
                                   <span className="text-[11px] font-bold text-white">{toolCall.toolName}</span>
                                   <span className={`text-[9px] font-mono uppercase ${
-                                    toolCall.status === 'completed' ? 'text-emerald-400' : 'text-cyan-400'
+                                    toolCall.status === 'completed' ? 'aegis-status-text--success' : 'aegis-status-text--accent'
                                   }`}>
                                     {toolCall.status}
                                   </span>
@@ -844,10 +849,10 @@ function ChatTabContent({ agents }: ChatTabProps) {
                               <div className="flex justify-between items-center border-t border-slate-800 pt-1.5 mt-2 text-[9px] font-mono">
                                 <span className={`font-bold uppercase flex items-center gap-0.5 ${
                                   step.status === 'Completed'
-                                    ? 'text-emerald-400'
+                                    ? 'aegis-status-text--success'
                                     : step.status === 'Failed'
-                                      ? 'text-rose-400'
-                                      : 'text-cyan-400'
+                                      ? 'aegis-status-text--danger'
+                                      : 'aegis-status-text--accent'
                                 }`}>
                                   <CheckCircle className="h-2.5 w-2.5" /> {step.status}
                                 </span>
@@ -861,7 +866,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
                       <div
                         data-testid="message-text"
                         data-markdown-rendered={markdownRenderingEnabled}
-                        className={`${markdownRenderingEnabled ? '' : 'whitespace-pre-wrap'} text-sm leading-relaxed select-text cursor-text`}
+                        className={`${markdownRenderingEnabled ? 'aegis-markdown' : 'whitespace-pre-wrap'} text-sm leading-relaxed select-text cursor-text`}
                       >
                         {markdownRenderingEnabled ? <ChatMarkdown content={message.text} /> : message.text}
                       </div>
@@ -1005,7 +1010,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
             type="button"
             onClick={handleSubmit}
             disabled={sendDisabled}
-            className="px-4 py-2 bg-cyan-500 text-white hover:bg-cyan-600 disabled:bg-[#080C14] disabled:text-slate-600 rounded font-bold transition-all flex items-center gap-1.5 shrink-0 text-xs"
+            className="aegis-send-button"
           >
             <Send className="h-3 w-3" /> 发送
           </button>
@@ -1096,7 +1101,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
                   </button>
                   <div className="grid gap-3 rounded-lg border border-slate-800 bg-[#03060C] p-4 sm:grid-cols-2">
                     <div><p className="font-mono text-[10px] tracking-widest text-slate-500">URL</p><p className="mt-1 break-all text-xs text-slate-200">{selectedA2AAgent.url || 'Not provided'}</p></div>
-                    <div><p className="font-mono text-[10px] tracking-widest text-slate-500">STATUS</p><p className={`mt-1 text-xs font-semibold ${selectedA2AAgent.available ? 'text-emerald-400' : 'text-amber-300'}`}>{selectedA2AAgent.status || 'unknown'} · {selectedA2AAgent.available ? 'available' : 'unavailable'}</p></div>
+                    <div><p className="font-mono text-[10px] tracking-widest text-slate-500">STATUS</p><p className={`mt-1 text-xs font-semibold ${selectedA2AAgent.available ? 'aegis-status-text--success' : 'aegis-status-text--warning'}`}>{selectedA2AAgent.status || 'unknown'} · {selectedA2AAgent.available ? 'available' : 'unavailable'}</p></div>
                     <div className="sm:col-span-2"><p className="font-mono text-[10px] tracking-widest text-slate-500">DESCRIPTION</p><p className="mt-1 text-xs leading-relaxed text-slate-300">{selectedA2AAgent.description || 'No description provided.'}</p></div>
                     {selectedA2AAgent.error ? <div className="sm:col-span-2 rounded border border-rose-900/50 bg-rose-950/20 px-3 py-2 text-xs text-rose-200">{selectedA2AAgent.error}</div> : null}
                   </div>
@@ -1116,8 +1121,8 @@ function ChatTabContent({ agents }: ChatTabProps) {
               {!a2aLoading && !a2aError && !selectedA2AAgent && a2aContext && a2aContext.agents.length > 0 ? (
                 <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
                   {a2aContext.agents.map((agent) => (
-                    <button key={`${agent.name}-${agent.url || ''}`} type="button" aria-label={`View agent ${agent.name}`} onClick={() => setSelectedA2AAgent(agent)} className="group flex min-h-44 flex-col rounded-lg border border-slate-800 bg-[#03060C] p-4 text-left transition hover:border-cyan-700 hover:bg-cyan-950/15">
-                      <div className="flex items-start justify-between gap-3"><span className="text-sm font-semibold text-white group-hover:text-cyan-200">{agent.name}</span><span className={`rounded border px-1.5 py-0.5 font-mono text-[9px] uppercase ${agent.available ? 'border-emerald-900/50 bg-emerald-950/20 text-emerald-300' : 'border-amber-900/50 bg-amber-950/20 text-amber-300'}`}>{agent.available ? 'available' : 'unavailable'}</span></div>
+                    <button key={`${agent.name}-${agent.url || ''}`} type="button" aria-label={`View agent ${agent.name}`} onClick={() => setSelectedA2AAgent(agent)} className="aegis-a2a-agent-card group flex min-h-44 flex-col rounded-lg p-4 text-left">
+                      <div className="flex items-start justify-between gap-3"><span className="text-sm font-semibold text-white group-hover:text-cyan-200">{agent.name}</span><span className={`aegis-status-badge ${agent.available ? 'aegis-status-badge--success' : 'aegis-status-badge--warning'}`}>{agent.available ? 'available' : 'unavailable'}</span></div>
                       <p className="mt-2 line-clamp-3 text-xs leading-relaxed text-slate-400">{agent.description || 'No description provided.'}</p>
                       <div className="mt-auto flex items-center justify-between border-t border-slate-800 pt-3 font-mono text-[10px] text-slate-500"><span>{agent.status || 'unknown'}</span><span>{agent.capabilities.length} capabilities</span></div>
                     </button>

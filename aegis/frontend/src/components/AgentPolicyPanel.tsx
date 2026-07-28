@@ -165,12 +165,12 @@ export default function AgentPolicyPanel({
             {filteredPolicies.length === 0 ? (
               <tr><td colSpan={6} className="p-8 text-center text-slate-500">No Agent Policy rules found.</td></tr>
             ) : filteredPolicies.map((policy) => (
-              <tr key={policy.rank_id} className="hover:bg-[#03060C]/60">
+              <tr key={policy.rank_id} className="aegis-table-row">
                 <td className="p-3 font-mono text-cyan-400">{policy.rank_id}</td>
                 <td className="p-3 font-mono">{policy.platform}</td>
                 <td className="p-3 font-mono">{policy.user_id}</td>
                 <td className="p-3 font-mono">{policy.agent_name}</td>
-                <td className="p-3"><span className={`rounded-full border px-2 py-0.5 font-mono text-[9px] font-bold ${policy.status === 'allow' ? 'border-emerald-900/40 text-emerald-400' : 'border-rose-900/40 text-rose-400'}`}>{policy.status.toUpperCase()}</span></td>
+                <td className="p-3"><span className={`aegis-status-badge ${policy.status === 'allow' ? 'aegis-status-badge--success' : 'aegis-status-badge--danger'}`}>{policy.status.toUpperCase()}</span></td>
                 <td className="p-3"><div className="flex justify-center gap-2">
                   <button type="button" disabled={busy} aria-label={`Edit Agent Policy ${policy.rank_id}`} onClick={() => openEdit(policy)} className="aegis-btn aegis-btn--secondary aegis-btn--icon rounded p-1 text-cyan-400"><Edit2 className="h-3 w-3" /></button>
                   <button type="button" disabled={busy} aria-busy={busyAction === `delete:${policy.rank_id}`} aria-label={`Delete Agent Policy ${policy.rank_id}`} onClick={() => void deletePolicy(policy.rank_id)} className={`aegis-btn aegis-btn--danger aegis-btn--icon rounded p-1 ${busyAction === `delete:${policy.rank_id}` ? 'aegis-btn--busy' : ''}`}><Trash2 className="h-3 w-3" /></button>

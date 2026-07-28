@@ -63,6 +63,20 @@ Vite 已经代理 `/api` 和 `/health` 到 `http://127.0.0.1:9130`。
 - `npm run build`：生成生产构建产物到 `aegis/backend/web_dist`
 - `npm run preview`：本地预览构建结果
 
+## 常规功能页面实现规范
+
+新增或重构 Aegis 常规功能页时，遵循统一的三段式页面结构，并优先复用 `src/index.css` 中的 Aegis 页面原语：
+
+1. **页面说明区块**：使用 `aegis-page-intro`，包含清晰的页面标题、简短用途说明，以及按需显示的右侧摘要徽标。说明应面向当前操作者，避免重复内容区已有的字段说明。
+2. **Tab 分页块（如有）**：仅在页面存在多个独立业务视图时使用 `aegis-page-tabs` 和 `aegis-page-tab`。必须使用 `tablist` / `tab` / `tabpanel` 语义、正确的 ARIA 关联，并支持点击、方向键和 Home/End 键切换。需要与 Policy 相同的紧凑尺寸时，使用页面专属的 `aegis-page-tabs--compact` 修饰，不改变其它页面。
+3. **内容区域块**：每个业务视图使用独立的 `aegis-page-content`，由标题/说明和操作区组成，再承载表格、指标、表单、空态或错误态；复杂操作不应挤入页面说明区。
+
+视觉与可访问性要求：
+
+- 优先使用 `--aegis-*` 主题令牌和现有页面原语，禁止为新页面添加深色专用硬编码背景、边框或文字颜色。
+- 所有状态使用 `aegis-status-badge`、`aegis-status-indicator` 或 `aegis-status-text` 的 success / warning / danger / muted 语义变体，确保 Daylight Signal、Aegis Night 与 Neutral Ops 下均有足够对比度。
+- 页面在窄屏下应使说明、操作与内容自然换行；交互控件必须具备可见焦点态和可读的标签。
+
 ## 目录结构
 
 ```text

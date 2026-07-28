@@ -31,6 +31,8 @@ describe('AuditLogsTab', () => {
 
     render(<AuditLogsTab />);
 
+    expect(screen.getByRole('heading', { name: 'Audit Logs' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Delegate Evidence' })).toBeInTheDocument();
     const auditId = screen.getByLabelText('Audit Audit ID');
     const timestampFrom = screen.getByLabelText('Audit Timestamp From');
     const timestampTo = screen.getByLabelText('Audit Timestamp To');

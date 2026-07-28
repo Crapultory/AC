@@ -45,6 +45,8 @@ describe('PromptTemplateTab', () => {
     vi.spyOn(window, 'confirm').mockReturnValue(true);
 
     render(<PromptTemplateTab />);
+    expect(screen.getByRole('heading', { name: 'Prompt Templates' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Personal Prompt Library' })).toBeInTheDocument();
     expect(await screen.findByText(/no prompt templates yet/i)).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /new template/i }));
     expect(screen.getByRole('dialog', { name: /create prompt template/i })).toBeInTheDocument();

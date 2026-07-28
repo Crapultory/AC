@@ -155,24 +155,24 @@ export default function AgentTab({
         </div>
         <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-[#05080F] p-4">
           <div>
-            <div className="text-[9px] font-mono font-bold uppercase tracking-wider text-emerald-400">Active & Working</div>
+            <div className="aegis-status-text--success text-[9px] font-mono font-bold uppercase tracking-wider">Active &amp; Working</div>
             <div className="mt-0.5 font-mono text-2xl font-black text-white">{active}</div>
           </div>
-          <Activity className="h-6 w-6 animate-pulse text-emerald-400 opacity-60" />
+          <Activity className="aegis-status-text--success h-6 w-6 animate-pulse opacity-60" />
         </div>
         <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-[#05080F] p-4">
           <div>
-            <div className="text-[9px] font-mono font-bold uppercase tracking-wider text-amber-400">Idle Status</div>
+            <div className="aegis-status-text--warning text-[9px] font-mono font-bold uppercase tracking-wider">Idle Status</div>
             <div className="mt-0.5 font-mono text-2xl font-black text-white">{idle}</div>
           </div>
-          <Activity className="h-6 w-6 text-amber-400 opacity-60" />
+          <Activity className="aegis-status-text--warning h-6 w-6 opacity-60" />
         </div>
         <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-[#05080F] p-4">
           <div>
-            <div className="text-[9px] font-mono font-bold uppercase tracking-wider text-rose-400">Offline Status</div>
+            <div className="aegis-status-text--danger text-[9px] font-mono font-bold uppercase tracking-wider">Offline Status</div>
             <div className="mt-0.5 font-mono text-2xl font-black text-white">{offline}</div>
           </div>
-          <AlertCircle className="h-6 w-6 text-rose-500 opacity-60" />
+          <AlertCircle className="aegis-status-text--danger h-6 w-6 opacity-60" />
         </div>
       </div>
 
@@ -247,15 +247,15 @@ export default function AgentTab({
                 </tr>
               ) : (
                 filtered.map((agent) => (
-                  <tr key={agent.id} className="transition-colors hover:bg-[#03060C]/60">
+                  <tr key={agent.id} className="aegis-table-row">
                     <td className="min-w-[200px] whitespace-nowrap p-3">
                       <div className="flex items-center gap-2">
-                        <span className={`h-1.5 w-1.5 rounded-full ${
+                        <span className={`aegis-status-indicator ${
                           agent.status === 'Active'
-                            ? 'bg-emerald-500 shadow-[0_0_5px_rgba(16,185,129,0.5)]'
+                            ? 'aegis-status-indicator--success'
                             : agent.status === 'Idle'
-                              ? 'bg-amber-400'
-                              : 'bg-slate-600'
+                              ? 'aegis-status-indicator--warning'
+                              : 'aegis-status-indicator--danger'
                         }`} />
                         <div>
                           <div className="text-xs font-bold text-slate-200">{agent.name}</div>
@@ -264,12 +264,12 @@ export default function AgentTab({
                       </div>
                     </td>
                     <td className="whitespace-nowrap p-3">
-                      <span className={`rounded px-2 py-0.5 text-[9px] font-mono font-bold uppercase border ${
+                      <span className={`aegis-status-badge ${
                         agent.status === 'Active'
-                          ? 'border-emerald-900/40 bg-emerald-950/20 text-emerald-400'
+                          ? 'aegis-status-badge--success'
                           : agent.status === 'Idle'
-                            ? 'border-amber-900/40 bg-amber-950/20 text-amber-400'
-                            : 'border-slate-800 bg-slate-900 text-slate-400'
+                            ? 'aegis-status-badge--warning'
+                            : 'aegis-status-badge--danger'
                       }`}>
                         {agent.status}
                       </span>
