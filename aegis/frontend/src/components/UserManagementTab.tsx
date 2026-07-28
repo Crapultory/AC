@@ -1,4 +1,5 @@
-import { FormEvent, useMemo, useState } from 'react';
+import { Fragment, FormEvent, useMemo, useState } from 'react';
+import { KeyRound, Power, PowerOff, Trash2 } from 'lucide-react';
 import { alertApiError } from '../lib/api';
 import { AuthenticatedUser, UserDraft } from '../types';
 
@@ -114,7 +115,7 @@ export default function UserManagementTab({
         </header>
 
         <section className="aegis-page-content" aria-labelledby="user-directory-heading">
-          <header className="aegis-page-content__header">
+          <header className="aegis-page-content__header aegis-page-content__header--compact">
             <div>
               <h2 id="user-directory-heading" className="aegis-page-content__title">User Directory</h2>
               <p className="aegis-page-content__description">Review account access, reset credentials, and maintain account status.</p>
@@ -130,7 +131,7 @@ export default function UserManagementTab({
           </header>
 
           {showCreateForm ? (
-            <form className="grid gap-3 border-b border-slate-800 p-4 md:grid-cols-5" onSubmit={handleCreate}>
+            <form className="aegis-page-filter-bar grid gap-3 border-b border-slate-800 md:grid-cols-5" onSubmit={handleCreate}>
           <input
             aria-label="Create Username"
             value={draft.username}
@@ -179,74 +180,127 @@ export default function UserManagementTab({
             </div>
           ) : null}
 
-          <div className="aegis-page-content__body overflow-auto px-6 py-4">
-            <table className="w-full border-collapse text-left">
-          <thead>
-            <tr className="border-b border-slate-800 font-mono text-[10px] uppercase tracking-[0.24em] text-slate-500">
-              <th className="px-3 py-3">Username</th>
-              <th className="px-3 py-3">Email</th>
-              <th className="px-3 py-3">Status</th>
-              <th className="px-3 py-3">Last Login</th>
-              <th className="px-3 py-3">Actions</th>
-            </tr>
-          </thead>
-          <tbody className="divide-y divide-slate-800/60">
-            {sortedUsers.map((user) => (
-              <tr key={user.uid} className="aegis-table-row align-top text-sm text-slate-300">
-                <td className="px-3 py-4">
-                  <div className="font-semibold text-white">{user.username}</div>
-                </td>
-                <td className="px-3 py-4">{user.email}</td>
-                <td className="px-3 py-4">
-                  <span className={`aegis-status-badge ${
-                    user.status === 'enabled'
-                      ? 'aegis-status-badge--success'
-                      : 'aegis-status-badge--warning'
-                  }`}>
-                    {user.status}
-                  </span>
-                </td>
-                <td className="px-3 py-4 text-slate-400">{user.last_login || 'Never'}</td>
-                <td className="px-3 py-4">
-                  <div className="flex flex-wrap gap-2">
-                    <button type="button" onClick={() => void handleToggleStatus(user)} className="aegis-btn aegis-btn--secondary px-3 py-1 text-xs">
-                      {user.status === 'enabled' ? `Disable ${user.username}` : `Enable ${user.username}`}
-                    </button>
-                    <button type="button" onClick={() => {
-                      setResetPasswordUid(user.uid);
-                      setResetPasswordValue('');
-                    }} className="aegis-btn aegis-btn--secondary px-3 py-1 text-xs">
-                      {`Reset password ${user.username}`}
-                    </button>
-                    {!user.is_admin ? (
-                      <button type="button" onClick={() => void handleDelete(user.uid)} className="aegis-btn aegis-btn--danger px-3 py-1 text-xs">
-                        {`Delete ${user.username}`}
-                      </button>
+          <div className="aegis-page-content__body overflow-x-auto">
+            <table className="w-full min-w-[780px] table-fixed border-collapse border-b border-slate-800 text-left">
+              <colgroup>
+                <col className="w-[20%]" />
+                <col className="w-[28%]" />
+                <col className="w-[14%]" />
+                <col className="w-[21%]" />
+                <col className="w-[17%]" />
+              </colgroup>
+              <thead>
+                <tr className="border-b border-slate-800 bg-[#03060C] font-mono text-[9px] uppercase tracking-wider text-slate-500">
+                  <th className="p-3">Username &amp; ID</th>
+                  <th className="p-3">Email</th>
+                  <th className="p-3">Status</th>
+                  <th className="p-3">Last Login</th>
+                  <th className="p-3 text-center">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/60">
+                {sortedUsers.length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="p-8 text-center font-mono text-xs text-slate-500">
+                      No accounts in the current directory.
+                    </td>
+                  </tr>
+                ) : sortedUsers.map((user) => (
+                  <Fragment key={user.uid}>
+                    <tr className="aegis-table-row align-middle text-sm text-slate-300">
+                      <td className="p-3">
+                        <div className="flex min-w-0 items-center gap-2">
+                          <span className={`aegis-status-indicator ${user.status === 'enabled' ? 'aegis-status-indicator--success' : 'aegis-status-indicator--warning'}`} />
+                          <div className="min-w-0">
+                            <div className="truncate font-semibold text-white" title={user.username}>{user.username}</div>
+                            <div className="mt-1 truncate font-mono text-[10px] text-slate-500" title={user.uid}>User ID: {user.uid}</div>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="p-3 text-slate-400">
+                        <div className="truncate" title={user.email}>{user.email}</div>
+                      </td>
+                      <td className="p-3">
+                        <span className={`aegis-status-badge ${
+                          user.status === 'enabled'
+                            ? 'aegis-status-badge--success'
+                            : 'aegis-status-badge--warning'
+                        }`}>
+                          {user.status}
+                        </span>
+                      </td>
+                      <td className="p-3 font-mono text-[11px] text-slate-500">
+                        <div className="truncate" title={user.last_login || 'Never'}>{user.last_login || 'Never'}</div>
+                      </td>
+                      <td className="p-3">
+                        <div className="flex justify-center gap-1.5">
+                          <button
+                            type="button"
+                            aria-label={user.status === 'enabled' ? `Disable ${user.username}` : `Enable ${user.username}`}
+                            title={user.status === 'enabled' ? `Disable ${user.username}` : `Enable ${user.username}`}
+                            onClick={() => void handleToggleStatus(user)}
+                            className="aegis-btn aegis-btn--secondary aegis-btn--icon h-8 w-8"
+                          >
+                            {user.status === 'enabled' ? <PowerOff className="h-3.5 w-3.5" /> : <Power className="h-3.5 w-3.5" />}
+                          </button>
+                          <button
+                            type="button"
+                            aria-label={`Open password reset for ${user.username}`}
+                            aria-pressed={resetPasswordUid === user.uid}
+                            title={`Open password reset for ${user.username}`}
+                            onClick={() => {
+                              setResetPasswordUid(user.uid);
+                              setResetPasswordValue('');
+                            }}
+                            className={`aegis-btn aegis-btn--secondary aegis-btn--icon h-8 w-8 ${resetPasswordUid === user.uid ? 'aegis-btn--selected' : ''}`}
+                          >
+                            <KeyRound className="h-3.5 w-3.5" />
+                          </button>
+                          {!user.is_admin ? (
+                            <button
+                              type="button"
+                              aria-label={`Delete ${user.username}`}
+                              title={`Delete ${user.username}`}
+                              onClick={() => void handleDelete(user.uid)}
+                              className="aegis-btn aegis-btn--danger aegis-btn--icon h-8 w-8"
+                            >
+                              <Trash2 className="h-3.5 w-3.5" />
+                            </button>
+                          ) : null}
+                        </div>
+                      </td>
+                    </tr>
+                    {resetPasswordUid === user.uid ? (
+                      <tr className="bg-[#03060C]">
+                        <td colSpan={5} className="px-4 py-3">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <div className="font-mono text-[10px] font-bold uppercase tracking-wider text-slate-500">
+                              Reset password · {user.username}
+                            </div>
+                            <div className="flex flex-1 flex-wrap justify-end gap-2">
+                              <input
+                                aria-label={`New password for ${user.username}`}
+                                type="password"
+                                value={resetPasswordValue}
+                                onChange={(event) => setResetPasswordValue(event.target.value)}
+                                placeholder="new password"
+                                className="aegis-page-field min-w-52 px-3 py-2 text-sm"
+                              />
+                              <button
+                                type="button"
+                                onClick={() => void handleResetPassword(user.uid)}
+                                className="aegis-btn aegis-btn--primary px-3 py-2 text-xs"
+                              >
+                                Save Password
+                              </button>
+                            </div>
+                          </div>
+                        </td>
+                      </tr>
                     ) : null}
-                  </div>
-                  {resetPasswordUid === user.uid ? (
-                    <div className="mt-3 flex flex-wrap items-center gap-2">
-                      <input
-                        aria-label={`Reset Password ${user.username}`}
-                        type="password"
-                        value={resetPasswordValue}
-                        onChange={(event) => setResetPasswordValue(event.target.value)}
-                        placeholder="new password"
-                        className="aegis-page-field px-3 py-2 text-sm"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => void handleResetPassword(user.uid)}
-                        className="aegis-btn aegis-btn--primary px-3 py-2 text-xs"
-                      >
-                        Save Password
-                      </button>
-                    </div>
-                  ) : null}
-                </td>
-              </tr>
-            ))}
-          </tbody>
+                  </Fragment>
+                ))}
+              </tbody>
             </table>
           </div>
         </section>

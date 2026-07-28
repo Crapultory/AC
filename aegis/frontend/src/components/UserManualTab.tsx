@@ -106,7 +106,7 @@ export default function UserManualTab() {
 
   return (
     <section aria-labelledby="user-manual-heading" className="flex h-full min-h-0 flex-col overflow-hidden">
-      <header className="shrink-0 border-b border-slate-800 bg-[#03060C] px-6 py-5">
+      <header className="aegis-manual-header shrink-0 border-b border-slate-800 bg-[#03060C]">
         <div className="flex items-start justify-between gap-4">
           <div>
             <div className="flex items-center gap-2 font-mono text-[10px] font-bold tracking-[0.18em] text-cyan-400"><BookOpen className="h-4 w-4" /> USER PROFILE / REFERENCE LIBRARY</div>
@@ -133,7 +133,7 @@ export default function UserManualTab() {
           </div>
         </aside>
 
-        <article aria-live="polite" className="min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top_right,rgba(8,145,178,0.08),transparent_32%),#020408] px-6 py-7 lg:px-10">
+        <article aria-live="polite" className="aegis-manual-article min-h-0 flex-1 overflow-y-auto bg-[radial-gradient(circle_at_top_right,rgba(8,145,178,0.08),transparent_32%),#020408]">
           {manualLoading ? <div className="flex h-full min-h-52 items-center justify-center gap-3 font-mono text-xs text-slate-500"><LoaderCircle className="h-4 w-4 animate-spin text-cyan-500" /> Retrieving manual content…</div> : null}
           {!manualLoading && manualError ? <div className="mx-auto max-w-2xl rounded border border-rose-900/60 bg-rose-950/10 p-5"><div className="flex gap-3 text-sm leading-6 text-rose-200"><AlertTriangle className="mt-1 h-4 w-4 shrink-0" />{manualError}</div><button type="button" onClick={() => selectedId && void loadManual(selectedId)} className="mt-4 text-xs font-semibold text-cyan-400 hover:text-cyan-200">Retry manual</button></div> : null}
           {!manualLoading && !manualError && manual ? <div className="mx-auto max-w-5xl pb-12"><MarkdownManual content={manual.content} /></div> : null}

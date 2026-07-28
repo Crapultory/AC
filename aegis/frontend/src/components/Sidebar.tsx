@@ -177,9 +177,11 @@ export default function Sidebar({
           ) : null}
         </div>
 
-        {!isCollapsed ? <div className="px-4 mb-2 text-[10px] font-mono font-bold tracking-widest text-slate-500 uppercase">CONTROL</div> : null}
-        <div className="space-y-0.5">
-          {adminItems.map((item) => {
+        {adminItems.length > 0 ? (
+          <>
+            {!isCollapsed ? <div className="px-4 mb-2 text-[10px] font-mono font-bold tracking-widest text-slate-500 uppercase">CONTROL</div> : null}
+            <div className="space-y-0.5">
+              {adminItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;
             if (item.disabled) {
@@ -217,8 +219,10 @@ export default function Sidebar({
                 </div> : null}
               </button>
             );
-          })}
-        </div>
+              })}
+            </div>
+          </>
+        ) : null}
       </nav>
 
       <div

@@ -281,6 +281,12 @@ function AuthenticatedAppShell({
                     <div className="border-b border-slate-800 px-3 py-2">
                       <div className="text-sm font-semibold text-white">{currentUser.username}</div>
                       <div className="mt-1 text-[11px] text-slate-400">{currentUser.email}</div>
+                      <dl className="mt-2 grid grid-cols-[auto_minmax(0,1fr)] items-center gap-x-2 rounded-lg border border-slate-800 bg-[#080C14] px-2 py-1.5">
+                        <dt className="font-mono text-[9px] font-bold tracking-wider text-slate-500">USER ID</dt>
+                        <dd title={currentUser.uid} className="min-w-0 truncate text-right font-mono text-[10px] text-cyan-300">
+                          {currentUser.uid}
+                        </dd>
+                      </dl>
                     </div>
                     <button
                       type="button"

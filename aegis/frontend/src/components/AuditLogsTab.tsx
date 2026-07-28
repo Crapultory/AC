@@ -83,7 +83,7 @@ export default function AuditLogsTab({ onAuthExpired }: AuditLogsTabProps) {
         </header>
 
         <section className="aegis-page-content" aria-labelledby="audit-evidence-heading">
-          <header className="aegis-page-content__header">
+          <header className="aegis-page-content__header aegis-page-content__header--compact">
             <div>
               <h2 id="audit-evidence-heading" className="aegis-page-content__title">Delegate Evidence</h2>
               <p className="aegis-page-content__description">Filter recorded authorization decisions and execution details.</p>
@@ -93,7 +93,7 @@ export default function AuditLogsTab({ onAuthExpired }: AuditLogsTabProps) {
             </button>
           </header>
 
-          <form onSubmit={search} className="grid items-end gap-2 border-b border-slate-800 p-4 md:grid-cols-3 xl:grid-cols-6">
+          <form onSubmit={search} className="aegis-page-filter-bar grid items-end gap-2 border-b border-slate-800 md:grid-cols-3 xl:grid-cols-6">
             {TEXT_FILTERS.map(([key, label]) => <input key={key} aria-label={`Audit ${label}`} value={draftFilters[key]} onChange={(event) => setDraftFilters((current) => ({ ...current, [key]: event.target.value }))} placeholder={label} className="aegis-page-field h-10 px-3 py-2 text-xs" />)}
             <select aria-label="Audit Status" value={draftFilters.status} onChange={(event) => setDraftFilters((current) => ({ ...current, status: event.target.value }))} className="aegis-page-field h-10 px-3 py-2 text-xs"><option value="">Any status</option><option value="succ">succ</option><option value="fail">fail</option><option value="auth_denied">auth_denied</option></select>
             <select aria-label="Audit Loop" value={draftFilters.is_loop} onChange={(event) => setDraftFilters((current) => ({ ...current, is_loop: event.target.value }))} className="aegis-page-field h-10 px-3 py-2 text-xs"><option value="">Any loop mode</option><option value="true">Loop</option><option value="false">Non-loop</option></select>

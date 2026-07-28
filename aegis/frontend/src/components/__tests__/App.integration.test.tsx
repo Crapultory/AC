@@ -338,6 +338,7 @@ describe('Aegis App integration', () => {
     fireEvent.click(screen.getByRole('button', { name: /user management/i }));
     expect(await screen.findByRole('heading', { name: /user management/i })).toBeInTheDocument();
     expect(screen.getByRole('heading', { name: /user directory/i })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: /user directory/i }).closest('header')).toHaveClass('aegis-page-content__header--compact');
     fireEvent.click(await screen.findByRole('button', { name: /新增用户/i }));
     fireEvent.change(screen.getByLabelText(/create username/i), {
       target: { value: 'alice' },
@@ -351,12 +352,20 @@ describe('Aegis App integration', () => {
     fireEvent.click(screen.getByRole('button', { name: /create user/i }));
     await screen.findByText('alice@example.com');
 
+    const usernameColumn = screen.getByRole('columnheader', { name: /username & id/i });
+    expect(usernameColumn).toHaveClass('p-3');
+    expect(usernameColumn.closest('table')).toHaveClass('border-b');
+    expect(screen.getByText('alice@example.com').closest('td')).toHaveClass('p-3');
+    expect(screen.getByRole('button', { name: /disable alice/i })).toHaveClass('aegis-btn--icon');
+    expect(screen.getByRole('button', { name: /open password reset for alice/i })).toHaveClass('aegis-btn--icon');
+    expect(screen.getByRole('button', { name: /delete alice/i })).toHaveClass('aegis-btn--icon');
+
     fireEvent.click(screen.getByRole('button', { name: /disable alice/i }));
     await screen.findByText('disabled');
     expect(confirmSpy).toHaveBeenCalledWith('Disable alice? (确定要disabled该用户吗？)');
 
-    fireEvent.click(screen.getByRole('button', { name: /reset password alice/i }));
-    fireEvent.change(screen.getByLabelText(/reset password alice/i), {
+    fireEvent.click(screen.getByRole('button', { name: /open password reset for alice/i }));
+    fireEvent.change(screen.getByLabelText(/new password for alice/i), {
       target: { value: 'NewPassword123!' },
     });
     fireEvent.click(screen.getByRole('button', { name: /save password/i }));
@@ -405,6 +414,7 @@ describe('Aegis App integration', () => {
 
     await screen.findByRole('button', { name: /user menu/i });
     fireEvent.click(screen.getByRole('button', { name: /user menu/i }));
+    expect(screen.getByText('admin-uid')).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /change password/i }));
     fireEvent.change(screen.getByLabelText(/current password/i), {
       target: { value: 'admin123456' },
@@ -455,6 +465,7 @@ describe('Aegis App integration', () => {
     expect(screen.queryByRole('button', { name: /routing policy/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /user management/i })).not.toBeInTheDocument();
     expect(screen.queryByRole('button', { name: /audit logs/i })).not.toBeInTheDocument();
+    expect(screen.queryByText('CONTROL')).not.toBeInTheDocument();
   });
 
   it('lets administrators open the Audit Logs route', async () => {

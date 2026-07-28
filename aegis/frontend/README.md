@@ -77,6 +77,15 @@ Vite 已经代理 `/api` 和 `/health` 到 `http://127.0.0.1:9130`。
 - 所有状态使用 `aegis-status-badge`、`aegis-status-indicator` 或 `aegis-status-text` 的 success / warning / danger / muted 语义变体，确保 Daylight Signal、Aegis Night 与 Neutral Ops 下均有足够对比度。
 - 页面在窄屏下应使说明、操作与内容自然换行；交互控件必须具备可见焦点态和可读的标签。
 
+### 紧凑布局要求
+
+- 常规管理页优先使用 `aegis-admin-page`、`aegis-page-intro`、`aegis-page-tabs` 与 `aegis-page-content`；控制台类页面（如 Policy、Agent Orchestration）使用 `aegis-console-page`、`aegis-console-intro`、`aegis-console-tabs` 与 `aegis-console-section-header`。不要在单个页面重复叠加 `p-6`、`space-y-6` 等大间距工具类。
+- 页面、卡片、标题栏和 Tab 的尺寸统一引用 `--aegis-layout-page-padding`、`--aegis-layout-page-gap`、`--aegis-layout-card-padding`、`--aegis-layout-card-gap`、`--aegis-layout-header-*` 与 `--aegis-layout-tab-padding`。若需要更紧凑的标题栏，只添加 `aegis-page-content__header--compact`，不要为单个对象写独立的像素间距。
+- `aegis-page-content` 默认应按自身内容高度收束；表格、状态卡或筛选结果较少时，最后一条数据的底线应紧贴内容，而不是由 `flex: 1` 拉出大块空白。只有确有固定视窗、滚动或可视化需求的区域才显式使用填满高度的布局。
+- 有内边距的内容体使用 `aegis-page-content__body--padded`，筛选/创建表单使用 `aegis-page-filter-bar`；手册等阅读型页面使用 `aegis-manual-header` 与 `aegis-manual-article`，保持统一的紧凑留白。
+- 数据表默认参考 Policy 的节奏：紧凑表头、`p-3` 单元格、清晰的行分隔与末行底线；列宽优先通过 `colgroup`、截断和横向滚动解决，不用放大单元格或操作区挤压内容。
+- Chat、Overview、登录与危险操作弹窗等高交互区域已采用专属密度；不要仅为压缩视觉空间而减小输入框、主要操作按钮或触控目标。紧凑化应优先消除重复的外层留白和无意义的卡片空白。
+
 ## 目录结构
 
 ```text

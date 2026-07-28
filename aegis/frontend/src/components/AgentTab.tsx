@@ -144,7 +144,7 @@ export default function AgentTab({
   }
 
   return (
-    <div className="flex-1 space-y-6 overflow-y-auto p-6 text-xs scrollbar-thin">
+    <div className="aegis-console-page text-xs scrollbar-thin">
       <div className="grid grid-cols-1 gap-4 md:grid-cols-4">
         <div className="flex items-center justify-between rounded-xl border border-slate-800 bg-[#05080F] p-4">
           <div>
@@ -177,7 +177,7 @@ export default function AgentTab({
       </div>
 
       <div className="flex flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#05080F]">
-        <div className="flex flex-col justify-between gap-4 border-b border-slate-800 bg-[#03060C] p-4 md:flex-row md:items-center">
+        <div className="aegis-console-section-header flex flex-col justify-between border-b border-slate-800 bg-[#03060C] md:flex-row md:items-center">
           <div>
             <h3 className="flex items-center gap-1.5 text-sm font-bold uppercase tracking-widest italic text-white">
               Agent Orchestration (工作智能体管理)

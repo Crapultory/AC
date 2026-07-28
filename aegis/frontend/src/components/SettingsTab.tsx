@@ -325,7 +325,7 @@ export default function SettingsTab({
             </div>
             <Activity className="h-5 w-5 text-cyan-400" aria-hidden="true" />
           </header>
-          <div className="aegis-page-content__body p-6">
+          <div className="aegis-page-content__body aegis-page-content__body--padded">
             <section aria-labelledby="runtime-status-title">
               <dl className="grid gap-3 sm:grid-cols-3">
                 <div className="aegis-page-metric">
@@ -376,7 +376,7 @@ export default function SettingsTab({
             </div>
             <span className="aegis-status-badge aegis-status-badge--warning">LOCAL MOCK / DEMO DATA</span>
           </header>
-          <div className="aegis-page-content__body p-6">
+          <div className="aegis-page-content__body aegis-page-content__body--padded">
             <dl className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
               <div className="aegis-page-metric"><dt className="aegis-page-metric__label">License ID</dt><dd className="aegis-page-metric__value break-all font-mono text-xs">{LICENSE_MOCK.id}</dd></div>
               <div className="aegis-page-metric"><dt className="aegis-page-metric__label">Edition</dt><dd className="aegis-page-metric__value">{LICENSE_MOCK.edition}</dd></div>

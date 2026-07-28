@@ -32,7 +32,9 @@ describe('AuditLogsTab', () => {
     render(<AuditLogsTab />);
 
     expect(screen.getByRole('heading', { name: 'Audit Logs' })).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: 'Delegate Evidence' })).toBeInTheDocument();
+    const delegateEvidence = screen.getByRole('heading', { name: 'Delegate Evidence' });
+    expect(delegateEvidence).toBeInTheDocument();
+    expect(delegateEvidence.closest('header')).toHaveClass('aegis-page-content__header--compact');
     const auditId = screen.getByLabelText('Audit Audit ID');
     const timestampFrom = screen.getByLabelText('Audit Timestamp From');
     const timestampTo = screen.getByLabelText('Audit Timestamp To');

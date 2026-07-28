@@ -108,8 +108,8 @@ export default function PolicyTab({
   }
 
   return (
-    <div className="flex-1 space-y-6 overflow-y-auto p-6 text-xs scrollbar-thin">
-      <div className="relative flex flex-col justify-between gap-4 overflow-hidden rounded-xl border border-slate-800 bg-[#05080F] p-5 md:flex-row md:items-center">
+    <div className="aegis-console-page text-xs scrollbar-thin">
+      <div className="aegis-console-intro relative flex flex-col justify-between overflow-hidden rounded-xl border border-slate-800 bg-[#05080F] md:flex-row md:items-center">
         <div className="absolute right-0 top-0 h-32 w-32 rounded-full bg-cyan-500/5 blur-2xl" />
         <div className="max-w-2xl flex-1 space-y-1.5">
           <h3 className="flex items-center gap-1.5 text-sm font-bold uppercase tracking-widest italic text-white">
@@ -125,13 +125,13 @@ export default function PolicyTab({
         </div>
       </div>
 
-      <div className="flex gap-2 rounded-xl border border-slate-800 bg-[#03060C] p-2">
+      <div className="aegis-console-tabs flex rounded-xl border border-slate-800 bg-[#03060C]">
         <button type="button" aria-pressed={activePolicyView === 'global'} onClick={() => setActivePolicyView('global')} className={`aegis-btn rounded-lg px-4 py-2 font-bold ${activePolicyView === 'global' ? 'aegis-btn--primary aegis-btn--selected' : 'aegis-btn--ghost'}`}>Global Routing Rules</button>
         <button type="button" aria-pressed={activePolicyView === 'agent'} onClick={() => setActivePolicyView('agent')} className={`aegis-btn rounded-lg px-4 py-2 font-bold ${activePolicyView === 'agent' ? 'aegis-btn--primary aegis-btn--selected' : 'aegis-btn--ghost'}`}>Agent Policy</button>
       </div>
 
       {activePolicyView === 'global' ? <div className="flex flex-col overflow-hidden rounded-xl border border-slate-800 bg-[#05080F]">
-        <div className="flex flex-col justify-between gap-3 border-b border-slate-800 bg-[#03060C] p-4 md:flex-row md:items-center">
+        <div className="aegis-console-section-header flex flex-col justify-between border-b border-slate-800 bg-[#03060C] md:flex-row md:items-center">
           <div>
             <h4 className="font-bold text-cyan-400">Global Routing Rules</h4>
             <p className="mt-1 text-[10px] text-slate-500">
