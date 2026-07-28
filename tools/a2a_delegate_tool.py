@@ -259,7 +259,7 @@ def _build_aegis_xml(entries: list[dict[str, Any]], global_routing: list[dict[st
     return "\n".join(lines)
 
 
-def a2a_list(otype: str = "json") -> str:
+def a2a_list(otype: str = "xml") -> str:
     global A2A_CONTEXT
     if otype not in {"json", "xml"}:
         return tool_error("otype must be 'json' or 'xml'")

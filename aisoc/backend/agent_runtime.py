@@ -65,11 +65,7 @@ def prepare_hermes_home() -> None:
 
 
 def _default_toolsets_for_platform(platform: str) -> list[str]:
-    normalized = str(platform or "").strip().lower()
-    toolsets = ["hermes-cli"]
-    if normalized == "a2a" or normalized.endswith("-a2a"):
-        toolsets.append("a2a")
-    return toolsets
+    return ["hermes-cli"]
 
 
 def _parse_enabled_flag(value, default: bool = True) -> bool:

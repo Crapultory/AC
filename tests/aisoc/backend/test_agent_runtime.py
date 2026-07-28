@@ -46,7 +46,7 @@ def test_build_profile_agent_kwargs_reads_platform_toolsets_from_loaded_config()
     assert agent_kwargs["enabled_toolsets"] == ["web", "a2a"]
 
 
-def test_build_profile_agent_kwargs_keeps_a2a_when_platform_toolsets_missing() -> None:
+def test_build_profile_agent_kwargs_does_not_enable_a2a_when_platform_toolsets_missing() -> None:
     cfg = {
         "model": {
             "default": "deepseek-v4-flash",
@@ -72,7 +72,7 @@ def test_build_profile_agent_kwargs_keeps_a2a_when_platform_toolsets_missing() -
         runtime_provider_module=runtime_provider_module,
     )
 
-    assert agent_kwargs["enabled_toolsets"] == ["hermes-cli", "a2a"]
+    assert agent_kwargs["enabled_toolsets"] == ["hermes-cli"]
 
 
 def test_build_profile_agent_kwargs_respects_explicit_empty_platform_toolsets() -> None:
@@ -138,7 +138,7 @@ def test_build_profile_agent_kwargs_auto_appends_enabled_mcp_servers() -> None:
         runtime_provider_module=runtime_provider_module,
     )
 
-    assert agent_kwargs["enabled_toolsets"] == ["hermes-cli", "a2a", "filesystem", "github"]
+    assert agent_kwargs["enabled_toolsets"] == ["hermes-cli", "filesystem", "github"]
 
 
 def test_build_profile_agent_kwargs_disables_mcp_via_env(
@@ -174,7 +174,7 @@ def test_build_profile_agent_kwargs_disables_mcp_via_env(
         runtime_provider_module=runtime_provider_module,
     )
 
-    assert agent_kwargs["enabled_toolsets"] == ["hermes-cli", "a2a"]
+    assert agent_kwargs["enabled_toolsets"] == ["hermes-cli"]
 
 
 def test_build_profile_agent_kwargs_honors_no_mcp_sentinel() -> None:
