@@ -1,3 +1,4 @@
+import { Suspense, lazy } from "react";
 import { Navigate, Route, Routes } from "react-router-dom";
 
 import { AppShell } from "./components/AppShell";
@@ -8,6 +9,24 @@ import { LoginPage } from "./pages/LoginPage";
 import { MemoryPage } from "./pages/MemoryPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { OverviewPage } from "./pages/OverviewPage";
+
+const OntologyPage = lazy(() =>
+  import("./pages/OntologyPage").then((m) => ({ default: m.OntologyPage })),
+);
+
+function OntologyRoute() {
+  return (
+    <Suspense
+      fallback={
+        <div style={{ padding: "2rem", color: "var(--text-muted, #94a3b8)", fontFamily: "monospace" }}>
+          加载本体模块…
+        </div>
+      }
+    >
+      <OntologyPage />
+    </Suspense>
+  );
+}
 import { SessionsPage } from "./pages/SessionsPage";
 import { SettingsPage } from "./pages/SettingsPage";
 import { SkillsPage } from "./pages/SkillsPage";
@@ -27,6 +46,7 @@ export function App() {
           <Route path="/skills" element={<SkillsPage />} />
           <Route path="/wiki" element={<WikiPage />} />
           <Route path="/memory" element={<MemoryPage />} />
+          <Route path="/ontology/*" element={<OntologyRoute />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
       </Route>

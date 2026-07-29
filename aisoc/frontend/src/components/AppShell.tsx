@@ -4,9 +4,22 @@ import { useState } from "react";
 import { clearStoredToken } from "../lib/auth";
 import { FloatingChat } from "./FloatingChat";
 
-type NavIconName = "overview" | "chat" | "sessions" | "cron" | "skills" | "wiki" | "memory" | "settings";
+type NavIconName = "overview" | "chat" | "sessions" | "cron" | "skills" | "wiki" | "memory" | "ontology" | "settings";
 
-const NAV_ITEMS: Array<{ path: string; label: string; icon: NavIconName }> = [
+interface NavChild {
+  path: string;
+  label: string;
+  zh?: string;
+}
+
+interface NavEntry {
+  path: string;
+  label: string;
+  icon: NavIconName;
+  children?: NavChild[];
+}
+
+const NAV_ITEMS: NavEntry[] = [
   { path: "/overview", label: "Overview", icon: "overview" },
   { path: "/chat", label: "Chat", icon: "chat" },
   { path: "/sessions", label: "Sessions", icon: "sessions" },
@@ -14,15 +27,47 @@ const NAV_ITEMS: Array<{ path: string; label: string; icon: NavIconName }> = [
   { path: "/skills", label: "Skills", icon: "skills" },
   { path: "/wiki", label: "LLMWiki", icon: "wiki" },
   { path: "/memory", label: "Memory", icon: "memory" },
+  {
+    path: "/ontology",
+    label: "Ontology",
+    icon: "ontology",
+    children: [
+      { path: "/ontology/standard-graph", label: "Standard Graph", zh: "标准图谱" },
+      { path: "/ontology/diff-overview", label: "Diff Overview", zh: "差异总览" },
+      { path: "/ontology/chat", label: "Ontology Chat", zh: "本体对话" },
+    ],
+  },
   { path: "/settings", label: "Settings", icon: "settings" },
 ];
 
 const NAV_COLLAPSED_STORAGE_KEY = "aisoc_nav_collapsed";
+const NAV_EXPANDED_PARENTS_KEY = "aisoc_nav_expanded_parents";
 const BRAND_LOGO_SRC = `${import.meta.env.BASE_URL}aisoc-logo.svg?v=2`;
 
 function readInitialNavCollapsed(): boolean {
   if (typeof window === "undefined") return false;
   return window.localStorage.getItem(NAV_COLLAPSED_STORAGE_KEY) === "1";
+}
+
+/** Per-parent expand state. Default: every parent expanded. User can collapse
+ * via the chevron and the choice persists across reloads. */
+function readInitialExpandedParents(): Record<string, boolean> {
+  const defaults: Record<string, boolean> = {};
+  for (const item of NAV_ITEMS) {
+    if (item.children?.length) defaults[item.path] = true;
+  }
+  if (typeof window === "undefined") return defaults;
+  try {
+    const raw = window.localStorage.getItem(NAV_EXPANDED_PARENTS_KEY);
+    if (!raw) return defaults;
+    const parsed = JSON.parse(raw);
+    if (parsed && typeof parsed === "object") {
+      return { ...defaults, ...parsed };
+    }
+  } catch {
+    /* ignore */
+  }
+  return defaults;
 }
 
 function NavIcon({ name }: { name: NavIconName }) {
@@ -83,6 +128,13 @@ function NavIcon({ name }: { name: NavIconName }) {
           <path {...common} d="M3.75 12c0 1.66 3.7 3 8.25 3s8.25-1.34 8.25-3" />
         </>
       )}
+      {name === "ontology" && (
+        <>
+          <path {...common} d="M12 3.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z" />
+          <path {...common} d="M5 15.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5ZM19 15.5a2.5 2.5 0 1 1 0 5 2.5 2.5 0 0 1 0-5Z" />
+          <path {...common} d="M10.25 7.5 6.5 14M13.75 7.5 17.5 14M7 18h10" />
+        </>
+      )}
       {name === "settings" && (
         <>
           <path {...common} d="M12 15.25A3.25 3.25 0 1 0 12 8.75a3.25 3.25 0 0 0 0 6.5Z" />
@@ -96,6 +148,22 @@ function NavIcon({ name }: { name: NavIconName }) {
 export function AppShell() {
   const location = useLocation();
   const [navCollapsed, setNavCollapsed] = useState<boolean>(readInitialNavCollapsed);
+  const [expandedParents, setExpandedParents] = useState<Record<string, boolean>>(readInitialExpandedParents);
+
+  function toggleParent(path: string): void {
+    setExpandedParents((prev) => {
+      const next = { ...prev, [path]: !prev[path] };
+      if (typeof window !== "undefined") {
+        try {
+          window.localStorage.setItem(NAV_EXPANDED_PARENTS_KEY, JSON.stringify(next));
+        } catch {
+          /* ignore quota */
+        }
+      }
+      return next;
+    });
+  }
+
   const activeItem =
     NAV_ITEMS.find((item) => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)) ??
     NAV_ITEMS[0];
@@ -146,20 +214,77 @@ export function AppShell() {
             <nav aria-label="Workbench navigation">
               {NAV_ITEMS.map((item) => {
                 const isActive = location.pathname.startsWith(item.path);
+                const hasChildren = !!item.children?.length;
+                const expanded = hasChildren ? !!expandedParents[item.path] : false;
+                const showChildren = hasChildren && expanded && !navCollapsed;
 
                 return (
-                  <Link
-                    key={item.path}
-                    to={item.path}
-                    className={isActive ? "active" : ""}
-                    aria-current={isActive ? "page" : undefined}
-                    title={item.label}
-                  >
-                    <span className="nav-link-icon">
-                      <NavIcon name={item.icon} />
-                    </span>
-                    <span className="nav-link-label">{item.label}</span>
-                  </Link>
+                  <div key={item.path} className={`nav-entry${hasChildren ? " nav-entry-parent" : ""}`}>
+                    <div className="nav-entry-row">
+                      {hasChildren ? (
+                        <button
+                          type="button"
+                          className={`nav-parent-toggle${isActive ? " active" : ""}${expanded ? " expanded" : ""}`}
+                          onClick={() => toggleParent(item.path)}
+                          aria-expanded={expanded}
+                          aria-controls={`nav-children-${item.icon}`}
+                          title={item.label}
+                        >
+                          <span className="nav-link-icon">
+                            <NavIcon name={item.icon} />
+                          </span>
+                          <span className="nav-link-label">{item.label}</span>
+                          {!navCollapsed ? (
+                            <span className="nav-parent-caret" aria-hidden="true">
+                              <svg viewBox="0 0 12 12" width="10" height="10" focusable="false">
+                                <path d="M2 4l4 4 4-4" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round" fill="none" />
+                              </svg>
+                            </span>
+                          ) : null}
+                        </button>
+                      ) : (
+                        <Link
+                          to={item.path}
+                          className={isActive ? "active" : ""}
+                          aria-current={isActive ? "page" : undefined}
+                          title={item.label}
+                        >
+                          <span className="nav-link-icon">
+                            <NavIcon name={item.icon} />
+                          </span>
+                          <span className="nav-link-label">{item.label}</span>
+                        </Link>
+                      )}
+                    </div>
+                    {showChildren ? (
+                      <div
+                        id={`nav-children-${item.icon}`}
+                        className="nav-children"
+                        role="group"
+                        aria-label={`${item.label} sub-views`}
+                      >
+                        {item.children!.map((child) => {
+                          const childActive = location.pathname === child.path
+                            || location.pathname.startsWith(`${child.path}/`);
+                          return (
+                            <Link
+                              key={child.path}
+                              to={child.path}
+                              className={`nav-child${childActive ? " active" : ""}`}
+                              aria-current={childActive ? "page" : undefined}
+                              title={child.zh ? `${child.label} · ${child.zh}` : child.label}
+                            >
+                              <span className="nav-child-dot" aria-hidden="true" />
+                              <span className="nav-child-label">
+                                <span className="nav-child-en">{child.label}</span>
+                                {child.zh ? <span className="nav-child-zh">{child.zh}</span> : null}
+                              </span>
+                            </Link>
+                          );
+                        })}
+                      </div>
+                    ) : null}
+                  </div>
                 );
               })}
             </nav>

@@ -8,9 +8,37 @@ export const WIDGET_SESSION_KEY = "aisoc.widget.sessionId";
 const WIDGET_DB_SESSION_KEY = "aisoc.widget.dbSessionId";
 const WIDGET_MESSAGES_KEY = "aisoc.widget.messages";
 
-// Multi-tab keys
-const WIDGET_TABS_KEY = "aisoc.widget.tabs";
-const WIDGET_ACTIVE_TAB_KEY = "aisoc.widget.activeTabDbId";
+// Multi-tab keys (default prefix; can be overridden per-consumer via options)
+const DEFAULT_TABS_KEY = "aisoc.widget.tabs";
+const DEFAULT_ACTIVE_TAB_KEY = "aisoc.widget.activeTabDbId";
+
+/** Config for {@link useAgentChat}. All optional — omitting yields the
+ * FloatingChat behavior (multi-tab widget backed by ``aisoc.widget.*``
+ * localStorage keys, no ``session.create`` overrides). Consumers that want a
+ * single fixed-purpose session (e.g. Ontology Chat) should pass:
+ *
+ *   {
+ *     storagePrefix: "aisoc.ontology-chat",   // isolate localStorage
+ *     sessionCreateParams: { title: "Ontology Consultant", source: "…" },
+ *     seedMessages: [{ role: "system", content: SYSTEM_INSTRUCTIONS }],
+ *   }
+ *
+ * A seed ``title`` naturally survives the auto-derive step because the effect
+ * only rewrites titles equal to ``"New Chat"``; any non-default seed is left
+ * alone. No explicit "freeze" flag is needed. */
+export interface UseAgentChatOptions {
+  /** Extra params passed verbatim into every ``session.create`` call. Common
+   * uses: ``profile`` (bind session to a specific hermes profile), ``title``
+   * (stable, non-derived tab title), ``source``. */
+  sessionCreateParams?: Record<string, unknown>;
+  /** Seed messages inserted into ``session.create.messages``. Roles allowed:
+   * ``system`` / ``user`` / ``assistant``. Used to pin a system prompt on
+   * fresh sessions. */
+  seedMessages?: Array<{ role: "system" | "user" | "assistant"; content: string }>;
+  /** Prefix for the two localStorage keys (tabs list + active tab id). Different
+   * consumers MUST use different prefixes so their session caches don't collide. */
+  storagePrefix?: string;
+}
 
 const SCROLLBACK_LIMIT = 200;
 const MAX_CACHED_TABS = 20;
@@ -92,10 +120,10 @@ function deriveInitialTitle(messages: ChatMessage[]): string {
 
 // ── Multi-tab storage ──────────────────────────────────────────────
 
-function loadTabsFromStorage(): SessionTab[] {
+function loadTabsFromStorage(tabsKey: string): SessionTab[] {
   try {
     if (!hasLocalStorage()) return [];
-    const raw = localStorage.getItem(WIDGET_TABS_KEY);
+    const raw = localStorage.getItem(tabsKey);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     return Array.isArray(parsed) ? parsed : [];
@@ -104,29 +132,29 @@ function loadTabsFromStorage(): SessionTab[] {
   }
 }
 
-function persistTabs(tabs: SessionTab[]): void {
+function persistTabs(tabsKey: string, tabs: SessionTab[]): void {
   try {
     if (!hasLocalStorage()) return;
-    localStorage.setItem(WIDGET_TABS_KEY, JSON.stringify(tabs));
+    localStorage.setItem(tabsKey, JSON.stringify(tabs));
   } catch {
     // localStorage full or unavailable — silently skip
   }
 }
 
-function loadActiveTabDbId(): string | null {
+function loadActiveTabDbId(activeKey: string): string | null {
   try {
     if (!hasLocalStorage()) return null;
-    return localStorage.getItem(WIDGET_ACTIVE_TAB_KEY) || null;
+    return localStorage.getItem(activeKey) || null;
   } catch {
     return null;
   }
 }
 
-function persistActiveTabDbId(dbId: string | null): void {
+function persistActiveTabDbId(activeKey: string, dbId: string | null): void {
   try {
     if (!hasLocalStorage()) return;
-    if (dbId) localStorage.setItem(WIDGET_ACTIVE_TAB_KEY, dbId);
-    else localStorage.removeItem(WIDGET_ACTIVE_TAB_KEY);
+    if (dbId) localStorage.setItem(activeKey, dbId);
+    else localStorage.removeItem(activeKey);
   } catch {
     // silently skip
   }
@@ -136,7 +164,7 @@ function persistActiveTabDbId(dbId: string | null): void {
 
 function migrateLegacyStorage(): void {
   if (!hasLocalStorage()) return;
-  if (localStorage.getItem(WIDGET_TABS_KEY)) return;
+  if (localStorage.getItem(DEFAULT_TABS_KEY)) return;
 
   const legacyDbId = localStorage.getItem(WIDGET_DB_SESSION_KEY);
   const legacyMessages = loadCachedMessages();
@@ -148,8 +176,8 @@ function migrateLegacyStorage(): void {
       title: deriveInitialTitle(legacyMessages),
       messages: legacyMessages.slice(-MAX_MESSAGES_PER_TAB),
     }];
-    localStorage.setItem(WIDGET_TABS_KEY, JSON.stringify(tabs));
-    localStorage.setItem(WIDGET_ACTIVE_TAB_KEY, legacyDbId);
+    localStorage.setItem(DEFAULT_TABS_KEY, JSON.stringify(tabs));
+    localStorage.setItem(DEFAULT_ACTIVE_TAB_KEY, legacyDbId);
   }
 
   localStorage.removeItem(WIDGET_SESSION_KEY);
@@ -202,7 +230,7 @@ export function formatToolDuration(seconds: number | undefined): string {
 
 // ── Hook ───────────────────────────────────────────────────────────
 
-export function useAgentChat(): {
+export function useAgentChat(options: UseAgentChatOptions = {}): {
   state: ChatState;
   tabs: SessionTab[];
   activeTabDbId: string | null;
@@ -216,12 +244,34 @@ export function useAgentChat(): {
   disconnect: () => void;
   interrupt: () => void;
 } {
-  migrateLegacyStorage();
+  const storagePrefix = options.storagePrefix ?? "aisoc.widget";
+  const tabsKey = `${storagePrefix}.tabs`;
+  const activeKey = `${storagePrefix}.activeTabDbId`;
+  const isDefaultPrefix = storagePrefix === "aisoc.widget";
 
-  const [tabs, setTabs] = useState<SessionTab[]>(loadTabsFromStorage());
+  // Extra params/messages come from options; wrap in refs so hook identity is
+  // stable even if callers pass a fresh object literal each render.
+  const sessionCreateParamsRef = useRef(options.sessionCreateParams);
+  sessionCreateParamsRef.current = options.sessionCreateParams;
+  const seedMessagesRef = useRef(options.seedMessages);
+  seedMessagesRef.current = options.seedMessages;
+
+  const buildCreateParams = useCallback((): Record<string, unknown> => {
+    const extra = sessionCreateParamsRef.current || {};
+    const seeds = seedMessagesRef.current;
+    return {
+      cols: 80,
+      ...extra,
+      ...(seeds && seeds.length > 0 ? { messages: seeds } : {}),
+    };
+  }, []);
+
+  if (isDefaultPrefix) migrateLegacyStorage();
+
+  const [tabs, setTabs] = useState<SessionTab[]>(() => loadTabsFromStorage(tabsKey));
   const tabsRef = useRef<SessionTab[]>(tabs);
   tabsRef.current = tabs;
-  const activeTabDbIdRef = useRef<string | null>(loadActiveTabDbId());
+  const activeTabDbIdRef = useRef<string | null>(loadActiveTabDbId(activeKey));
 
   const initialTab = tabs.find(t => t.dbId === activeTabDbIdRef.current);
   const [state, setState] = useState<ChatState>({
@@ -253,7 +303,7 @@ export function useAgentChat(): {
     if (!activeTabDbIdRef.current) return;
     setTabs(prev => {
       const updated = snapshotCurrentTab(prev);
-      persistTabs(updated);
+      persistTabs(tabsKey, updated);
       return updated;
     });
   }, [state.messages, snapshotCurrentTab]);
@@ -264,15 +314,17 @@ export function useAgentChat(): {
     if (!dbId) return;
     setTabs(prev => {
       const tab = prev.find(t => t.dbId === dbId);
+      // Only overwrite the default "New Chat" placeholder. A seed title from
+      // sessionCreateParams.title survives untouched.
       if (!tab || tab.title !== "New Chat") return prev;
       const firstUserMsg = state.messages.find(m => m.role === "user");
       if (!firstUserMsg) return prev;
       const newTitle = firstUserMsg.text.slice(0, 30) + (firstUserMsg.text.length > 30 ? "..." : "");
       const updated = prev.map(t => t.dbId === dbId ? { ...t, title: newTitle } : t);
-      persistTabs(updated);
+      persistTabs(tabsKey, updated);
       return updated;
     });
-  }, [state.messages]);
+  }, [state.messages, tabsKey]);
 
   const rpcRef = useRef<AgentRpc | null>(null);
   const idleTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -450,9 +502,9 @@ export function useAgentChat(): {
                 );
                 if (resumedDbId !== cachedDbId) {
                   activeTabDbIdRef.current = resumedDbId;
-                  persistActiveTabDbId(resumedDbId);
+                  persistActiveTabDbId(activeKey, resumedDbId);
                 }
-                persistTabs(updated);
+                persistTabs(tabsKey, updated);
                 return updated;
               });
               const msgs: ChatMessage[] = (res.messages || []).map((m: any) => ({
@@ -479,21 +531,24 @@ export function useAgentChat(): {
           }
         }
 
-        const res = await rpc.call("session.create", { cols: 80 });
+        const res = await rpc.call("session.create", buildCreateParams());
         const tuiSid = res.session_id;
         sessionIdRef.current = tuiSid;
 
         // Create new tab entry (dbId will be filled asynchronously)
         const tempDbId = `pending-${tuiSid}`;
         activeTabDbIdRef.current = tempDbId;
-        persistActiveTabDbId(tempDbId);
+        persistActiveTabDbId(activeKey, tempDbId);
 
         setTabs(prev => {
-          const newTab: SessionTab = { dbId: tempDbId, tuiId: tuiSid, title: "New Chat", messages: [] };
+          const seedTitle = typeof sessionCreateParamsRef.current?.title === "string"
+            ? String(sessionCreateParamsRef.current.title)
+            : "New Chat";
+          const newTab: SessionTab = { dbId: tempDbId, tuiId: tuiSid, title: seedTitle, messages: [] };
           const updated = [...prev, newTab];
           // Cap at MAX_CACHED_TABS, dropping oldest
           const capped = updated.length > MAX_CACHED_TABS ? updated.slice(-MAX_CACHED_TABS) : updated;
-          persistTabs(capped);
+          persistTabs(tabsKey, capped);
           return capped;
         });
 
@@ -508,11 +563,11 @@ export function useAgentChat(): {
             const updated = prev.map(t =>
               t.dbId === tempDbId ? { ...t, dbId: realDbId } : t
             );
-            persistTabs(updated);
+            persistTabs(tabsKey, updated);
             return updated;
           });
           activeTabDbIdRef.current = realDbId;
-          persistActiveTabDbId(realDbId);
+          persistActiveTabDbId(activeKey, realDbId);
         }
       }).catch((err) => {
         if (retriesLeft > 0) {
@@ -570,9 +625,9 @@ export function useAgentChat(): {
               );
               if (resumedDbId !== cachedDbId) {
                 activeTabDbIdRef.current = resumedDbId;
-                persistActiveTabDbId(resumedDbId);
+                persistActiveTabDbId(activeKey, resumedDbId);
               }
-              persistTabs(updated);
+              persistTabs(tabsKey, updated);
               return updated;
             });
             setState((s) => ({ ...s, phase: "idle", sessionId: tuiSid }));
@@ -583,7 +638,7 @@ export function useAgentChat(): {
             // Resume failed — fall through to create
           }
         }
-        const res = await rpc.call("session.create", { cols: 80 });
+        const res = await rpc.call("session.create", buildCreateParams());
         const tuiSid = res.session_id;
         sessionIdRef.current = tuiSid;
         setState({ phase: "idle", sessionId: tuiSid, messages: [], activeApproval: null, activeClarify: null, error: null });
@@ -594,11 +649,11 @@ export function useAgentChat(): {
             const updated = prev.map(t =>
               t.dbId === cachedDbId ? { ...t, dbId: realDbId, tuiId: tuiSid } : t
             );
-            persistTabs(updated);
+            persistTabs(tabsKey, updated);
             return updated;
           });
           activeTabDbIdRef.current = realDbId;
-          persistActiveTabDbId(realDbId);
+          persistActiveTabDbId(activeKey, realDbId);
         }
         doSubmit();
       }).catch((err) => {
@@ -645,7 +700,7 @@ export function useAgentChat(): {
     // Snapshot current tab before leaving
     setTabs(prev => {
       const updated = snapshotCurrentTab(prev);
-      persistTabs(updated);
+      persistTabs(tabsKey, updated);
       return updated;
     });
     disconnectRef.current();
@@ -662,7 +717,7 @@ export function useAgentChat(): {
     // Snapshot current tab before leaving
     setTabs(prev => {
       const updated = snapshotCurrentTab(prev);
-      persistTabs(updated);
+      persistTabs(tabsKey, updated);
       return updated;
     });
 
@@ -670,7 +725,7 @@ export function useAgentChat(): {
     if (!targetTab) return;
 
     activeTabDbIdRef.current = dbId;
-    persistActiveTabDbId(dbId);
+    persistActiveTabDbId(activeKey, dbId);
 
     // Load cached messages immediately, mark as needing reconnect on next send
     setState({
@@ -687,14 +742,14 @@ export function useAgentChat(): {
   const closeTab = useCallback((dbId: string) => {
     setTabs(prev => {
       const updated = prev.filter(t => t.dbId !== dbId);
-      persistTabs(updated);
+      persistTabs(tabsKey, updated);
 
       if (activeTabDbIdRef.current === dbId) {
         if (updated.length > 0) {
           // Lazy switch to most recent remaining tab — no reconnect yet
           const newActive = updated[updated.length - 1];
           activeTabDbIdRef.current = newActive.dbId;
-          persistActiveTabDbId(newActive.dbId);
+          persistActiveTabDbId(activeKey, newActive.dbId);
           setState({
             phase: "idle",
             sessionId: newActive.tuiId,
@@ -707,7 +762,7 @@ export function useAgentChat(): {
         } else {
           // Last tab removed — disconnect and clear
           activeTabDbIdRef.current = null;
-          persistActiveTabDbId(null);
+          persistActiveTabDbId(activeKey, null);
           disconnectRef.current();
           setState({ phase: "disconnected", sessionId: null, messages: [], activeApproval: null, activeClarify: null, error: null });
         }
