@@ -970,4 +970,58 @@ describe('ChatTab', () => {
       }),
     ).toBe(false);
   });
+
+  it('uploads an image attachment and sends its validated metadata with an attachment-only turn', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      attachment: {
+        id: 'att-image-1', kind: 'image', media_type: 'image/png',
+        cache_path: '/tmp/cache/images/img_1.png', display_name: 'clipboard.png', size: 12,
+      },
+    }), { status: 201, headers: { 'Content-Type': 'application/json' } })));
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: vi.fn(() => 'blob:clipboard-image'),
+      revokeObjectURL: vi.fn(),
+    });
+    render(<ChatTab agents={[]} />);
+
+    const file = new File(['png-bytes'], 'clipboard.png', { type: 'image/png' });
+    fireEvent.change(screen.getByLabelText(/upload chat attachments/i), { target: { files: [file] } });
+    expect(await screen.findByText('clipboard.png')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByLabelText(/uploading/i)).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({ type: 'session.bound', session_id: 'attachment-session', title: 'Attachment analysis', resumed: false });
+
+    await waitFor(() => expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+    const payload = socket.sent.map((item) => JSON.parse(item)).find((item) => item.type === 'message.send');
+    expect(payload).toMatchObject({ text: '', attachments: [{ id: 'att-image-1', kind: 'image' }] });
+    expect(screen.getByTestId('message-attachments')).toHaveTextContent('clipboard.png');
+  });
+
+  it('uploads image files pasted into the composer without treating them as text', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      attachment: {
+        id: 'att-paste-1', kind: 'image', media_type: 'image/png',
+        cache_path: '/tmp/cache/images/img_paste.png', display_name: 'pasted.png', size: 12,
+      },
+    }), { status: 201, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: vi.fn(() => 'blob:pasted-image'),
+      revokeObjectURL: vi.fn(),
+    });
+    render(<ChatTab agents={[]} />);
+
+    const pasted = new File(['png-bytes'], 'pasted.png', { type: 'image/png' });
+    fireEvent.paste(screen.getByPlaceholderText(/ask aegis anything/i), {
+      clipboardData: { files: [pasted] },
+    });
+
+    expect(await screen.findByText('pasted.png')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('/api/chat/attachments', expect.objectContaining({ method: 'POST' }));
+  });
 });

@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import asyncio
 
-from fastapi import APIRouter, WebSocket
+from fastapi import APIRouter, File, Request, UploadFile, WebSocket, status
 from starlette.websockets import WebSocketDisconnect
 
-from aegis.backend.auth import get_current_user_from_token
+from aegis.backend.auth import get_current_user_from_token, require_authenticated_user
 from aegis.backend.chat.service import ChatSessionManager
 from aegis.backend.config import AegisSettings
 from aegis.backend.services.user_service import UserService
@@ -25,6 +25,12 @@ def build_chat_router(
 ) -> APIRouter:
     router = APIRouter(tags=["chat"])
     session_manager = manager or ChatSessionManager()
+
+    @router.post("/api/chat/attachments", status_code=status.HTTP_201_CREATED)
+    async def upload_attachment(request: Request, file: UploadFile = File(...)) -> dict:
+        user, _payload = require_authenticated_user(request, settings, user_service)
+        attachment = await session_manager.attachments.upload(file, owner_id=user.uid)
+        return {"attachment": attachment.public_dict()}
 
     @router.websocket("/api/chat/ws")
     async def chat_ws(websocket: WebSocket) -> None:
@@ -80,10 +86,20 @@ def build_chat_router(
                     continue
 
                 if event_type == "message.send":
-                    actor.handle_message(
-                        str(payload.get("text") or ""),
-                        client_msg_id=str(payload.get("client_msg_id") or "").strip() or None,
-                    )
+                    try:
+                        attachments = session_manager.attachments.resolve(
+                            payload.get("attachments"),
+                            owner_id=current_user.uid if current_user is not None else "",
+                        )
+                        actor.handle_message(
+                            str(payload.get("text") or ""),
+                            client_msg_id=str(payload.get("client_msg_id") or "").strip() or None,
+                            attachments=attachments,
+                        )
+                    except ValueError as exc:
+                        await websocket.send_json(
+                            {"type": "error", "code": "invalid_attachment", "message": str(exc)}
+                        )
                     continue
 
                 if event_type == "approval.respond":

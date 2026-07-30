@@ -6,7 +6,7 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { ChainStep, Conversation, DelegateToolCall, Message } from '../types';
+import { ChainStep, ChatAttachment, ChatAttachmentSummary, Conversation, DelegateToolCall, Message } from '../types';
 import { getStoredToken } from './auth';
 import { applyWorkflowSocketEvent } from './sessionWorkflow';
 
@@ -43,7 +43,7 @@ export type ChatSocketEvent = {
 };
 
 type PendingBoundAction =
-  | { type: 'message.send'; text: string; clientMsgId: string }
+  | { type: 'message.send'; text: string; clientMsgId: string; attachments: ChatAttachment[] }
   | { type: 'approval.respond'; choice: 'once' | 'session' | 'always' | 'deny' }
   | { type: 'clarify.respond'; answer: string }
   | { type: 'session.resume' };
@@ -64,7 +64,7 @@ type ChatRuntimeContextValue = {
   createConversation: () => void;
   clearHistory: () => boolean;
   deleteConversation: (conversationId: string) => void;
-  submitInput: (text: string) => void;
+  submitInput: (text: string, attachments?: ChatAttachment[]) => void;
   respondApproval: (choice: 'once' | 'session' | 'always' | 'deny') => void;
   respondClarify: (answer: string) => void;
   markClarifyAwaitingText: () => void;
@@ -441,6 +441,7 @@ export function AegisChatProvider({
           session_id: sessionId,
           text: action.text,
           client_msg_id: action.clientMsgId,
+          attachments: action.attachments,
         }),
       );
       return;
@@ -793,9 +794,9 @@ export function AegisChatProvider({
     markConversationRead(conversationId);
   }
 
-  function submitInput(text: string) {
+  function submitInput(text: string, attachments: ChatAttachment[] = []) {
     const trimmedText = text.trim();
-    if (!trimmedText) {
+    if (!trimmedText && attachments.length === 0) {
       return;
     }
     const conversation =
@@ -808,7 +809,7 @@ export function AegisChatProvider({
       !isClarifyReply && conversation.messages.length === 0
         ? trimmedText.length > 24
           ? `${trimmedText.slice(0, 24)}...`
-          : trimmedText
+          : trimmedText || (attachments.length ? 'Attachment analysis' : conversation.title)
         : conversation.title;
     const clientMsgId = createMessageId('client');
     const userMessage: Message = {
@@ -818,6 +819,7 @@ export function AegisChatProvider({
       text: trimmedText,
       timestamp: formatClock(),
       clientMsgId,
+      attachments: attachments.map(({ cache_path: _cachePath, ...summary }): ChatAttachmentSummary => summary),
     };
     const targetConversation = {
       ...conversation,
@@ -850,6 +852,7 @@ export function AegisChatProvider({
             type: 'message.send' as const,
             text: trimmedText,
             clientMsgId,
+            attachments,
           }),
     });
   }

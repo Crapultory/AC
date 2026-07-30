@@ -323,6 +323,19 @@ export interface Message {
   pending?: boolean;
   clientMsgId?: string;
   workflowParentId?: string;
+  attachments?: ChatAttachmentSummary[];
+}
+
+export interface ChatAttachmentSummary {
+  id: string;
+  kind: 'image' | 'document';
+  media_type: string;
+  display_name: string;
+  size: number;
+}
+
+export interface ChatAttachment extends ChatAttachmentSummary {
+  cache_path: string;
 }
 
 export interface Conversation {

@@ -21,6 +21,7 @@ from aegis.backend.chat.models import (
     ClarifyRequestState,
     DelegateForegroundState,
 )
+from aegis.backend.chat.attachments import ChatAttachment, ChatAttachmentStore, prepare_turn_message
 from aegis.backend.chat.runtime import AegisChatInputAdapter, AegisChatOutputAdapter
 from aisoc.backend.agent_runtime import default_agent_factory
 from aisoc.backend.agent_runtime import load_conversation_history
@@ -495,8 +496,15 @@ class ChatSessionActor:
             response = f"{response}\nwarning: {result.warning_message}"
         self._emit_main_text_reply(response, turn_id)
 
-    def handle_message(self, text: str, *, client_msg_id: str | None = None) -> None:
+    def handle_message(
+        self,
+        text: str,
+        *,
+        client_msg_id: str | None = None,
+        attachments: list[ChatAttachment] | None = None,
+    ) -> None:
         stripped = str(text or "")
+        turn_attachments = list(attachments or [])
         with self._lock:
             if self._pending_approval is not None:
                 self._send_event(
@@ -570,7 +578,7 @@ class ChatSessionActor:
             self._set_run_state("running", source="main")
             worker = threading.Thread(
                 target=self._run_turn,
-                args=(stripped, turn_id),
+                args=(stripped, turn_attachments, turn_id),
                 name=f"aegis-{self.session_id[:8]}",
                 daemon=True,
             )
@@ -881,7 +889,12 @@ class ChatSessionActor:
         timeout_minutes = max(1, int(_clarify_timeout_seconds() / 60))
         return f"[user did not respond within {timeout_minutes}m]"
 
-    def _run_turn(self, user_message: str, turn_id: str) -> None:
+    def _run_turn(
+        self,
+        user_message: str,
+        attachments: list[ChatAttachment],
+        turn_id: str,
+    ) -> None:
         agent = self._agent
         old_stream = getattr(agent, "stream_delta_callback", None)
         old_tool_start = getattr(agent, "tool_start_callback", None)
@@ -983,8 +996,9 @@ class ChatSessionActor:
             )
 
             history = load_conversation_history(agent, self._runtime_session_id)
+            prepared_message = prepare_turn_message(user_message, attachments, agent=agent)
             result = agent.run_conversation(
-                user_message=user_message,
+                user_message=prepared_message,
                 conversation_history=history,
                 task_id=turn_id,
             )
@@ -1148,6 +1162,7 @@ class ChatSessionManager:
         self._agent_factory = agent_factory or _build_default_aegis_agent
         self._lock = threading.Lock()
         self._sessions: dict[tuple[str, str], ChatSessionActor] = {}
+        self.attachments = ChatAttachmentStore()
 
     def set_agent_factory(self, agent_factory: Callable[..., object]) -> None:
         with self._lock:
