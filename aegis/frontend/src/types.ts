@@ -324,6 +324,7 @@ export interface Message {
   clientMsgId?: string;
   workflowParentId?: string;
   attachments?: ChatAttachmentSummary[];
+  modifiedFiles?: string[];
 }
 
 export interface ChatAttachmentSummary {

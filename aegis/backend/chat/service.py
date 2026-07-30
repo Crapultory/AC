@@ -26,6 +26,7 @@ from aegis.backend.chat.runtime import AegisChatInputAdapter, AegisChatOutputAda
 from aisoc.backend.agent_runtime import default_agent_factory
 from aisoc.backend.agent_runtime import load_conversation_history
 from gateway.session_context import clear_session_vars, set_session_vars
+from agent.tool_dispatch_helpers import _extract_landed_file_mutation_paths
 from tools.approval import (
     register_gateway_notify,
     reset_current_session_key,
@@ -69,6 +70,36 @@ def _clarify_timeout_seconds() -> float:
     except ValueError:
         return 600.0
     return timeout if timeout > 0 else 600.0
+
+
+def _successful_mutation_paths(
+    tool_name: str,
+    function_args: dict | None,
+    function_result: object,
+) -> list[str]:
+    """Return every successful file edit reported by one main-task file tool."""
+    if tool_name not in {"write_file", "patch"}:
+        return []
+    if isinstance(function_result, str):
+        try:
+            result_data = json.loads(function_result)
+        except (TypeError, ValueError):
+            result_data = None
+        if isinstance(result_data, dict) and result_data.get("error"):
+            return []
+    candidates = _extract_landed_file_mutation_paths(
+        tool_name,
+        function_args or {},
+        function_result,
+    )
+    paths: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        reported_path = str(candidate).strip()
+        if reported_path and reported_path not in seen:
+            seen.add(reported_path)
+            paths.append(reported_path)
+    return paths
 
 
 def build_aegis_ephemeral_system_prompt(
@@ -204,6 +235,10 @@ class ChatSessionActor:
         self._loop: asyncio.AbstractEventLoop | None = None
         self._websocket: WebSocket | None = None
         self._lock = threading.RLock()
+        # Browser workflow traces outlive this in-memory actor.  Keep a new
+        # actor's event ids distinct when the same public session is rebound
+        # after an Aegis service restart.
+        self._event_epoch = uuid4().hex
         self._event_counter = 0
         self._turn_id: str | None = None
         self._foreground_source = "main"
@@ -905,6 +940,8 @@ class ChatSessionActor:
         approval_token = None
         user_env_token = None
         session_tokens = []
+        modified_files: list[str] = []
+        modified_files_lock = threading.Lock()
         try:
             approval_token = set_current_session_key(self._runtime_session_id)
             if self._user_id:
@@ -954,7 +991,18 @@ class ChatSessionActor:
                 function_args: dict | None,
                 function_result: object,
             ) -> None:
-                del function_args
+                if self._foreground_source == "main":
+                    landed_files = _successful_mutation_paths(
+                        function_name,
+                        function_args,
+                        function_result,
+                    )
+                    if landed_files:
+                        with modified_files_lock:
+                            known_files = set(modified_files)
+                            modified_files.extend(
+                                path for path in landed_files if path not in known_files
+                            )
                 preview = str(function_result)
                 if len(preview) > 200:
                     preview = preview[:200] + "..."
@@ -1004,12 +1052,15 @@ class ChatSessionActor:
             )
             final_response = str(result.get("final_response") or "")
             if final_response:
+                with modified_files_lock:
+                    completed_files = list(modified_files)
                 self._send_event(
                     "message.completed",
                     {
                         "message_id": self._main_message_id,
                         "content": final_response,
                         "completed": bool(result.get("completed", True)),
+                        "modified_files": completed_files or None,
                     },
                     source="main",
                     turn_id=turn_id,
@@ -1115,7 +1166,9 @@ class ChatSessionActor:
             envelope = ChatEventEnvelope(
                 type=event_type,
                 session_id=self.session_id,
-                server_event_id=f"{self.session_id}:{self._event_counter}",
+                server_event_id=(
+                    f"{self.session_id}:{self._event_epoch}:{self._event_counter}"
+                ),
                 ts=_now_timestamp(),
                 turn_id=turn_id,
                 source=source,

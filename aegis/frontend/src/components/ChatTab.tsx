@@ -71,14 +71,31 @@ interface PendingAttachment {
   error?: string;
 }
 
-type WorkflowDrawerTab = "workflow" | "architecture";
+type WorkflowDrawerTab = "workflow" | `file:${string}`;
+
+interface DrawerFilePayload {
+  title: string;
+  type: string;
+  content: string;
+}
+
+interface DynamicDrawerTab extends DrawerFilePayload {
+  id: `file:${string}`;
+  path: string;
+  loading: boolean;
+  refreshVersion: number;
+  settledVersion: number;
+  error: string;
+}
+
+interface SessionDrawerTabs {
+  activeTab: WorkflowDrawerTab;
+  tabs: DynamicDrawerTab[];
+}
 
 const WORKFLOW_DRAWER_WIDTH_STORAGE_KEY = "aegis_chat_workflow_drawer_width";
 const DEFAULT_WORKFLOW_DRAWER_WIDTH = 50;
 const MIN_WORKSPACE_PANE_WIDTH = 360;
-const ARCHITECTURE_SHOWCASE_FILE =
-  "2026-06-07-aegis-architecture-showcase.html";
-
 function drawerWidthBounds(containerWidth: number) {
   if (!containerWidth || containerWidth <= MIN_WORKSPACE_PANE_WIDTH * 2) {
     return { min: 20, max: 80 };
@@ -117,27 +134,29 @@ function loadWorkflowDrawerWidth(): number {
   return clampDrawerWidth(stored, window.innerWidth);
 }
 
-interface ArchitecturePreviewProps {
+interface DrawerFilePreviewProps {
   title: string;
+  type: string;
   content: string;
   loading: boolean;
   error: string;
 }
 
-function ArchitecturePreview({
+function DrawerFilePreview({
   title,
+  type,
   content,
   loading,
   error,
-}: ArchitecturePreviewProps) {
-  if (loading) {
+}: DrawerFilePreviewProps) {
+  if (loading && !content) {
     return (
       <div className="aegis-drawer-preview__status" role="status">
-        LOADING ARCHITECTURE SHOWCASE…
+        LOADING FILE PREVIEW…
       </div>
     );
   }
-  if (error) {
+  if (error && !content) {
     return (
       <div className="aegis-alert aegis-alert--danger m-4" role="alert">
         {error}
@@ -145,12 +164,25 @@ function ArchitecturePreview({
     );
   }
   if (!content) {
-    return null;
+    return (
+      <div className="aegis-drawer-preview__status" role="status">
+        BINARY FILE — PREVIEW UNAVAILABLE
+      </div>
+    );
+  }
+  if (type === "markdown") {
+    return <div className="aegis-drawer-preview__markdown aegis-markdown"><ChatMarkdown content={content} /></div>;
+  }
+  if (["avif", "bmp", "gif", "ico", "jpeg", "jpg", "png", "svg", "webp"].includes(type)) {
+    return <div className="aegis-drawer-preview__image-wrap"><img alt={title} className="aegis-drawer-preview__image" src={content} /></div>;
+  }
+  if (type !== "html") {
+    return <pre className="aegis-drawer-preview__code"><code>{content}</code></pre>;
   }
   return (
     <iframe
-      title={title || "Aegis architecture showcase"}
-      data-testid="architecture-showcase-frame"
+      title={title || "Aegis file preview"}
+      data-testid="drawer-html-frame"
       className="aegis-drawer-preview__frame"
       sandbox="allow-scripts"
       srcDoc={content}
@@ -413,6 +445,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
     activeConversation,
     transportError,
     rejectedInput,
+    pendingHtmlPreviews,
     setActiveConversation,
     createConversation,
     clearHistory,
@@ -424,6 +457,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
     resumeActiveConversation,
     setTransportError,
     clearRejectedInput,
+    consumePendingHtmlPreview,
   } = useAegisChatRuntime();
   const [inputVal, setInputVal] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -440,16 +474,16 @@ function ChatTabContent({ agents }: ChatTabProps) {
   >("announce");
   const [workflowDrawerOpen, setWorkflowDrawerOpen] = useState(false);
   const [workflowFullscreen, setWorkflowFullscreen] = useState(false);
-  const [workflowDrawerTab, setWorkflowDrawerTab] =
-    useState<WorkflowDrawerTab>("workflow");
+  const [drawerTabsByConversation, setDrawerTabsByConversation] = useState<
+    Record<string, SessionDrawerTabs>
+  >({});
   const [workflowDrawerWidth, setWorkflowDrawerWidth] = useState(
     loadWorkflowDrawerWidth,
   );
   const [workflowDrawerResizing, setWorkflowDrawerResizing] = useState(false);
-  const [architectureTitle, setArchitectureTitle] = useState("");
-  const [architectureHtml, setArchitectureHtml] = useState("");
-  const [architectureLoading, setArchitectureLoading] = useState(false);
-  const [architectureError, setArchitectureError] = useState("");
+  const [expandedModifiedFileLists, setExpandedModifiedFileLists] = useState<
+    Record<string, boolean>
+  >({});
   const [promptTemplateDrawerOpen, setPromptTemplateDrawerOpen] =
     useState(false);
   const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([]);
@@ -481,6 +515,10 @@ function ChatTabContent({ agents }: ChatTabProps) {
   const composerDomValueRef = useRef("");
   const shortcutQueryRef = useRef<ShortcutQuery | null>(null);
   const pendingComposerCaretRef = useRef<number | null>(null);
+  const activeDrawerTabs = activeConvId ? drawerTabsByConversation[activeConvId] : undefined;
+  const workflowDrawerTab = activeDrawerTabs?.activeTab || "workflow";
+  const dynamicDrawerTabs = activeDrawerTabs?.tabs || [];
+  const pendingHtmlPreview = activeConvId ? pendingHtmlPreviews[activeConvId] : undefined;
 
   useEffect(() => {
     return () => {
@@ -660,42 +698,71 @@ function ChatTabContent({ agents }: ChatTabProps) {
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [workflowDrawerOpen, workflowFullscreen]);
 
-  useEffect(() => {
-    if (!workflowDrawerOpen || workflowDrawerTab !== "architecture") {
-      return;
-    }
-    if (architectureHtml || architectureLoading) {
-      return;
-    }
+  const activeDynamicDrawerTab = dynamicDrawerTabs.find(
+    (tab) => tab.id === workflowDrawerTab,
+  );
 
-    let cancelled = false;
-    setArchitectureLoading(true);
-    setArchitectureError("");
-    void fetchJSON<{ title: string; content: string }>(
-      `/api/chat/drawer-html?path=${encodeURIComponent(ARCHITECTURE_SHOWCASE_FILE)}`,
+  useEffect(() => {
+    if (
+      !workflowDrawerOpen ||
+      !activeDynamicDrawerTab ||
+      activeDynamicDrawerTab.settledVersion === activeDynamicDrawerTab.refreshVersion
+    ) {
+      return;
+    }
+    const tabId = activeDynamicDrawerTab.id;
+    const conversationId = activeConvId;
+    const refreshVersion = activeDynamicDrawerTab.refreshVersion;
+    if (!conversationId) {
+      return;
+    }
+    setDynamicDrawerTabsForConversation(conversationId, (current) =>
+      current.map((tab) =>
+        tab.id === tabId && tab.refreshVersion === refreshVersion
+          ? { ...tab, loading: true, error: "" }
+          : tab,
+      ),
+    );
+    void fetchJSON<DrawerFilePayload>(
+      `/api/chat/drawer-html?path=${encodeURIComponent(activeDynamicDrawerTab.path)}`,
     )
-      .then(({ title, content }) => {
-        if (!cancelled) {
-          setArchitectureTitle(title);
-          setArchitectureHtml(content);
-        }
+      .then((payload) => {
+        setDynamicDrawerTabsForConversation(conversationId, (current) =>
+          current.map((tab) =>
+            tab.id === tabId && tab.refreshVersion === refreshVersion
+              ? {
+                  ...tab,
+                  ...payload,
+                  loading: false,
+                  settledVersion: refreshVersion,
+                  error: "",
+                }
+              : tab,
+          ),
+        );
       })
       .catch((error: unknown) => {
-        if (!cancelled) {
-          setArchitectureError(
-            getApiErrorMessage(error, "Unable to load the architecture showcase."),
-          );
-        }
-      })
-      .finally(() => {
-        if (!cancelled) {
-          setArchitectureLoading(false);
-        }
+        setDynamicDrawerTabsForConversation(conversationId, (current) =>
+          current.map((tab) =>
+            tab.id === tabId && tab.refreshVersion === refreshVersion
+              ? {
+                  ...tab,
+                  loading: false,
+                  settledVersion: refreshVersion,
+                  error: getApiErrorMessage(error, "Unable to load the file preview."),
+                }
+              : tab,
+          ),
+        );
       });
-    return () => {
-      cancelled = true;
-    };
-  }, [architectureHtml, workflowDrawerOpen, workflowDrawerTab]);
+  }, [
+    activeDynamicDrawerTab?.path,
+    activeDynamicDrawerTab?.refreshVersion,
+    activeDynamicDrawerTab?.settledVersion,
+    activeConvId,
+    workflowDrawerOpen,
+    workflowDrawerTab,
+  ]);
 
   useEffect(() => {
     window.localStorage.setItem(
@@ -730,13 +797,11 @@ function ChatTabContent({ agents }: ChatTabProps) {
 
   function closeWorkflow() {
     setWorkflowFullscreen(false);
-    setWorkflowDrawerTab("workflow");
     setWorkflowDrawerOpen(false);
   }
 
   function openWorkflowFromSessionStatus() {
     setWorkflowFullscreen(false);
-    setWorkflowDrawerTab("workflow");
     setWorkflowDrawerOpen(true);
   }
 
@@ -1205,6 +1270,102 @@ function ChatTabContent({ agents }: ChatTabProps) {
     }));
   }
 
+  function toggleModifiedFilesExpanded(messageId: string) {
+    setExpandedModifiedFileLists((current) => ({
+      ...current,
+      [messageId]: !current[messageId],
+    }));
+  }
+
+  function setDynamicDrawerTabsForConversation(
+    conversationId: string,
+    updater: (current: DynamicDrawerTab[]) => DynamicDrawerTab[],
+  ) {
+    setDrawerTabsByConversation((current) => {
+      const existing = current[conversationId] || { activeTab: "workflow", tabs: [] };
+      return {
+        ...current,
+        [conversationId]: {
+          ...existing,
+          tabs: updater(existing.tabs),
+        },
+      };
+    });
+  }
+
+  function setWorkflowDrawerTab(tab: WorkflowDrawerTab) {
+    if (!activeConvId) {
+      return;
+    }
+    setDrawerTabsByConversation((current) => {
+      const existing = current[activeConvId] || { activeTab: "workflow", tabs: [] };
+      return {
+        ...current,
+        [activeConvId]: { ...existing, activeTab: tab },
+      };
+    });
+  }
+
+  function openModifiedFile(path: string) {
+    const normalizedPath = path.trim();
+    if (!normalizedPath) {
+      return;
+    }
+    const tabId = `file:${encodeURIComponent(normalizedPath)}` as const;
+    const conversationId = activeConvId;
+    if (!conversationId) {
+      return;
+    }
+    setWorkflowDrawerOpen(true);
+    setWorkflowDrawerTab(tabId);
+    setDynamicDrawerTabsForConversation(conversationId, (current) => {
+      const existingTab = current.find((tab) => tab.id === tabId);
+      if (existingTab) {
+        return current.map((tab) =>
+          tab.id === tabId
+            ? { ...tab, refreshVersion: tab.refreshVersion + 1, error: "" }
+            : tab,
+        );
+      }
+      const title = normalizedPath.split("/").filter(Boolean).pop() || normalizedPath;
+      return [
+        ...current,
+        {
+          id: tabId,
+          path: normalizedPath,
+          title,
+          type: "text",
+          content: "",
+          loading: false,
+          refreshVersion: 0,
+          settledVersion: -1,
+          error: "",
+        },
+      ];
+    });
+  }
+
+  useEffect(() => {
+    if (!activeConvId || !pendingHtmlPreview) {
+      return;
+    }
+    openModifiedFile(pendingHtmlPreview.path);
+    consumePendingHtmlPreview(activeConvId, pendingHtmlPreview.messageId);
+  }, [activeConvId, pendingHtmlPreview?.messageId, pendingHtmlPreview?.path]);
+
+  function closeDynamicDrawerTab(tabId: DynamicDrawerTab["id"]) {
+    const tabIndex = dynamicDrawerTabs.findIndex((tab) => tab.id === tabId);
+    if (workflowDrawerTab === tabId) {
+      const remainingTabs = dynamicDrawerTabs.filter((tab) => tab.id !== tabId);
+      setWorkflowDrawerTab(remainingTabs[tabIndex]?.id || remainingTabs[tabIndex - 1]?.id || "workflow");
+    }
+    if (activeConvId) {
+      setDynamicDrawerTabsForConversation(activeConvId, (current) =>
+        current.filter((tab) => tab.id !== tabId),
+      );
+    }
+  }
+
   const attachmentUploadPending = pendingAttachments.some(
     (attachment) => attachment.status !== "ready",
   );
@@ -1278,7 +1439,6 @@ function ChatTabContent({ agents }: ChatTabProps) {
                   aria-pressed={workflowDrawerOpen}
                   onClick={() => {
                     setWorkflowFullscreen(false);
-                    setWorkflowDrawerTab("workflow");
                     setWorkflowDrawerOpen(true);
                   }}
                   className="p-2 rounded border border-slate-800 bg-[#080C14] text-slate-400 hover:text-cyan-300 hover:border-cyan-900/50 transition-all"
@@ -1450,22 +1610,42 @@ function ChatTabContent({ agents }: ChatTabProps) {
                 <Workflow aria-hidden="true" className="h-3.5 w-3.5" />
                 <span>SESSION WORKFLOW</span>
               </button>
-              <button
-                aria-controls="chat-architecture-panel"
-                aria-selected={workflowDrawerTab === "architecture"}
-                className={`aegis-chat-drawer__tab ${
-                  workflowDrawerTab === "architecture"
-                    ? "aegis-chat-drawer__tab--active"
-                    : ""
-                }`}
-                id="chat-architecture-tab"
-                onClick={() => setWorkflowDrawerTab("architecture")}
-                role="tab"
-                type="button"
-              >
-                <FileText aria-hidden="true" className="h-3.5 w-3.5" />
-                <span>ARCHITECTURE TEST</span>
-              </button>
+              {dynamicDrawerTabs.map((tab) => {
+                const isActive = workflowDrawerTab === tab.id;
+                const tabTitle = tab.title.split("/").filter(Boolean).pop() || tab.title;
+                return (
+                  <div
+                    key={tab.id}
+                    className={`aegis-chat-drawer__tab-group ${
+                      isActive ? "aegis-chat-drawer__tab-group--active" : ""
+                    }`}
+                  >
+                    <button
+                      aria-controls={`chat-drawer-panel-${encodeURIComponent(tab.id)}`}
+                      aria-selected={isActive}
+                      className={`aegis-chat-drawer__tab ${
+                        isActive ? "aegis-chat-drawer__tab--active" : ""
+                      }`}
+                      id={`chat-drawer-tab-${encodeURIComponent(tab.id)}`}
+                      onClick={() => setWorkflowDrawerTab(tab.id)}
+                      role="tab"
+                      type="button"
+                    >
+                      <FileText aria-hidden="true" className="h-3.5 w-3.5" />
+                      <span>{tabTitle}</span>
+                    </button>
+                    <button
+                      aria-label={`Close file preview ${tabTitle}`}
+                      className="aegis-chat-drawer__tab-close"
+                      onClick={() => closeDynamicDrawerTab(tab.id)}
+                      title={`Close ${tabTitle}`}
+                      type="button"
+                    >
+                      <X aria-hidden="true" className="h-3 w-3" />
+                    </button>
+                  </div>
+                );
+              })}
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-1">
               <button
@@ -1514,20 +1694,29 @@ function ChatTabContent({ agents }: ChatTabProps) {
                 showHeader={false}
               />
             </div>
-            <div
-              aria-labelledby="chat-architecture-tab"
-              className="aegis-drawer-preview h-full"
-              hidden={workflowDrawerTab !== "architecture"}
-              id="chat-architecture-panel"
-              role="tabpanel"
-            >
-              <ArchitecturePreview
-                content={architectureHtml}
-                error={architectureError}
-                loading={architectureLoading}
-                title={architectureTitle}
-              />
-            </div>
+            {dynamicDrawerTabs.map((tab) => (
+              <div
+                key={tab.id}
+                aria-labelledby={`chat-drawer-tab-${encodeURIComponent(tab.id)}`}
+                className="aegis-drawer-preview h-full"
+                hidden={workflowDrawerTab !== tab.id}
+                id={`chat-drawer-panel-${encodeURIComponent(tab.id)}`}
+                role="tabpanel"
+              >
+                {tab.error && tab.content ? (
+                  <div className="aegis-drawer-preview__refresh-error" role="alert">
+                    {tab.error}
+                  </div>
+                ) : null}
+                <DrawerFilePreview
+                  content={tab.content}
+                  error={tab.error}
+                  loading={tab.loading}
+                  title={tab.title}
+                  type={tab.type}
+                />
+              </div>
+            ))}
           </div>
         </aside>
       ) : null}
@@ -1707,6 +1896,11 @@ function ChatTabContent({ agents }: ChatTabProps) {
               const isDelegateTools = message.kind === "delegate-tools";
               const isMainTools = message.kind === "main-tools";
               const isExpanded = !!expandedMessageIds[message.id];
+              const modifiedFiles = message.modifiedFiles || [];
+              const modifiedFilesExpanded = !!expandedModifiedFileLists[message.id];
+              const visibleModifiedFiles = modifiedFilesExpanded
+                ? modifiedFiles
+                : modifiedFiles.slice(0, 3);
               const isAegis = message.sender === "aegis";
               const agentBadge = isAegis
                 ? message.source === "delegate"
@@ -1737,15 +1931,18 @@ function ChatTabContent({ agents }: ChatTabProps) {
               return (
                 <div
                   key={message.id}
-                  data-testid="chat-message"
-                  data-sender={message.sender}
-                  className={`flex gap-3 w-full ${isAegis ? "mr-auto" : "ml-auto flex-row-reverse"}`}
+                  className="w-full space-y-3"
                 >
                   <div
-                    className={`h-8 w-8 rounded-lg shrink-0 flex items-center justify-center border text-[11px] font-bold font-mono ${badgeClassName}`}
+                    data-testid="chat-message"
+                    data-sender={message.sender}
+                    className={`flex gap-3 w-full ${isAegis ? "mr-auto" : "ml-auto flex-row-reverse"}`}
                   >
-                    {agentBadge}
-                  </div>
+                    <div
+                      className={`h-8 w-8 rounded-lg shrink-0 flex items-center justify-center border text-[11px] font-bold font-mono ${badgeClassName}`}
+                    >
+                      {agentBadge}
+                    </div>
 
                   <div className="space-y-2 flex-1 min-w-0">
                     <div
@@ -1929,6 +2126,44 @@ function ChatTabContent({ agents }: ChatTabProps) {
                       </button>
                     </div>
                   </div>
+                  </div>
+                  {isAegis && modifiedFiles.length ? (
+                    <section
+                      aria-label="Overview files"
+                      className="aegis-modified-files"
+                      data-testid="modified-files"
+                    >
+                      <div className="aegis-modified-files__header">
+                        <FileText aria-hidden="true" className="h-3.5 w-3.5" />
+                        <span>OVERVIEW FILES</span>
+                        <span className="aegis-modified-files__count">{modifiedFiles.length}</span>
+                      </div>
+                      <div className="aegis-modified-files__list">
+                        {visibleModifiedFiles.map((path) => (
+                          <button
+                            key={path}
+                            className="aegis-modified-files__item"
+                            onClick={() => openModifiedFile(path)}
+                            title={`Open ${path}`}
+                            type="button"
+                          >
+                            <FileText aria-hidden="true" className="h-3 w-3 shrink-0" />
+                            <span>{path}</span>
+                          </button>
+                        ))}
+                      </div>
+                      {modifiedFiles.length > 3 ? (
+                        <button
+                          aria-expanded={modifiedFilesExpanded}
+                          className="aegis-modified-files__toggle"
+                          onClick={() => toggleModifiedFilesExpanded(message.id)}
+                          type="button"
+                        >
+                          {modifiedFilesExpanded ? "SHOW LESS" : `SHOW ${modifiedFiles.length - 3} MORE`}
+                        </button>
+                      ) : null}
+                    </section>
+                  ) : null}
                 </div>
               );
             })}

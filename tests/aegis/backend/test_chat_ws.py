@@ -63,6 +63,45 @@ class _StreamingAgent:
         return {"final_response": f"hello world: {user_message}", "completed": True}
 
 
+class _FileMutationAgent(_StreamingAgent):
+    def run_conversation(
+        self,
+        user_message: str,
+        system_message: str | None = None,
+        conversation_history: list[dict[str, Any]] | None = None,
+        task_id: str | None = None,
+        stream_callback=None,
+        persist_user_message: bool = True,
+    ) -> dict[str, Any]:
+        del system_message, conversation_history, task_id, stream_callback, persist_user_message
+        if callable(self.tool_complete_callback):
+            self.tool_complete_callback(
+                "write-types",
+                "write_file",
+                {"path": "aegis/frontend/src/types.ts"},
+                json.dumps({"files_modified": ["aegis/frontend/src/types.ts"]}),
+            )
+            self.tool_complete_callback(
+                "patch-many",
+                "patch",
+                {"mode": "patch", "patch": "*** Update File: README.md"},
+                json.dumps({"files_modified": ["README.md", "aegis/frontend/src/types.ts"]}),
+            )
+            self.tool_complete_callback(
+                "write-outside-workspace",
+                "write_file",
+                {"path": "/tmp/aegis-task-output.txt"},
+                json.dumps({"resolved_path": "/tmp/aegis-task-output.txt"}),
+            )
+            self.tool_complete_callback(
+                "write-failed",
+                "write_file",
+                {"path": "README.md"},
+                json.dumps({"error": "write denied"}),
+            )
+        return {"final_response": f"edits complete: {user_message}", "completed": True}
+
+
 class _MainA2AResumeAgent:
     def __init__(self, session_id: str):
         self.session_id = session_id
@@ -797,6 +836,84 @@ def test_chat_ws_binds_and_streams_main_agent_events(
             completed = _recv_until(ws, "message.completed")
             assert completed["source"] == "main"
             assert completed["content"] == "hello world: hello aegis"
+
+
+def test_chat_ws_reports_every_successful_file_mutation_on_the_final_reply(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    app.state.chat_manager.set_agent_factory(lambda session_id: _FileMutationAgent(session_id))
+
+    with TestClient(app) as client:
+        with client.websocket_connect(f"/api/chat/ws?token={AUTH_TOKEN}") as ws:
+            ws.send_json({"type": "session.bind", "title": "File mutations"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "text": "make edits",
+                    "client_msg_id": "file-mutations-1",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            completed = _recv_until(ws, "message.completed")
+
+    assert completed["content"] == "edits complete: make edits"
+    assert completed["modified_files"] == [
+        "aegis/frontend/src/types.ts",
+        "README.md",
+        "/tmp/aegis-task-output.txt",
+    ]
+
+
+def test_chat_ws_workflow_event_ids_remain_unique_after_service_restart(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    """A browser can retain a session trace while Aegis recreates its actor."""
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
+    server = load_backend("aegis.backend.server")
+
+    def send_turn(app, client_msg_id: str) -> dict[str, Any]:
+        with TestClient(app) as client:
+            with client.websocket_connect(f"/api/chat/ws?token={AUTH_TOKEN}") as ws:
+                ws.send_json(
+                    {
+                        "type": "session.bind",
+                        "session_id": "persisted-session",
+                        "title": "Persisted session",
+                    }
+                )
+                _recv_until(ws, "session.bound")
+                ws.send_json(
+                    {
+                        "type": "message.send",
+                        "session_id": "persisted-session",
+                        "text": "continue the task",
+                        "client_msg_id": client_msg_id,
+                    }
+                )
+                return _recv_until(ws, "message.accepted")
+
+    first_app = server.create_app()
+    first_app.state.chat_manager.set_agent_factory(
+        lambda session_id: _StreamingAgent(session_id)
+    )
+    first_event = send_turn(first_app, "before-restart")
+
+    restarted_app = server.create_app()
+    restarted_app.state.chat_manager.set_agent_factory(
+        lambda session_id: _StreamingAgent(session_id)
+    )
+    restarted_event = send_turn(restarted_app, "after-restart")
+
+    assert first_event["server_event_id"] != restarted_event["server_event_id"]
 
 
 def test_chat_ws_resolves_cached_quick_command_tokens_before_running_the_agent(

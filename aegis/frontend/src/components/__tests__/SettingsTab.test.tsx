@@ -72,10 +72,19 @@ describe('Aegis Settings restart controls', () => {
     expect(statusTab).toHaveAttribute('aria-selected', 'true');
 
     fireEvent.keyDown(statusTab, { key: 'ArrowRight' });
+    const configurationTab = screen.getByRole('tab', { name: 'Configuration' });
+    expect(configurationTab).toHaveFocus();
+    expect(configurationTab).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.keyDown(configurationTab, { key: 'ArrowRight' });
     expect(licenseTab).toHaveFocus();
     expect(licenseTab).toHaveAttribute('aria-selected', 'true');
 
     fireEvent.keyDown(licenseTab, { key: 'ArrowLeft' });
+    expect(configurationTab).toHaveFocus();
+    expect(configurationTab).toHaveAttribute('aria-selected', 'true');
+
+    fireEvent.keyDown(configurationTab, { key: 'ArrowLeft' });
     expect(statusTab).toHaveFocus();
     expect(statusTab).toHaveAttribute('aria-selected', 'true');
 
@@ -83,6 +92,30 @@ describe('Aegis Settings restart controls', () => {
     const systemInstructTab = screen.getByRole('tab', { name: 'System Instruct' });
     expect(systemInstructTab).toHaveFocus();
     expect(systemInstructTab).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('persists browser-local frontend configuration without requesting a backend configuration API', () => {
+    const fetchMock = vi.fn(async () => jsonResponse({ status: 'ok', pid: 123 }));
+    global.fetch = fetchMock as typeof global.fetch;
+
+    render(<SettingsTab />);
+    fireEvent.click(screen.getByRole('tab', { name: 'Configuration' }));
+
+    const panel = screen.getByRole('tabpanel');
+    const autoOpenSelect = within(panel).getByRole('combobox', {
+      name: 'Auto-open HTML files after chat task completion',
+    });
+    expect(autoOpenSelect).toHaveValue('enabled');
+    expect(within(panel).getByRole('heading', { name: 'Frontend Parameters' })).toBeInTheDocument();
+    expect(within(panel).getByRole('heading', { name: 'Backend Parameters' })).toBeInTheDocument();
+    expect(within(panel).getByText('MOCK DATA')).toBeInTheDocument();
+
+    fireEvent.change(autoOpenSelect, { target: { value: 'disabled' } });
+    expect(autoOpenSelect).toHaveValue('disabled');
+    expect(JSON.parse(window.localStorage.getItem('aegis_frontend_settings') || '{}')).toEqual({
+      chatAutoOpenHtmlOnTaskComplete: false,
+    });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
   it('creates, updates, and deletes administrator system instructions from Settings', async () => {

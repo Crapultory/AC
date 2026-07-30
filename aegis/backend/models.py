@@ -216,6 +216,16 @@ class ChatQuickCommandListResponse(BaseModel):
     commands: list[ChatQuickCommandResponse] = Field(default_factory=list)
 
 
+class DrawerFileResponse(BaseModel):
+    """One workspace file prepared for a chat drawer preview."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    type: str
+    content: str
+
+
 class UserManualSummary(BaseModel):
     """One published, read-only Markdown manual."""
 

@@ -1,6 +1,8 @@
+import { useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatTab from '../ChatTab';
+import { AegisChatProvider } from '../../lib/chatRuntime';
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
@@ -84,36 +86,201 @@ describe('ChatTab', () => {
     expect(getComposer()).toHaveTextContent('keep this draft');
     expect(screen.getByTestId('chat-workspace')).toHaveStyle({ width: 'calc(50% - 5px)' });
     expect(screen.getByRole('tab', { name: /session workflow/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('tab', { name: /architecture test/i })).not.toBeInTheDocument();
     expect(screen.getByRole('separator', { name: /resize chat workspace panels/i })).toBeInTheDocument();
   });
 
-  it('loads the architecture test tab into an isolated HTML iframe', async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(JSON.stringify({
-        title: 'architecture-showcase.html',
-        content: '<!doctype html><html><body><h1>Architecture Preview</h1></body></html>',
-      }), {
-        status: 200,
-        headers: { 'Content-Type': 'application/json' },
-      }),
-    );
+  it('lists modified files after the final reply and refreshes an existing preview when reselected', async () => {
+    const fileResponse = (content: string) => new Response(JSON.stringify({
+      title: 'aegis/frontend/src/alpha.ts',
+      type: 'typescript',
+      content,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(fileResponse('export const alpha = true;'))
+      .mockResolvedValueOnce(fileResponse('export const alpha = "updated by a later turn";'));
     vi.stubGlobal('fetch', fetchMock);
     render(<ChatTab agents={[]} />);
 
-    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
-    fireEvent.click(screen.getByRole('tab', { name: /architecture test/i }));
+    setComposerText(getComposer(), 'Make several edits');
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({ type: 'session.bound', session_id: 'modified-files', title: 'Edits', resumed: false });
+    await waitFor(() => expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+    const sent = socket.sent.map((item) => JSON.parse(item)).find((item) => item.type === 'message.send');
+    socket.emit({
+      type: 'message.accepted',
+      session_id: 'modified-files',
+      turn_id: 'turn-edits',
+      client_msg_id: sent.client_msg_id,
+      source: 'main',
+    });
+    socket.emit({
+      type: 'message.completed',
+      session_id: 'modified-files',
+      turn_id: 'turn-edits',
+      message_id: 'assistant-edits',
+      source: 'main',
+      content: 'Edits complete.',
+      modified_files: [
+        'aegis/frontend/src/alpha.ts',
+        'aegis/frontend/src/beta.ts',
+        'aegis/backend/main.py',
+        'README.md',
+      ],
+    });
 
-    const frame = await screen.findByTestId('architecture-showcase-frame');
+    const modifiedFiles = await screen.findByTestId('modified-files');
+    expect(modifiedFiles).toHaveAttribute('aria-label', 'Overview files');
+    expect(within(modifiedFiles).getByText('OVERVIEW FILES')).toBeInTheDocument();
+    expect(modifiedFiles.closest('[data-testid="chat-message"]')).toBeNull();
+    expect(within(modifiedFiles).getByText('aegis/frontend/src/alpha.ts')).toBeInTheDocument();
+    expect(within(modifiedFiles).queryByText('README.md')).not.toBeInTheDocument();
+    fireEvent.click(within(modifiedFiles).getByRole('button', { name: /show 1 more/i }));
+    expect(within(modifiedFiles).getByText('README.md')).toBeInTheDocument();
+
+    fireEvent.click(within(modifiedFiles).getByRole('button', { name: /aegis\/frontend\/src\/alpha\.ts/i }));
+    const previewTab = await screen.findByRole('tab', { name: 'alpha.ts' });
+    expect(previewTab).toHaveAttribute('aria-selected', 'true');
     expect(fetchMock).toHaveBeenCalledWith(
-      '/api/chat/drawer-html?path=2026-06-07-aegis-architecture-showcase.html',
+      '/api/chat/drawer-html?path=aegis%2Ffrontend%2Fsrc%2Falpha.ts',
       expect.objectContaining({ headers: expect.any(Headers) }),
     );
-    expect(frame).toHaveAttribute('title', 'architecture-showcase.html');
-    expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
-    expect(frame).toHaveAttribute('srcdoc', expect.stringContaining('Architecture Preview'));
-    expect(screen.getByRole('tab', { name: /architecture test/i })).toHaveAttribute('aria-selected', 'true');
-    expect(screen.getByRole('button', { name: /enter workspace fullscreen/i })).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /exit workspace fullscreen/i })).toBeInTheDocument();
+    expect(await screen.findByText('export const alpha = true;')).toBeInTheDocument();
+    fireEvent.click(within(modifiedFiles).getByRole('button', { name: /aegis\/frontend\/src\/alpha\.ts/i }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('export const alpha = "updated by a later turn";')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /refresh file preview alpha\.ts/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /close workflow visualization/i }));
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    expect(screen.getByRole('tab', { name: 'alpha.ts' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('button', { name: /close workflow visualization/i }));
+    fireEvent.click(screen.getByRole('button', { name: /新建对话/i }));
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    expect(screen.queryByRole('tab', { name: 'alpha.ts' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /close workflow visualization/i }));
+    fireEvent.click(screen.getByText('Edits'));
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    expect(screen.getByRole('tab', { name: 'alpha.ts' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /close file preview alpha\.ts/i }));
+    expect(screen.queryByRole('tab', { name: 'alpha.ts' })).not.toBeInTheDocument();
+  });
+
+  it('automatically opens the last modified HTML file when the main task completes', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      title: 'latest.HTM',
+      type: 'html',
+      content: '<!doctype html><title>Latest preview</title>',
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ChatTab agents={[]} />);
+
+    setComposerText(getComposer(), 'Update HTML previews');
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({ type: 'session.bound', session_id: 'html-auto-preview', title: 'HTML preview', resumed: false });
+    await waitFor(() => expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+    socket.emit({
+      type: 'message.completed',
+      session_id: 'html-auto-preview',
+      turn_id: 'turn-html-preview',
+      message_id: 'assistant-html-preview',
+      source: 'main',
+      content: 'HTML files updated.',
+      modified_files: ['reports/first.html', 'README.md', 'reports/latest.HTM'],
+    });
+
+    expect(await screen.findByRole('tab', { name: 'latest.HTM' })).toHaveAttribute('aria-selected', 'true');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/chat/drawer-html?path=reports%2Flatest.HTM',
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+  });
+
+  it('does not auto-open HTML previews when the browser setting is disabled', async () => {
+    window.localStorage.setItem('aegis_frontend_settings', JSON.stringify({
+      chatAutoOpenHtmlOnTaskComplete: false,
+    }));
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ChatTab agents={[]} />);
+
+    setComposerText(getComposer(), 'Update one HTML file');
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({ type: 'session.bound', session_id: 'html-disabled', title: 'Disabled preview', resumed: false });
+    await waitFor(() => expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+    socket.emit({
+      type: 'message.completed',
+      session_id: 'html-disabled',
+      turn_id: 'turn-html-disabled',
+      message_id: 'assistant-html-disabled',
+      source: 'main',
+      content: 'HTML file updated.',
+      modified_files: ['reports/disabled.html'],
+    });
+
+    expect(await screen.findByText('HTML file updated.')).toBeInTheDocument();
+    expect(screen.queryByRole('complementary', { name: /workflow/i })).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('opens a queued HTML preview after returning to Chat', async () => {
+    function ChatVisibilityHarness() {
+      const [chatVisible, setChatVisible] = useState(true);
+      return (
+        <AegisChatProvider isChatVisible={chatVisible}>
+          <button type="button" onClick={() => setChatVisible((visible) => !visible)}>
+            Toggle Chat
+          </button>
+          {chatVisible ? <ChatTab agents={[]} /> : <p>Outside chat</p>}
+        </AegisChatProvider>
+      );
+    }
+
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      title: 'queued.html',
+      type: 'html',
+      content: '<!doctype html><title>Queued preview</title>',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ChatVisibilityHarness />);
+
+    setComposerText(getComposer(), 'Update queued file');
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({ type: 'session.bound', session_id: 'queued-html', title: 'Queued preview', resumed: false });
+    await waitFor(() => expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle Chat' }));
+    expect(screen.getByText('Outside chat')).toBeInTheDocument();
+    socket.emit({
+      type: 'message.completed',
+      session_id: 'queued-html',
+      turn_id: 'turn-queued-html',
+      message_id: 'assistant-queued-html',
+      source: 'main',
+      content: 'Queued HTML file updated.',
+      modified_files: ['reports/queued.html'],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle Chat' }));
+    expect(await screen.findByRole('tab', { name: 'queued.html' })).toHaveAttribute('aria-selected', 'true');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/chat/drawer-html?path=reports%2Fqueued.html',
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
   });
 
   it('resizes the drawer by pointer and remembers the selected width', () => {

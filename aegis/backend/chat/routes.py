@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import mimetypes
 from pathlib import Path
 
 from fastapi import APIRouter, File, HTTPException, Request, UploadFile, WebSocket, status
@@ -11,7 +13,7 @@ from starlette.websockets import WebSocketDisconnect
 from aegis.backend.auth import get_current_user_from_token, require_authenticated_user
 from aegis.backend.chat.service import ChatSessionManager
 from aegis.backend.config import AegisSettings
-from aegis.backend.models import ChatQuickCommandListResponse
+from aegis.backend.models import ChatQuickCommandListResponse, DrawerFileResponse
 from aegis.backend.services.agent_service import AgentService
 from aegis.backend.services.chat_quick_command_service import (
     ChatQuickCommandService,
@@ -24,7 +26,85 @@ from aegis.backend.services.system_instruct_store import SystemInstructStore
 from aegis.backend.services.user_service import UserService
 
 
-_DRAWER_HTML_DIR = Path(__file__).resolve().parents[2] / "docs"
+_IMAGE_SUFFIXES = frozenset({".avif", ".bmp", ".gif", ".ico", ".jpeg", ".jpg", ".png", ".svg", ".webp"})
+_DRAWER_FILE_TYPES = {
+    ".css": "css",
+    ".csv": "text",
+    ".html": "html",
+    ".htm": "html",
+    ".java": "java",
+    ".js": "javascript",
+    ".json": "json",
+    ".jsx": "javascript",
+    ".md": "markdown",
+    ".mdx": "markdown",
+    ".markdown": "markdown",
+    ".py": "python",
+    ".rs": "rust",
+    ".sh": "shell",
+    ".sql": "sql",
+    ".toml": "toml",
+    ".ts": "typescript",
+    ".tsx": "typescript",
+    ".txt": "text",
+    ".xml": "xml",
+    ".yaml": "yaml",
+    ".yml": "yaml",
+}
+
+
+def _workspace_root() -> Path:
+    """Resolve the only filesystem root exposed by the drawer preview API."""
+    return Path.cwd().resolve()
+
+
+def _resolve_workspace_drawer_file(path: str) -> tuple[Path, Path]:
+    root = _workspace_root()
+    requested = Path(str(path or "").strip())
+    if not str(requested) or requested == Path("."):
+        raise HTTPException(status_code=404, detail="Drawer file not found.")
+    candidate = requested if requested.is_absolute() else root / requested
+    try:
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(root)
+    except ValueError as exc:
+        raise HTTPException(status_code=403, detail="Drawer path is outside the workspace.") from exc
+    except OSError as exc:
+        raise HTTPException(status_code=404, detail="Drawer file not found.") from exc
+    if not resolved.is_file():
+        raise HTTPException(status_code=404, detail="Drawer file not found.")
+    return root, resolved
+
+
+def _drawer_file_type(file_path: Path) -> str:
+    suffix = file_path.suffix.lower()
+    if suffix in _IMAGE_SUFFIXES:
+        return suffix[1:]
+    return _DRAWER_FILE_TYPES.get(suffix, "text")
+
+
+def _drawer_file_content(file_path: Path) -> str | None:
+    if file_path.suffix.lower() in _IMAGE_SUFFIXES:
+        media_type = mimetypes.guess_type(file_path.name)[0] or "application/octet-stream"
+        encoded = base64.b64encode(file_path.read_bytes()).decode("ascii")
+        return f"data:{media_type};base64,{encoded}"
+    try:
+        return file_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return None
+
+
+def _drawer_file_response(path: str) -> DrawerFileResponse:
+    root, file_path = _resolve_workspace_drawer_file(path)
+    file_type = _drawer_file_type(file_path)
+    content = _drawer_file_content(file_path)
+    if content is None:
+        file_type = "binary"
+    return DrawerFileResponse(
+        title=str(file_path.relative_to(root)),
+        type=file_type,
+        content=content or "",
+    )
 
 
 def _ws_token(websocket: WebSocket) -> str | None:
@@ -70,21 +150,11 @@ def build_chat_router(
             commands=resolved_quick_command_service.list_commands(user.uid)
         )
 
-    @router.get("/api/chat/drawer-html")
-    async def get_drawer_html(path: str, request: Request) -> dict[str, str]:
-        """Return a bundled HTML document for the chat drawer test tab.
-
-        This deliberately stays a thin test-only file lookup: the caller supplies
-        the document name and receives its filename plus unmodified HTML.
-        Authentication remains required because the route is still part of the
-        Aegis console API.
-        """
+    @router.get("/api/chat/drawer-html", response_model=DrawerFileResponse)
+    async def get_drawer_html(path: str, request: Request) -> DrawerFileResponse:
+        """Return a typed preview payload for one file in the Hermes workspace."""
         require_authenticated_user(request, settings, user_service)
-        try:
-            content = (_DRAWER_HTML_DIR / path).read_text(encoding="utf-8")
-        except (OSError, UnicodeDecodeError) as exc:
-            raise HTTPException(status_code=404, detail="Drawer HTML document not found.") from exc
-        return {"title": Path(path).name, "content": content}
+        return _drawer_file_response(path)
 
     @router.websocket("/api/chat/ws")
     async def chat_ws(websocket: WebSocket) -> None:

@@ -1,7 +1,13 @@
 import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from 'react';
-import { Activity, Server } from 'lucide-react';
+import { Activity, Server, SlidersHorizontal } from 'lucide-react';
 
 import { ApiError, fetchJSON } from '../lib/api';
+import {
+  getFrontendSettings,
+  setChatAutoOpenHtmlOnTaskComplete,
+  type FrontendSettings,
+} from '../lib/frontendSettings';
+import { useOptionalAegisChatRuntime } from '../lib/chatRuntime';
 import SystemInstructManager from './SystemInstructManager';
 
 interface HealthResponse {
@@ -16,11 +22,11 @@ interface RestartResponse {
   pid: number;
 }
 
-type SettingsView = 'status' | 'license' | 'system_instruct';
+type SettingsView = 'status' | 'configuration' | 'license' | 'system_instruct';
 
 const RESTART_CONFIRMATION_PHRASE = 'RESTART AEGIS';
 const DEFAULT_RECOVERY_POLL_MS = 1_000;
-const SETTINGS_VIEWS: SettingsView[] = ['status', 'license', 'system_instruct'];
+const SETTINGS_VIEWS: SettingsView[] = ['status', 'configuration', 'license', 'system_instruct'];
 const LICENSE_MOCK = {
   id: 'AEG-ENT-EVAL-2026-LOCAL',
   edition: 'Enterprise Evaluation',
@@ -31,6 +37,12 @@ const LICENSE_MOCK = {
   agentNodes: '8 / 16',
   modules: ['A2A Orchestration', 'Audit Evidence', 'VIP Integration'],
 };
+
+const BACKEND_PARAMETERS_MOCK = [
+  { name: 'workflow.event_transport', value: 'websocket' },
+  { name: 'chat.max_attachment_size', value: '20 MiB' },
+  { name: 'preview.workspace_scope', value: 'current Hermes workspace' },
+];
 
 interface SettingsTabProps {
   onAuthExpired?: () => void;
@@ -47,7 +59,9 @@ export default function SettingsTab({
   reloadPage = reloadWindow,
   recoveryPollMs = DEFAULT_RECOVERY_POLL_MS,
 }: SettingsTabProps) {
+  const chatRuntime = useOptionalAegisChatRuntime();
   const [activeView, setActiveView] = useState<SettingsView>('status');
+  const [frontendSettings, setFrontendSettings] = useState<FrontendSettings>(() => getFrontendSettings());
   const [health, setHealth] = useState<HealthResponse | null>(null);
   const [healthError, setHealthError] = useState(false);
   const [confirmationStage, setConfirmationStage] = useState<'warning' | 'phrase' | null>(null);
@@ -276,6 +290,14 @@ export default function SettingsTab({
     settingsTabRefs.current[nextIndex]?.focus();
   }
 
+  function updateAutoOpenHtml(enabled: boolean) {
+    const nextSettings = setChatAutoOpenHtmlOnTaskComplete(enabled);
+    setFrontendSettings(nextSettings);
+    if (!enabled) {
+      chatRuntime?.clearPendingHtmlPreviews();
+    }
+  }
+
   return (
     <main className="aegis-admin-page" aria-labelledby="settings-heading">
       <div className="aegis-admin-page__inner">
@@ -304,6 +326,20 @@ export default function SettingsTab({
           </button>
           <button
             ref={(element) => { settingsTabRefs.current[1] = element; }}
+            id="settings-configuration-tab"
+            type="button"
+            role="tab"
+            tabIndex={activeView === 'configuration' ? 0 : -1}
+            aria-selected={activeView === 'configuration'}
+            aria-controls="settings-configuration-panel"
+            onClick={() => selectSettingsView('configuration')}
+            onKeyDown={(event) => handleSettingsTabKeyDown(event, 'configuration')}
+            className="aegis-page-tab"
+          >
+            Configuration
+          </button>
+          <button
+            ref={(element) => { settingsTabRefs.current[2] = element; }}
             id="settings-license-tab"
             type="button"
             role="tab"
@@ -317,7 +353,7 @@ export default function SettingsTab({
             LIC Management
           </button>
           <button
-            ref={(element) => { settingsTabRefs.current[2] = element; }}
+            ref={(element) => { settingsTabRefs.current[3] = element; }}
             id="settings-system-instruct-tab"
             type="button"
             role="tab"
@@ -379,6 +415,62 @@ export default function SettingsTab({
                   {restarting ? 'Restarting…' : 'Restart Aegis'}
                 </button>
               </div>
+            </section>
+          </div>
+        </section> : null}
+
+        {activeView === 'configuration' ? <section id="settings-configuration-panel" role="tabpanel" aria-labelledby="settings-configuration-tab" className="aegis-page-content">
+          <header className="aegis-page-content__header">
+            <div>
+              <h2 className="aegis-page-content__title">Configuration</h2>
+              <p className="aegis-page-content__description">Browser-local preferences and a read-only snapshot of backend defaults.</p>
+            </div>
+            <SlidersHorizontal className="h-5 w-5 text-cyan-400" aria-hidden="true" />
+          </header>
+          <div className="aegis-page-content__body aegis-page-content__body--padded space-y-6">
+            <section aria-labelledby="frontend-parameters-title">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 id="frontend-parameters-title" className="aegis-page-content__title text-base">Frontend Parameters</h3>
+                  <p className="aegis-page-content__description">These settings are stored in this browser only and are not sent to Aegis.</p>
+                </div>
+                <span className="aegis-status-badge aegis-status-badge--success">BROWSER LOCAL</span>
+              </div>
+              <div className="aegis-page-metric mt-4 flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="aegis-page-metric__label">Chat task completion</p>
+                  <p className="aegis-page-metric__value">Auto-open HTML files after chat task completion</p>
+                  <p className="aegis-page-content__description">Opens the last modified HTML file in the current session drawer.</p>
+                </div>
+                <label className="shrink-0">
+                  <span className="sr-only">Auto-open HTML files after chat task completion</span>
+                  <select
+                    aria-label="Auto-open HTML files after chat task completion"
+                    value={frontendSettings.chatAutoOpenHtmlOnTaskComplete ? 'enabled' : 'disabled'}
+                    onChange={(event) => updateAutoOpenHtml(event.target.value === 'enabled')}
+                    className="aegis-page-field min-w-32 px-3 py-2 text-sm font-semibold"
+                  >
+                    <option value="enabled">Enabled</option>
+                    <option value="disabled">Disabled</option>
+                  </select>
+                </label>
+              </div>
+            </section>
+
+            <section className="border-t border-[var(--aegis-border)] pt-5" aria-labelledby="backend-parameters-title">
+              <div className="flex flex-wrap items-start justify-between gap-3">
+                <div>
+                  <h3 id="backend-parameters-title" className="aegis-page-content__title text-base">Backend Parameters</h3>
+                  <p className="aegis-page-content__description">Read-only placeholder values; this panel does not call a backend configuration API.</p>
+                </div>
+                <span className="aegis-status-badge aegis-status-badge--warning">MOCK DATA</span>
+              </div>
+              <dl className="mt-4 grid gap-3 sm:grid-cols-3">
+                {BACKEND_PARAMETERS_MOCK.map((parameter) => <div key={parameter.name} className="aegis-page-metric">
+                  <dt className="aegis-page-metric__label">{parameter.name}</dt>
+                  <dd className="aegis-page-metric__value break-words font-mono text-xs">{parameter.value}</dd>
+                </div>)}
+              </dl>
             </section>
           </div>
         </section> : null}
