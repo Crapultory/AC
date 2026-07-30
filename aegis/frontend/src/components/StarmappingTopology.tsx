@@ -39,19 +39,19 @@ interface RenderNode {
 const CANVAS = { width: 1000, height: 700, centerX: 500, centerY: 365, agentRadius: 184 };
 
 const AGENT_COLORS: Record<string, string> = {
-  'ai-soc': '#50c8e8',
-  'ai-grc': '#63d5bd',
-  'ai-redteam': '#b88ae9',
-  'ai-sdlc': '#d9a166',
-  'ai-ueba': '#4dbbd8',
-  'ai-itops': '#779fe5',
-  'ai-web3': '#9b7ee1',
+  'ai-soc': 'var(--aegis-starmap-accent)',
+  'ai-grc': 'var(--aegis-starmap-success)',
+  'ai-redteam': 'var(--aegis-starmap-danger)',
+  'ai-sdlc': 'var(--aegis-starmap-warning)',
+  'ai-ueba': 'var(--aegis-starmap-object)',
+  'ai-itops': 'var(--aegis-starmap-focus)',
+  'ai-web3': 'var(--aegis-starmap-actor)',
 };
 
 const STAR_COLORS: Record<TopologyStarKind, string> = {
-  tool: '#7bd6e8',
-  api: '#ac91e8',
-  data: '#7796b8',
+  tool: 'var(--aegis-starmap-object)',
+  api: 'var(--aegis-starmap-actor)',
+  data: 'var(--aegis-starmap-muted)',
 };
 
 const TWINKLE_INTERVAL_MS = 2_000;
@@ -79,7 +79,7 @@ function nodeStatusLabel(status: TopologyAgentNode['runtime']['status']): string
 }
 
 function StarGlyph({ symbol, color, size, lit }: { symbol: string; color: string; size: number; lit: boolean }) {
-  const stroke = lit ? color : `${color}cc`;
+  const stroke = color;
   const common = {
     fill: 'none',
     stroke,
@@ -129,7 +129,7 @@ function buildRenderNodes(topology: StarmappingTopology): RenderNode[] {
     x: CANVAS.centerX,
     y: CANVAS.centerY,
     r: 44,
-    color: '#3ba9ef',
+    color: 'var(--aegis-starmap-accent)',
     label: 'Aegis Core',
     symbol: topology.center.symbol,
     name: topology.center.name,
@@ -141,7 +141,7 @@ function buildRenderNodes(topology: StarmappingTopology): RenderNode[] {
     const angle = radians(agent.layout.angle_degrees);
     const x = CANVAS.centerX + Math.cos(angle) * CANVAS.agentRadius;
     const y = CANVAS.centerY + Math.sin(angle) * CANVAS.agentRadius;
-    const color = AGENT_COLORS[agent.id] || '#77b5e8';
+    const color = AGENT_COLORS[agent.id] || 'var(--aegis-starmap-object)';
     nodes.push({
       id: agent.id,
       kind: 'agent',
@@ -305,26 +305,26 @@ export default function StarmappingTopology({ topology, error }: StarmappingTopo
   };
 
   if (!topology) {
-    return <div className="flex min-h-[520px] flex-1 items-center justify-center bg-[#03070d] px-8 text-center"><div><p className="text-xs font-mono tracking-[0.2em] text-cyan-400">STARMAPPING UNAVAILABLE</p><p className="mt-3 max-w-sm text-xs leading-relaxed text-slate-500">{error || 'The three-layer topology is loading from the Aegis API.'}</p></div></div>;
+    return <div className="aegis-starmap flex min-h-[520px] flex-1 items-center justify-center px-8 text-center"><div><p className="text-xs font-mono tracking-[0.2em] text-cyan-400">STARMAPPING UNAVAILABLE</p><p className="mt-3 max-w-sm text-xs leading-relaxed text-slate-500">{error || 'The three-layer topology is loading from the Aegis API.'}</p></div></div>;
   }
 
   return (
-    <div ref={containerRef} className={`relative overflow-hidden bg-[#02060d] ${isFullscreen ? 'h-screen w-screen' : 'min-h-[560px]'}`}>
+    <div ref={containerRef} className={`aegis-starmap relative overflow-hidden ${isFullscreen ? 'h-screen w-screen' : 'min-h-[560px]'}`}>
       <StarmappingStarfieldCanvas isFullscreen={isFullscreen} />
-      <div className="absolute inset-0 bg-[#02060d]/25" />
-      <div className="absolute inset-0 bg-[radial-gradient(ellipse_at_50%_48%,rgba(23,83,118,0.2),transparent_39%),radial-gradient(ellipse_at_50%_80%,rgba(23,35,76,0.23),transparent_48%)]" />
+      <div className="aegis-starmap__veil absolute inset-0" />
+      <div className="aegis-starmap__atmosphere absolute inset-0" />
       <svg className={`relative h-full w-full ${isFullscreen ? 'min-h-full' : 'min-h-[560px]'}`} viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Aegis three-layer orchestration topology">
         <defs>
-          <radialGradient id="star-map-core" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="#1d75a5" stopOpacity="0.26" /><stop offset="100%" stopColor="#02060d" stopOpacity="0" /></radialGradient>
+          <radialGradient id="star-map-core" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="var(--aegis-starmap-accent)" stopOpacity="0.4" /><stop offset="100%" stopColor="var(--aegis-starmap-bg)" stopOpacity="0" /></radialGradient>
           <filter id="star-map-glow" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="4" result="blur" /><feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge></filter>
-          <pattern id="star-map-hex" width="36" height="31" patternUnits="userSpaceOnUse"><path d="M9 1h18l9 15-9 14H9L0 16z" fill="none" stroke="#365876" strokeOpacity="0.2" strokeWidth="0.7" /></pattern>
+          <pattern id="star-map-hex" width="36" height="31" patternUnits="userSpaceOnUse"><path d="M9 1h18l9 15-9 14H9L0 16z" fill="none" stroke="var(--aegis-starmap-border)" strokeOpacity="0.6" strokeWidth="0.7" /></pattern>
         </defs>
         <rect width={CANVAS.width} height={CANVAS.height} fill="url(#star-map-core)" />
-        <path d="M 16 680 Q 500 -114 984 680" fill="none" stroke="#4b94bb" strokeOpacity="0.1" strokeWidth="1.25" />
-        <path d="M 66 674 Q 500 -58 934 674" fill="none" stroke="#355f88" strokeOpacity="0.12" strokeWidth="1" strokeDasharray="4 9" />
+        <path d="M 16 680 Q 500 -114 984 680" fill="none" stroke="var(--aegis-starmap-object)" strokeOpacity="0.28" strokeWidth="1.25" />
+        <path d="M 66 674 Q 500 -58 934 674" fill="none" stroke="var(--aegis-starmap-accent)" strokeOpacity="0.28" strokeWidth="1" strokeDasharray="4 9" />
         <path d="M 16 680 Q 500 -114 984 680 L 984 700 L 16 700 Z" fill="url(#star-map-hex)" opacity="0.38" />
-        <circle cx={CANVAS.centerX} cy={CANVAS.centerY} r={CANVAS.agentRadius} fill="none" stroke="#5b88aa" strokeOpacity="0.55" strokeWidth="1" />
-        <circle cx={CANVAS.centerX} cy={CANVAS.centerY} r="70" fill="none" stroke="#2f658c" strokeOpacity="0.4" strokeWidth="1" strokeDasharray="3 7" />
+        <circle cx={CANVAS.centerX} cy={CANVAS.centerY} r={CANVAS.agentRadius} fill="none" stroke="var(--aegis-starmap-object)" strokeOpacity="0.65" strokeWidth="1" />
+        <circle cx={CANVAS.centerX} cy={CANVAS.centerY} r="70" fill="none" stroke="var(--aegis-starmap-accent)" strokeOpacity="0.55" strokeWidth="1" strokeDasharray="3 7" />
 
         {topology.edges.map((edge, index) => {
           const source = nodeById.get(edge.source);
@@ -335,8 +335,8 @@ export default function StarmappingTopology({ topology, error }: StarmappingTopo
           const flowPath = `M ${source.x} ${source.y} L ${target.x} ${target.y}`;
           return (
             <g key={`${edge.source}-${edge.target}`}>
-              <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke={active ? '#68d8f7' : '#31526c'} strokeOpacity={active ? 0.9 : edge.mode === 'requires' ? 0.28 : 0.48} strokeWidth={active ? 1.5 : 0.7} strokeDasharray={edge.mode === 'requires' ? '2 5' : undefined} />
-              {showFlow ? <circle data-testid="topology-flow" r={active ? 2.25 : 1.35} fill={active ? '#b9f6ff' : '#63c8ff'} fillOpacity={active ? 0.95 : 0.6} filter="url(#star-map-glow)"><animateMotion path={flowPath} dur={`${active ? 1.5 : 2.8 + (index % 3) * 0.25}s`} begin={`-${(index % 7) * 0.36}s`} repeatCount="indefinite" /></circle> : null}
+              <line x1={source.x} y1={source.y} x2={target.x} y2={target.y} stroke={active ? 'var(--aegis-starmap-focus)' : 'var(--aegis-starmap-border)'} strokeOpacity={active ? 0.96 : edge.mode === 'requires' ? 0.34 : 0.58} strokeWidth={active ? 1.5 : 0.7} strokeDasharray={edge.mode === 'requires' ? '2 5' : undefined} />
+              {showFlow ? <circle data-testid="topology-flow" r={active ? 2.25 : 1.35} fill={active ? 'var(--aegis-starmap-focus)' : 'var(--aegis-starmap-accent)'} fillOpacity={active ? 1 : 0.78} filter="url(#star-map-glow)"><animateMotion path={flowPath} dur={`${active ? 1.5 : 2.8 + (index % 3) * 0.25}s`} begin={`-${(index % 7) * 0.36}s`} repeatCount="indefinite" /></circle> : null}
             </g>
           );
         })}
@@ -377,18 +377,18 @@ export default function StarmappingTopology({ topology, error }: StarmappingTopo
                 </> : null}
                 {node.kind !== 'star' ? <circle r={node.r + (isActive ? 10 : 6)} fill="none" stroke={node.color} strokeOpacity={lit ? 0.55 : 0.22} strokeWidth={lit ? 1.35 : 0.7} /> : null}
                 {node.kind === 'star' && twinkle ? <circle data-testid="topology-twinkle" data-star-id={node.id} className="starmapping-star-twinkle" r={node.r + 4} fill={node.color} opacity="0.08" filter="url(#star-map-glow)" style={{ animationName: 'starmapping-star-twinkle', animationDuration: twinkle.duration, animationDelay: twinkle.delay, animationTimingFunction: 'cubic-bezier(0.22, 1, 0.36, 1)', animationIterationCount: 1, animationFillMode: 'both' }} /> : null}
-                <circle r={node.r} fill="#07111d" fillOpacity={node.kind === 'star' ? 0.96 : 0.9} stroke={node.color} strokeOpacity={lit ? 0.95 : 0.48} strokeWidth={isActive ? 1.7 : node.kind === 'star' ? 0.8 : 1.1} filter={lit ? 'url(#star-map-glow)' : undefined} />
+                <circle r={node.r} fill="var(--aegis-starmap-surface)" fillOpacity={node.kind === 'star' ? 0.96 : 0.9} stroke={node.color} strokeOpacity={lit ? 1 : 0.62} strokeWidth={isActive ? 1.7 : node.kind === 'star' ? 0.8 : 1.1} filter={lit ? 'url(#star-map-glow)' : undefined} />
                 {symbolAsset ? <image data-testid={`topology-symbol-${node.id}`} href={symbolAsset} x={node.kind === 'center' ? -20 : -14} y={node.kind === 'center' ? -20 : -14} width={node.kind === 'center' ? 40 : 28} height={node.kind === 'center' ? 40 : 28} opacity={lit || node.kind !== 'star' ? 1 : 0.74} filter={lit ? 'url(#star-map-glow)' : undefined} /> : <StarGlyph symbol={node.symbol} color={node.color} size={8} lit={lit} />}
-                {node.kind === 'agent' ? <text y={node.r + 17} textAnchor="middle" fill={lit ? '#d9f3ff' : '#7f9bb0'} fontSize="9.5" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" letterSpacing="0.8">{node.label}</text> : null}
+                {node.kind === 'agent' ? <text y={node.r + 17} textAnchor="middle" fill={lit ? 'var(--aegis-starmap-text)' : 'var(--aegis-starmap-muted)'} fontSize="9.5" fontFamily="ui-monospace, SFMono-Regular, Menlo, monospace" letterSpacing="0.8">{node.label}</text> : null}
               </g>
             </g>
           );
         })}
       </svg>
 
-      {tooltip && activeNode?.id === tooltip.id ? <div role="status" className="pointer-events-none absolute z-20 w-80 rounded-lg border border-cyan-900/80 bg-[#030912]/95 p-3 shadow-[0_16px_40px_rgba(0,0,0,0.48)] backdrop-blur-md" style={{ left: tooltip.x, top: tooltip.y }}><NodeInsight node={activeNode} /></div> : null}
+      {tooltip && activeNode?.id === tooltip.id ? <div role="status" className="aegis-starmap__tooltip pointer-events-none absolute z-20 w-80 rounded-lg border p-3 backdrop-blur-md" style={{ left: tooltip.x, top: tooltip.y }}><NodeInsight node={activeNode} /></div> : null}
       <div className="pointer-events-none absolute right-14 top-4 flex gap-3 text-[9px] font-mono tracking-wide text-slate-500"><span><i className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-cyan-300" />CORE</span><span><i className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-teal-300" />AGENT RING</span><span><i className="mr-1 inline-block h-1.5 w-1.5 rounded-full bg-indigo-300" />STAR FIELD</span></div>
-      <button type="button" aria-label={isFullscreen ? 'Exit topology fullscreen' : 'Enter topology fullscreen'} title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen topology'} onClick={() => void toggleFullscreen()} className="absolute right-4 top-3 z-30 rounded-md border border-slate-700/80 bg-[#06101b]/85 p-2 text-slate-400 shadow-lg backdrop-blur transition hover:border-cyan-600 hover:text-cyan-200">
+      <button type="button" aria-label={isFullscreen ? 'Exit topology fullscreen' : 'Enter topology fullscreen'} title={isFullscreen ? 'Exit fullscreen' : 'Fullscreen topology'} onClick={() => void toggleFullscreen()} className="aegis-starmap__control absolute right-4 top-3 z-30 rounded-md border p-2 shadow-lg backdrop-blur transition">
         {isFullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
       </button>
     </div>

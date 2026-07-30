@@ -33,24 +33,28 @@ const MIN_SCALE = 0.35;
 const MAX_SCALE = 2.5;
 
 const NODE_COLORS: Record<WorkflowGraphNode['kind'], { fill: string; stroke: string; glow: string }> = {
-  root: { fill: '#f8d36a', stroke: '#fff1ae', glow: 'rgba(248,211,106,0.42)' },
-  input: { fill: '#f2b557', stroke: '#ffd994', glow: 'rgba(242,181,87,0.32)' },
-  delegate: { fill: '#d73b68', stroke: '#ff8eaa', glow: 'rgba(215,59,104,0.36)' },
-  tool: { fill: '#4aa8df', stroke: '#a5dcff', glow: 'rgba(74,168,223,0.32)' },
-  'tool-group': { fill: '#3979c6', stroke: '#9fdcff', glow: 'rgba(66,153,225,0.4)' },
-  end: { fill: '#42c79a', stroke: '#a6f3d8', glow: 'rgba(66,199,154,0.3)' },
+  root: { fill: 'var(--aegis-warning-text)', stroke: 'color-mix(in srgb, var(--aegis-warning-text) 62%, var(--aegis-text))', glow: 'color-mix(in srgb, var(--aegis-warning-text) 42%, transparent)' },
+  input: { fill: 'var(--aegis-accent)', stroke: 'color-mix(in srgb, var(--aegis-accent) 62%, var(--aegis-text))', glow: 'color-mix(in srgb, var(--aegis-accent) 34%, transparent)' },
+  delegate: { fill: 'var(--aegis-danger-text)', stroke: 'color-mix(in srgb, var(--aegis-danger-text) 62%, var(--aegis-text))', glow: 'color-mix(in srgb, var(--aegis-danger-text) 36%, transparent)' },
+  tool: { fill: 'var(--aegis-ticker-object)', stroke: 'color-mix(in srgb, var(--aegis-ticker-object) 62%, var(--aegis-text))', glow: 'color-mix(in srgb, var(--aegis-ticker-object) 32%, transparent)' },
+  'tool-group': { fill: 'var(--aegis-ticker-actor)', stroke: 'color-mix(in srgb, var(--aegis-ticker-actor) 62%, var(--aegis-text))', glow: 'color-mix(in srgb, var(--aegis-ticker-actor) 40%, transparent)' },
+  end: { fill: 'var(--aegis-success-text)', stroke: 'color-mix(in srgb, var(--aegis-success-text) 62%, var(--aegis-text))', glow: 'color-mix(in srgb, var(--aegis-success-text) 30%, transparent)' },
 };
 
-const FAILED_COLORS = { fill: '#e45168', stroke: '#ffabb9', glow: 'rgba(228,81,104,0.35)' };
+const FAILED_COLORS = {
+  fill: 'var(--aegis-danger-text)',
+  stroke: 'color-mix(in srgb, var(--aegis-danger-text) 72%, var(--aegis-text))',
+  glow: 'color-mix(in srgb, var(--aegis-danger-text) 35%, transparent)',
+};
 
 /** P0-3 径向渐变用的中心亮色（每种 kind 一档提亮） */
 const NODE_GRADIENT_CENTER: Record<WorkflowGraphNode['kind'], string> = {
-  root: '#ffe9a8',
-  input: '#ffd08a',
-  delegate: '#f06a8f',
-  tool: '#7cc8ef',
-  'tool-group': '#5f9ede',
-  end: '#6fe0b8',
+  root: 'color-mix(in srgb, var(--aegis-warning-text) 58%, var(--aegis-text))',
+  input: 'color-mix(in srgb, var(--aegis-accent) 58%, var(--aegis-text))',
+  delegate: 'color-mix(in srgb, var(--aegis-danger-text) 58%, var(--aegis-text))',
+  tool: 'color-mix(in srgb, var(--aegis-ticker-object) 58%, var(--aegis-text))',
+  'tool-group': 'color-mix(in srgb, var(--aegis-ticker-actor) 58%, var(--aegis-text))',
+  end: 'color-mix(in srgb, var(--aegis-success-text) 58%, var(--aegis-text))',
 };
 
 const NODE_GRADIENT_IDS: Record<WorkflowGraphNode['kind'], string> = {
@@ -63,12 +67,12 @@ const NODE_GRADIENT_IDS: Record<WorkflowGraphNode['kind'], string> = {
 };
 
 const DETAIL_ACCENT: Record<WorkflowGraphNode['kind'], string> = {
-  root: '#f8d36a',
-  input: '#f2b557',
-  delegate: '#d73b68',
-  tool: '#4aa8df',
-  'tool-group': '#3979c6',
-  end: '#42c79a',
+  root: 'var(--aegis-warning-text)',
+  input: 'var(--aegis-accent)',
+  delegate: 'var(--aegis-danger-text)',
+  tool: 'var(--aegis-ticker-object)',
+  'tool-group': 'var(--aegis-ticker-actor)',
+  end: 'var(--aegis-success-text)',
 };
 
 /** P2-2 相对时间格式化 */
@@ -503,11 +507,11 @@ export default function SessionWorkflow({
     <aside
       role="complementary"
       aria-label={`Workflow for ${conversation?.title || 'Current Session'}`}
-      className={`${fullscreen ? 'w-full' : 'w-1/2'} h-full shrink-0 flex flex-col border-r border-cyan-900/50 bg-[#041019] shadow-[20px_0_60px_rgba(0,0,0,0.55)]`}
+      className={`aegis-workflow-panel ${fullscreen ? 'w-full' : 'w-1/2'} h-full shrink-0 flex flex-col border-r border-cyan-900/50`}
       data-testid="session-workflow"
     >
       <header className="h-16 shrink-0 px-4 border-b border-slate-800/90 bg-[#03080f]/95 flex items-center gap-3">
-        <div className="h-8 w-8 rounded-full border border-cyan-700/50 bg-cyan-950/30 text-cyan-300 flex items-center justify-center shadow-[0_0_20px_rgba(34,211,238,0.12)]">
+        <div className="aegis-status-glow--accent h-8 w-8 rounded-full border border-cyan-700/50 bg-cyan-950/30 text-cyan-300 flex items-center justify-center">
           <Workflow className="h-4 w-4" aria-hidden="true" />
         </div>
         <div className="min-w-0">
@@ -540,7 +544,7 @@ export default function SessionWorkflow({
 
       <div
         ref={canvasRef}
-        className={`relative flex-1 min-h-0 overflow-hidden select-none touch-none cursor-grab active:cursor-grabbing bg-[#03131e] ${isLive ? 'workflow-canvas--live' : ''}`}
+        className={`aegis-workflow-canvas relative flex-1 min-h-0 overflow-hidden select-none touch-none cursor-grab active:cursor-grabbing ${isLive ? 'workflow-canvas--live' : ''}`}
         onWheel={handleWheel}
         onPointerDown={handlePointerDown}
         onPointerMove={handlePointerMove}
@@ -556,13 +560,13 @@ export default function SessionWorkflow({
         data-offset-x={transform.x.toFixed(2)}
         data-offset-y={transform.y.toFixed(2)}
       >
-        <div className="absolute inset-0 pointer-events-none opacity-80 bg-[radial-gradient(circle_at_16%_18%,rgba(14,116,144,0.16),transparent_34%),radial-gradient(circle_at_88%_78%,rgba(190,24,93,0.08),transparent_30%)]" />
+        <div className="aegis-workflow-atmosphere absolute inset-0 pointer-events-none opacity-80" />
         <div
-          className="absolute inset-0 pointer-events-none opacity-25 bg-[radial-gradient(rgba(125,211,252,0.35)_0.75px,transparent_0.75px)] [background-size:19px_19px]"
+          className="aegis-workflow-grid absolute inset-0 pointer-events-none opacity-25"
           style={{ maskImage: 'radial-gradient(ellipse at 42% 46%, black 30%, transparent 78%)', WebkitMaskImage: 'radial-gradient(ellipse at 42% 46%, black 30%, transparent 78%)' }}
         />
 
-        <div data-workflow-overlay className="absolute left-3 top-3 z-20 flex items-center gap-1 rounded border border-slate-800/90 bg-[#03080f]/90 p-1 shadow-xl backdrop-blur">
+        <div data-workflow-overlay className="aegis-workflow-overlay absolute left-3 top-3 z-20 flex items-center gap-1 rounded border border-slate-800/90 p-1 backdrop-blur">
           <button type="button" aria-label="Zoom in workflow" onClick={() => zoomBy(1.15)} className="h-7 w-7 text-slate-400 hover:text-cyan-200 flex items-center justify-center">
             <ZoomIn className="h-3.5 w-3.5" />
           </button>
@@ -605,7 +609,7 @@ export default function SessionWorkflow({
               </radialGradient>
             ))}
             <radialGradient id="workflow-grad-failed" cx="38%" cy="34%" r="72%">
-              <stop offset="0%" stopColor="#ff8296" />
+              <stop offset="0%" stopColor="color-mix(in srgb, var(--aegis-danger-text) 62%, var(--aegis-text))" />
               <stop offset="100%" stopColor={FAILED_COLORS.fill} />
             </radialGradient>
           </defs>
@@ -620,7 +624,7 @@ export default function SessionWorkflow({
                   x2={graph.width - 40}
                   y1={lane.y}
                   y2={lane.y}
-                  stroke="rgba(125,211,252,0.06)"
+                  stroke="color-mix(in srgb, var(--aegis-focus) 6%, transparent)"
                   strokeWidth="1"
                   strokeDasharray="2 10"
                   className="pointer-events-none"
@@ -636,14 +640,14 @@ export default function SessionWorkflow({
                   width={territory.width}
                   height={territory.height}
                   rx="16"
-                  fill="rgba(215,59,104,0.05)"
-                  stroke="rgba(215,59,104,0.2)"
+                  fill="color-mix(in srgb, var(--aegis-danger-text) 5%, transparent)"
+                  stroke="color-mix(in srgb, var(--aegis-danger-text) 20%, transparent)"
                   strokeWidth="1"
                 />
                 <text
                   x={territory.x + 14}
                   y={territory.y + 16}
-                  fill="#ff8eaa"
+                  fill="var(--aegis-danger-text)"
                   fontSize="9"
                   fontFamily="JetBrains Mono, monospace"
                   letterSpacing="0.12em"
@@ -661,7 +665,7 @@ export default function SessionWorkflow({
                 cy={nodeById.get(graph.rootId)?.y}
                 r="30"
                 fill="none"
-                stroke="#a6f3d8"
+                stroke="var(--aegis-success-text)"
                 strokeWidth="2.5"
                 className="workflow-complete-ping pointer-events-none"
               />
@@ -686,8 +690,8 @@ export default function SessionWorkflow({
                   : targetRunning
                     ? 'workflow-edge-flow--live'
                     : 'workflow-edge-flow--done';
-              const baseStroke = targetFailed ? '#e45168' : delegate ? '#d94673' : '#55b8d7';
-              const flowStroke = targetFailed ? '#ff8296' : delegate ? '#ff6e9a' : '#a7edff';
+              const baseStroke = targetFailed ? 'var(--aegis-danger-text)' : delegate ? 'var(--aegis-ticker-actor)' : 'var(--aegis-ticker-object)';
+              const flowStroke = targetFailed ? 'color-mix(in srgb, var(--aegis-danger-text) 62%, var(--aegis-text))' : delegate ? 'color-mix(in srgb, var(--aegis-ticker-actor) 62%, var(--aegis-text))' : 'var(--aegis-focus)';
               const draw = bornEdgeIds.has(edge.id);
               return (
                 <g key={edge.id} opacity={highlighted ? 1 : 0.22} className="transition-opacity duration-200">
@@ -719,7 +723,7 @@ export default function SessionWorkflow({
                     <text
                       x={(from.x + to.x) / 2}
                       y={(from.y + to.y) / 2 - 9}
-                      fill={delegate ? '#ff8eaa' : '#7dd3e7'}
+                      fill={delegate ? 'var(--aegis-danger-text)' : 'var(--aegis-ticker-object)'}
                       fontSize="8"
                       fontFamily="JetBrains Mono, monospace"
                       letterSpacing="0.08em"
@@ -815,7 +819,7 @@ export default function SessionWorkflow({
                     data-testid={`workflow-node-focus-${node.kind}`}
                     r={haloRadius + 3}
                     fill="none"
-                    stroke="#f8fafc"
+                    stroke="var(--aegis-text)"
                     strokeWidth="1.5"
                     strokeDasharray="3 3"
                     className="workflow-node-focus-ring pointer-events-none"
@@ -856,14 +860,14 @@ export default function SessionWorkflow({
                   <circle
                     r={radius}
                     fill={`url(#${gradientId})`}
-                    stroke={selected ? '#ffffff' : colors.stroke}
+                    stroke={selected ? 'var(--aegis-text)' : colors.stroke}
                     strokeWidth={selected ? 2.5 : 1.25}
                     style={{ filter: selected ? `drop-shadow(0 0 10px ${colors.stroke})` : undefined }}
                   />
                   <path
                     d={`M ${-radius * 0.62} ${-radius * 0.42} A ${radius * 0.78} ${radius * 0.78} 0 0 1 ${radius * 0.62} ${-radius * 0.42}`}
                     fill="none"
-                    stroke="rgba(255,255,255,0.4)"
+                    stroke="color-mix(in srgb, var(--aegis-text) 40%, transparent)"
                     strokeWidth="1"
                     strokeLinecap="round"
                     className="pointer-events-none"
@@ -871,26 +875,26 @@ export default function SessionWorkflow({
                   {/* P0-3 delegate 瞳孔 */}
                   {node.kind === 'delegate' ? (
                     <>
-                      <circle r={radius * 0.34} fill="#06121b" opacity="0.9" />
+                      <circle r={radius * 0.34} fill="var(--aegis-bg)" opacity="0.9" />
                       <circle r={radius * 0.34} fill="none" stroke={colors.stroke} strokeWidth="0.9" opacity="0.75" />
                     </>
                   ) : null}
                   {/* P0-3 tool-group 层叠图标 */}
                   {toolGroup ? (
                     <g pointerEvents="none">
-                      <rect x="-5.5" y="-4.5" width="10" height="8" rx="1.5" fill="none" stroke="#e6f7ff" strokeWidth="1.1" opacity="0.55" />
-                      <rect x="-3.5" y="-2.5" width="10" height="8" rx="1.5" fill="#1c497f" stroke="#e6f7ff" strokeWidth="1.1" />
+                      <rect x="-5.5" y="-4.5" width="10" height="8" rx="1.5" fill="none" stroke="var(--aegis-text)" strokeWidth="1.1" opacity="0.55" />
+                      <rect x="-3.5" y="-2.5" width="10" height="8" rx="1.5" fill="var(--aegis-ticker-object)" stroke="var(--aegis-text)" strokeWidth="1.1" />
                     </g>
                   ) : null}
                   <text
                     x={radius + 9}
                     y="3.5"
-                    fill={highlighted ? '#d8e5ed' : '#738493'}
+                    fill={highlighted ? 'var(--aegis-text)' : 'var(--aegis-text-muted)'}
                     fontSize={graph.nodes.length > 100 ? 8 : graph.nodes.length > 45 ? 9 : 10}
                     fontWeight={node.kind === 'root' || node.kind === 'delegate' || toolGroup ? 700 : 500}
                     fontFamily="JetBrains Mono, monospace"
                     paintOrder="stroke"
-                    stroke="#03131e"
+                    stroke="var(--aegis-bg)"
                     strokeWidth="3"
                     strokeLinejoin="round"
                   >
@@ -901,11 +905,11 @@ export default function SessionWorkflow({
                     <text
                       x={radius + 9}
                       y="15"
-                      fill="#7dd3e7"
+                      fill="var(--aegis-ticker-object)"
                       fontSize="8"
                       fontFamily="JetBrains Mono, monospace"
                       paintOrder="stroke"
-                      stroke="#03131e"
+                      stroke="var(--aegis-bg)"
                       strokeWidth="3"
                       strokeLinejoin="round"
                       className="workflow-node-time"
@@ -933,7 +937,7 @@ export default function SessionWorkflow({
         {showMinimap ? (
           <div
             data-workflow-overlay
-            className={`absolute bottom-4 z-20 rounded border border-slate-800/90 bg-[#03080f]/85 p-1 shadow-xl backdrop-blur ${selectedNode ? 'left-4' : 'right-4'}`}
+            className={`aegis-workflow-overlay absolute bottom-4 z-20 rounded border border-slate-800/90 p-1 backdrop-blur ${selectedNode ? 'left-4' : 'right-4'}`}
             data-testid="workflow-minimap"
           >
             <svg
@@ -967,8 +971,8 @@ export default function SessionWorkflow({
                     y={-transform.y / transform.scale}
                     width={vw / transform.scale}
                     height={vh / transform.scale}
-                    fill="rgba(125,211,252,0.06)"
-                    stroke="#7dd3fc"
+                    fill="color-mix(in srgb, var(--aegis-focus) 6%, transparent)"
+                    stroke="var(--aegis-focus)"
                     strokeWidth={14}
                     className="pointer-events-none"
                   />
@@ -981,7 +985,7 @@ export default function SessionWorkflow({
         {selectedNode ? (
           <section
             data-workflow-overlay
-            className="workflow-details-panel absolute bottom-4 right-4 z-30 w-[min(22rem,calc(100%-2rem))] overflow-hidden rounded-lg border border-slate-700/80 bg-[#040b12]/95 shadow-[0_18px_70px_rgba(0,0,0,0.65)] backdrop-blur-md select-text touch-pan-y"
+            className="aegis-workflow-details workflow-details-panel absolute bottom-4 right-4 z-30 w-[min(22rem,calc(100%-2rem))] overflow-hidden rounded-lg border border-slate-700/80 backdrop-blur-md select-text touch-pan-y"
           >
             {/* P1-4 顶部渐变发光线，随节点 kind 变色 */}
             <div
@@ -1019,7 +1023,7 @@ export default function SessionWorkflow({
               {selectedNode.finalMessage ? (
                 <div>
                   <div className="mb-1 font-mono font-semibold tracking-wider text-emerald-400/80">FINAL MESSAGE</div>
-                  <div className="whitespace-pre-wrap break-words rounded border border-emerald-900/40 bg-emerald-950/10 p-2.5 leading-relaxed text-emerald-50/90 shadow-[0_0_24px_rgba(16,185,129,0.08)]">
+                  <div className="aegis-alert aegis-alert--success whitespace-pre-wrap break-words rounded p-2.5 leading-relaxed">
                     {selectedNode.finalMessage}
                   </div>
                 </div>

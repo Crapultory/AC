@@ -37,7 +37,17 @@ const PULSE_INTERVAL_MS = 2_000;
 const PULSE_WAVE_STAGGER_MS = 800;
 const PULSE_MAX_LIFETIME_MS = 1_800;
 
-const PARTICLE_COLORS = ['#75d7ee', '#9ab7ff', '#c2a4f0', '#8ed3cb'];
+const THEME_PARTICLE_TOKENS = [
+  '--aegis-starmap-accent',
+  '--aegis-starmap-focus',
+  '--aegis-starmap-actor',
+  '--aegis-starmap-success',
+];
+
+interface StarfieldThemePalette {
+  background: string;
+  particles: string[];
+}
 
 const FULLSCREEN_PARTICLE_PROFILE: StarfieldParticleProfile = {
   baseRadiusMultiplier: 1,
@@ -61,6 +71,17 @@ export function calculateStarfieldExclusion(width: number, height: number): Star
     x: (width - (TOPOLOGY_VIEWBOX.width * scale)) / 2 + (TOPOLOGY_VIEWBOX.centerX * scale),
     y: (height - (TOPOLOGY_VIEWBOX.height * scale)) / 2 + (TOPOLOGY_VIEWBOX.centerY * scale),
     radius: OUTER_STARFIELD_RADIUS * scale,
+  };
+}
+
+function resolveStarfieldThemePalette(): StarfieldThemePalette {
+  const style = window.getComputedStyle(document.documentElement);
+  const particles = THEME_PARTICLE_TOKENS
+    .map((token) => style.getPropertyValue(token).trim())
+    .filter(Boolean);
+  return {
+    background: style.getPropertyValue('--aegis-starmap-bg').trim() || 'transparent',
+    particles: particles.length ? particles : ['transparent'],
   };
 }
 
@@ -97,6 +118,7 @@ export function createStarfieldParticlePool(
   exclusion: StarfieldExclusion,
   random: () => number = Math.random,
   baseRadiusMultiplier = 1,
+  particleColors: string[] = ['transparent'],
 ): BackgroundParticle[] {
   const targetCount = Math.min(560, Math.max(280, Math.round((width * height) / 4_000)));
   const particles: BackgroundParticle[] = [];
@@ -114,7 +136,7 @@ export function createStarfieldParticlePool(
       id: particles.length,
       radius: (0.45 + (random() * 1.15)) * baseRadiusMultiplier,
       alpha: 0.12 + (random() * 0.24),
-      color: PARTICLE_COLORS[Math.floor(random() * PARTICLE_COLORS.length)],
+      color: particleColors[Math.floor(random() * particleColors.length)],
     });
   }
 
@@ -179,6 +201,7 @@ export default function StarmappingStarfieldCanvas({ isFullscreen }: Starmapping
     let intervalId: number | undefined;
     let waveTimeoutId: number | undefined;
     let reducedMotion = window.matchMedia?.('(prefers-reduced-motion: reduce)').matches ?? false;
+    let themePalette = resolveStarfieldThemePalette();
 
     const cancelFrame = () => {
       if (frameId !== undefined) window.cancelAnimationFrame(frameId);
@@ -196,7 +219,7 @@ export default function StarmappingStarfieldCanvas({ isFullscreen }: Starmapping
       if (!baseContext) return;
       baseContext.setTransform(devicePixelRatio, 0, 0, devicePixelRatio, 0, 0);
       baseContext.clearRect(0, 0, cssWidth, cssHeight);
-      baseContext.fillStyle = '#02060d';
+      baseContext.fillStyle = themePalette.background;
       baseContext.fillRect(0, 0, cssWidth, cssHeight);
       drawCover(baseContext, image, cssWidth, cssHeight);
       particles.forEach((particle) => drawParticle(baseContext, particle, particle.alpha, particleProfile.glowRadiusMultiplier));
@@ -264,6 +287,7 @@ export default function StarmappingStarfieldCanvas({ isFullscreen }: Starmapping
       cssWidth = nextWidth;
       cssHeight = nextHeight;
       devicePixelRatio = Math.min(window.devicePixelRatio || 1, 2);
+      themePalette = resolveStarfieldThemePalette();
       canvas.width = Math.round(cssWidth * devicePixelRatio);
       canvas.height = Math.round(cssHeight * devicePixelRatio);
       baseLayer = document.createElement('canvas');
@@ -275,6 +299,7 @@ export default function StarmappingStarfieldCanvas({ isFullscreen }: Starmapping
         calculateStarfieldExclusion(cssWidth, cssHeight),
         Math.random,
         particleProfile.baseRadiusMultiplier,
+        themePalette.particles,
       );
       particleById = new Map(particles.map((particle) => [particle.id, particle]));
       activePulses.clear();
@@ -300,6 +325,9 @@ export default function StarmappingStarfieldCanvas({ isFullscreen }: Starmapping
       startFrameLoop();
     };
     const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(resize);
+    const themeObserver = typeof MutationObserver === 'undefined'
+      ? undefined
+      : new MutationObserver(() => resize());
 
     const onImageLoad = () => {
       drawBaseLayer();
@@ -308,6 +336,10 @@ export default function StarmappingStarfieldCanvas({ isFullscreen }: Starmapping
     image.addEventListener('load', onImageLoad);
     image.src = starfieldBackground;
     observer?.observe(canvas);
+    themeObserver?.observe(document.documentElement, {
+      attributes: true,
+      attributeFilter: ['data-aegis-theme'],
+    });
     resize();
     document.addEventListener('visibilitychange', onVisibilityChange);
     mediaQuery?.addEventListener('change', onReducedMotionChange);
@@ -316,6 +348,7 @@ export default function StarmappingStarfieldCanvas({ isFullscreen }: Starmapping
       stopSchedule();
       cancelFrame();
       observer?.disconnect();
+      themeObserver?.disconnect();
       image.removeEventListener('load', onImageLoad);
       document.removeEventListener('visibilitychange', onVisibilityChange);
       mediaQuery?.removeEventListener('change', onReducedMotionChange);

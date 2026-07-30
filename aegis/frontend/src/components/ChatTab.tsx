@@ -798,15 +798,15 @@ function ChatTabContent({ agents }: ChatTabProps) {
             </div>
             {!sidebarCollapsed ? (
               <div className="relative">
-                <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 absolute top-1/2 left-3 -translate-y-1/2 animate-pulse" />
+                <span className="aegis-status-indicator aegis-status-indicator--success absolute top-1/2 left-3 -translate-y-1/2 animate-pulse" />
                 <div className="text-white text-xs pl-7 py-2 bg-[#080C14] border border-slate-800 rounded font-mono">
                   Aegis Coordinator:{" "}
-                  <strong className="text-emerald-400 font-bold">ONLINE</strong>
+                  <strong className="aegis-status-text--success font-bold">ONLINE</strong>
                 </div>
               </div>
             ) : (
               <div className="flex justify-center">
-                <span className="h-2.5 w-2.5 rounded-full bg-emerald-500 shadow-[0_0_12px_rgba(16,185,129,0.5)]" />
+                <span className="aegis-status-indicator aegis-status-indicator--success aegis-status-glow--success" />
               </div>
             )}
           </div>
@@ -841,7 +841,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
                             <Clock className="h-3 w-3 text-slate-600" />{" "}
                             {conversation.timestamp}
                             {conversation.pendingApproval ? (
-                              <span className="rounded border border-amber-900/40 bg-amber-950/20 px-1.5 py-0.5 text-[9px] font-bold uppercase text-amber-300">
+                              <span className="aegis-status-badge aegis-status-badge--warning aegis-status-badge--compact">
                                 approval
                               </span>
                             ) : null}
@@ -853,7 +853,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
                             {!conversation.pendingApproval &&
                             !conversation.pendingClarify &&
                             conversation.lastKnownRunState === "running" ? (
-                              <span className="aegis-status-badge aegis-status-badge--success">
+                              <span className="aegis-status-badge aegis-status-badge--success aegis-status-badge--compact">
                                 running
                               </span>
                             ) : null}
@@ -898,7 +898,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
               onClick={handleClearHistory}
               className={`${
                 sidebarCollapsed ? "w-10 h-10 mx-auto" : "w-full py-1.5"
-              } bg-rose-950/10 text-rose-400 hover:text-rose-300 hover:bg-rose-950/25 border border-rose-900/35 font-medium rounded transition-all text-center flex items-center justify-center gap-1.5 text-[11px]`}
+              } aegis-btn aegis-btn--danger font-medium rounded text-center flex items-center justify-center gap-1.5 text-[11px]`}
             >
               <Trash2 className="h-3 w-3" />
               {!sidebarCollapsed ? <span>清空运行环境缓存</span> : null}
@@ -1018,7 +1018,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
           </div>
 
           {transportError ? (
-            <div className="border-b border-amber-900/30 bg-amber-950/20 px-4 py-3 text-sm text-amber-300 flex items-center justify-between">
+            <div className="aegis-alert aegis-alert--warning flex items-center justify-between border-x-0 border-t-0 px-4 py-3 text-sm">
               <span>{transportError}</span>
               {activeConversation?.sessionId ? (
                 <button
@@ -1292,17 +1292,17 @@ function ChatTabContent({ agents }: ChatTabProps) {
           </div>
 
           {activeConversation?.pendingApproval ? (
-            <div className="mx-4 mb-3 rounded-xl border border-amber-900/30 bg-amber-950/20 p-4 text-amber-100">
+            <div className="aegis-alert aegis-alert--warning mx-4 mb-3 rounded-xl p-4">
               <div className="flex items-start gap-3">
-                <ShieldAlert className="h-5 w-5 text-amber-400 shrink-0 mt-0.5" />
+                <ShieldAlert className="h-5 w-5 shrink-0 mt-0.5" />
                 <div className="flex-1">
-                  <div className="text-sm font-bold text-amber-200">
+                  <div className="text-sm font-bold">
                     Approval Required
                   </div>
-                  <div className="mt-1 text-xs text-amber-100/90">
+                  <div className="mt-1 text-xs">
                     {activeConversation.pendingApproval.description}
                   </div>
-                  <div className="mt-2 rounded border border-amber-900/20 bg-[#080C14] px-3 py-2 font-mono text-[11px] text-amber-200">
+                  <div className="mt-2 rounded border border-current/30 bg-[#080C14] px-3 py-2 font-mono text-[11px]">
                     {activeConversation.pendingApproval.command}
                   </div>
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -1326,7 +1326,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
                     </button>
                     <button
                       onClick={() => handleApproval("deny")}
-                      className="px-3 py-1.5 rounded border border-rose-900/40 text-rose-300 font-bold text-xs"
+                      className="aegis-btn aegis-btn--danger px-3 py-1.5 rounded font-bold text-xs"
                     >
                       Deny
                     </button>
@@ -1393,7 +1393,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
                   {pendingAttachments.map((attachment) => (
                     <div
                       key={attachment.localId}
-                      className={`group flex max-w-[220px] items-center gap-1.5 rounded border px-1.5 py-1 text-[10px] font-mono ${attachment.status === "failed" ? "border-rose-900/70 bg-rose-950/20 text-rose-200" : "border-slate-700 bg-[#080C14] text-slate-300"}`}
+                      className={`group flex max-w-[220px] items-center gap-1.5 rounded border px-1.5 py-1 text-[10px] font-mono ${attachment.status === "failed" ? "aegis-alert aegis-alert--danger" : "border-slate-700 bg-[#080C14] text-slate-300"}`}
                     >
                       {attachment.previewUrl ? (
                         <img
@@ -1419,7 +1419,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
                           onClick={() =>
                             retryPendingAttachment(attachment.localId)
                           }
-                          className="text-rose-300 hover:text-white"
+                          className="aegis-status-text--danger hover:text-white"
                           title={attachment.error || "Retry upload"}
                         >
                           RETRY

@@ -243,7 +243,7 @@ function AuthenticatedAppShell({
                 title="Notifications panel"
                 className="relative shrink-0 rounded border border-slate-800 bg-[#05080F] p-1.5 text-slate-400 transition-all hover:bg-[#080C14] hover:text-cyan-400"
               >
-                <span className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-rose-500 shadow-[0_0_6px_#f43f5e]" />
+                <span className="aegis-status-indicator aegis-status-indicator--danger absolute -right-0.5 -top-0.5" />
                 <Bell className="h-4 w-4" />
               </button>
               {isAdmin ? (

@@ -82,12 +82,12 @@ export default function Sidebar({
     >
       <div className={`shrink-0 border-b border-slate-800 bg-[#05080F] ${isCollapsed ? 'p-2' : 'p-6'}`}>
         <div className={`flex items-center ${isCollapsed ? 'min-h-[72px] justify-center' : 'min-h-[72px] gap-4'}`}>
-          <div className={`relative overflow-hidden bg-[#09101B] border border-cyan-950/60 shadow-[0_0_22px_rgba(6,182,212,0.24)] shrink-0 ${isCollapsed ? 'h-10 w-10 rounded-xl' : 'h-16 w-16 rounded-2xl'}`}>
+          <div className={`relative shrink-0 overflow-hidden border border-cyan-950/60 bg-[#09101B] aegis-status-glow--accent ${isCollapsed ? 'h-10 w-10 rounded-xl' : 'h-16 w-16 rounded-2xl'}`}>
             <img
               id="aegis-logo-icon"
               src={aegisLogo}
               alt="Aegis logo"
-              className="h-full w-full scale-[1.03] object-contain drop-shadow-[0_0_14px_rgba(6,182,212,0.38)]"
+              className="aegis-drop-glow--accent h-full w-full scale-[1.03] object-contain"
             />
           </div>
           {!isCollapsed ? (
@@ -131,13 +131,13 @@ export default function Sidebar({
                 {item.id === 'chat' && chatAttentionCount > 0 ? (
                   <span
                     aria-label={`Chat attention count: ${chatAttentionCount}`}
-                    className={`flex h-5 min-w-5 items-center justify-center rounded-full border border-amber-900/40 bg-amber-950/30 px-1.5 text-[10px] font-bold text-amber-300 ${isCollapsed ? 'absolute right-0.5 top-1' : ''}`}
+                    className={`aegis-status-badge aegis-status-badge--warning aegis-status-badge--compact ${isCollapsed ? 'absolute right-0.5 top-1' : ''}`}
                   >
                     {chatAttentionCount}
                   </span>
                 ) : null}
                 {isActive && !isCollapsed ? (
-                  <span className="absolute right-3 top-1/2 -translate-y-1/2 h-1.5 w-1.5 rounded-full bg-cyan-400 shadow-[0_0_6px_rgba(6,182,212,0.8)]" />
+                  <span className="aegis-status-indicator aegis-status-indicator--accent absolute right-3 top-1/2 -translate-y-1/2" />
                 ) : null}
               </button>
             );
@@ -233,10 +233,10 @@ export default function Sidebar({
           <>
             <div className="mb-2 flex items-center justify-between text-[10px] font-bold tracking-widest text-slate-500 uppercase">
               <span>System Integrity</span>
-              <span className="font-mono text-emerald-500">Secure</span>
+              <span className="aegis-status-text--success font-mono">Secure</span>
             </div>
             <div className="mb-4 h-1 overflow-hidden rounded-full bg-slate-800">
-              <div className="h-full w-3/4 bg-cyan-500 shadow-[0_0_8px_rgba(6,182,212,0.8)]"></div>
+              <div className="aegis-status-glow--accent h-full w-3/4 bg-cyan-500"></div>
             </div>
             <div className="flex items-center gap-2.5" data-testid="sidebar-hub-row">
               <img
@@ -253,7 +253,7 @@ export default function Sidebar({
           </>
         ) : (
           <div className="mb-3 flex justify-center" title="System integrity: secure">
-            <span aria-label="System integrity: secure" className="h-2 w-2 rounded-full bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.85)]" />
+            <span aria-label="System integrity: secure" className="aegis-status-indicator aegis-status-indicator--success aegis-status-glow--success" />
           </div>
         )}
         {isCollapsed ? <div className="flex justify-center border-t border-slate-800/70 pt-2">{sidebarToggle}</div> : null}

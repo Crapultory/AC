@@ -31,6 +31,18 @@ html[data-aegis-theme="aegis-night"] {
   --aegis-success-text: #6ee7b7;
   --aegis-warning-text: #fcd34d;
   --aegis-danger-text: #fda4af;
+  --aegis-starmap-bg: #02060d;
+  --aegis-starmap-surface: #07111d;
+  --aegis-starmap-border: #31526c;
+  --aegis-starmap-text: #d9f3ff;
+  --aegis-starmap-muted: #7f9bb0;
+  --aegis-starmap-accent: #68d8f7;
+  --aegis-starmap-focus: #b9f6ff;
+  --aegis-starmap-object: #63c8ff;
+  --aegis-starmap-actor: #c2a4f0;
+  --aegis-starmap-success: #8ed3cb;
+  --aegis-starmap-warning: #f8d36a;
+  --aegis-starmap-danger: #ff8eaa;
   --color-slate-50: #f8fafc;
   --color-slate-100: #f1f5f9;
   --color-slate-200: #e2e8f0;
@@ -78,6 +90,18 @@ html[data-aegis-theme="daylight-signal"] {
   --aegis-success-text: #047857;
   --aegis-warning-text: #a64b09;
   --aegis-danger-text: #be123c;
+  --aegis-starmap-bg: #07131f;
+  --aegis-starmap-surface: #0d2130;
+  --aegis-starmap-border: #477893;
+  --aegis-starmap-text: #e5f7ff;
+  --aegis-starmap-muted: #9cc7d9;
+  --aegis-starmap-accent: #5cddff;
+  --aegis-starmap-focus: #c2f5ff;
+  --aegis-starmap-object: #7ecfff;
+  --aegis-starmap-actor: #d0b4ff;
+  --aegis-starmap-success: #80efcf;
+  --aegis-starmap-warning: #ffd27a;
+  --aegis-starmap-danger: #ff9eb2;
   --color-slate-50: #142235;
   --color-slate-100: #203249;
   --color-slate-200: #30455e;
@@ -126,6 +150,18 @@ html[data-aegis-theme="neutral-ops"] {
   --aegis-success-text: #86efac;
   --aegis-warning-text: #fcd34d;
   --aegis-danger-text: #fda4af;
+  --aegis-starmap-bg: #101821;
+  --aegis-starmap-surface: #172431;
+  --aegis-starmap-border: #49677e;
+  --aegis-starmap-text: #e2edf4;
+  --aegis-starmap-muted: #98b0c0;
+  --aegis-starmap-accent: #8dc7e5;
+  --aegis-starmap-focus: #c6e6f8;
+  --aegis-starmap-object: #9ccce9;
+  --aegis-starmap-actor: #d0bae8;
+  --aegis-starmap-success: #9fe0bf;
+  --aegis-starmap-warning: #f4d180;
+  --aegis-starmap-danger: #f3a5b7;
   --color-slate-50: #f2f4f7;
   --color-slate-100: #e6e8ec;
   --color-slate-200: #d1d6dc;
@@ -147,6 +183,37 @@ html[data-aegis-theme="neutral-ops"] {
   --color-cyan-800: #405a72;
   --color-cyan-900: #344b60;
   --color-cyan-950: #243744;
+}
+
+/* Map semantic Tailwind utilities to the active Aegis theme. */
+:root,
+html[data-aegis-theme] {
+  --color-emerald-50: var(--aegis-success-text);
+  --color-emerald-100: var(--aegis-success-text);
+  --color-emerald-300: var(--aegis-success-text);
+  --color-emerald-400: var(--aegis-success-text);
+  --color-emerald-500: var(--aegis-success-text);
+  --color-emerald-900: color-mix(in srgb, var(--aegis-success-text) 52%, var(--aegis-border));
+  --color-emerald-950: color-mix(in srgb, var(--aegis-success-text) 14%, var(--aegis-surface));
+  --color-amber-100: var(--aegis-warning-text);
+  --color-amber-200: var(--aegis-warning-text);
+  --color-amber-300: var(--aegis-warning-text);
+  --color-amber-400: var(--aegis-warning-text);
+  --color-amber-500: var(--aegis-warning-text);
+  --color-amber-700: color-mix(in srgb, var(--aegis-warning-text) 62%, var(--aegis-border));
+  --color-amber-900: color-mix(in srgb, var(--aegis-warning-text) 52%, var(--aegis-border));
+  --color-amber-950: color-mix(in srgb, var(--aegis-warning-text) 14%, var(--aegis-surface));
+  --color-rose-200: var(--aegis-danger-text);
+  --color-rose-300: var(--aegis-danger-text);
+  --color-rose-400: var(--aegis-danger-text);
+  --color-rose-500: var(--aegis-danger-text);
+  --color-rose-600: var(--aegis-danger-text);
+  --color-rose-900: color-mix(in srgb, var(--aegis-danger-text) 52%, var(--aegis-border));
+  --color-rose-950: color-mix(in srgb, var(--aegis-danger-text) 14%, var(--aegis-surface));
+  --color-teal-300: var(--aegis-success-text);
+  --color-indigo-300: var(--aegis-ticker-actor);
+  --color-purple-400: var(--aegis-ticker-actor);
+  --color-purple-500: var(--aegis-ticker-actor);
 }
 
 html[data-aegis-theme] .bg-\[\#020408\] { background-color: var(--aegis-bg); }
@@ -559,6 +626,131 @@ body {
   color: var(--aegis-text-muted);
 }
 
+.aegis-status-badge--compact {
+  padding: 0.125rem 0.375rem;
+  font-size: 0.5625rem;
+}
+
+.aegis-alert {
+  border: 1px solid var(--aegis-border);
+  background: var(--aegis-elevated);
+  color: var(--aegis-text);
+}
+
+.aegis-alert--warning {
+  border-color: color-mix(in srgb, var(--aegis-warning-text) 52%, var(--aegis-border));
+  background: color-mix(in srgb, var(--aegis-warning-text) 12%, var(--aegis-surface));
+  color: var(--aegis-warning-text);
+}
+
+.aegis-alert--success {
+  border-color: color-mix(in srgb, var(--aegis-success-text) 52%, var(--aegis-border));
+  background: color-mix(in srgb, var(--aegis-success-text) 12%, var(--aegis-surface));
+  color: var(--aegis-success-text);
+}
+
+.aegis-alert--danger {
+  border-color: color-mix(in srgb, var(--aegis-danger-text) 52%, var(--aegis-border));
+  background: color-mix(in srgb, var(--aegis-danger-text) 12%, var(--aegis-surface));
+  color: var(--aegis-danger-text);
+}
+
+.aegis-status-glow--success {
+  box-shadow: 0 0 8px color-mix(in srgb, var(--aegis-success-text) 60%, transparent);
+}
+
+.aegis-status-glow--accent {
+  box-shadow: 0 0 8px color-mix(in srgb, var(--aegis-accent) 60%, transparent);
+}
+
+.aegis-drop-glow--accent {
+  filter: drop-shadow(0 0 14px color-mix(in srgb, var(--aegis-accent) 38%, transparent));
+}
+
+.aegis-starmap {
+  background: var(--aegis-starmap-bg);
+  color: var(--aegis-starmap-text);
+}
+
+.aegis-starmap__atmosphere {
+  background:
+    radial-gradient(ellipse at 50% 48%, color-mix(in srgb, var(--aegis-starmap-accent) 25%, transparent), transparent 39%),
+    radial-gradient(ellipse at 50% 80%, color-mix(in srgb, var(--aegis-starmap-actor) 21%, transparent), transparent 48%);
+}
+
+.aegis-starmap__veil {
+  background: color-mix(in srgb, var(--aegis-starmap-bg) 25%, transparent);
+}
+
+.aegis-starmap__tooltip {
+  border-color: color-mix(in srgb, var(--aegis-starmap-accent) 58%, var(--aegis-starmap-border));
+  background: color-mix(in srgb, var(--aegis-starmap-surface) 95%, transparent);
+  box-shadow: 0 16px 40px color-mix(in srgb, var(--aegis-starmap-bg) 78%, transparent);
+}
+
+.aegis-starmap .text-slate-100,
+.aegis-starmap .text-slate-200 {
+  color: var(--aegis-starmap-text);
+}
+
+.aegis-starmap .text-slate-400,
+.aegis-starmap .text-slate-500 {
+  color: var(--aegis-starmap-muted);
+}
+
+.aegis-starmap .text-cyan-200,
+.aegis-starmap .text-cyan-300,
+.aegis-starmap .text-cyan-400 {
+  color: var(--aegis-starmap-accent);
+}
+
+.aegis-starmap .bg-cyan-300 { background-color: var(--aegis-starmap-accent); }
+.aegis-starmap .bg-teal-300 { background-color: var(--aegis-starmap-success); }
+.aegis-starmap .bg-indigo-300 { background-color: var(--aegis-starmap-actor); }
+.aegis-starmap .border-cyan-900\/60 { border-color: color-mix(in srgb, var(--aegis-starmap-accent) 60%, var(--aegis-starmap-border)); }
+.aegis-starmap .bg-cyan-950\/30 { background-color: color-mix(in srgb, var(--aegis-starmap-accent) 18%, var(--aegis-starmap-surface)); }
+
+.aegis-starmap__control {
+  border-color: color-mix(in srgb, var(--aegis-starmap-border) 80%, transparent);
+  background: color-mix(in srgb, var(--aegis-starmap-surface) 85%, transparent);
+  color: var(--aegis-starmap-muted);
+}
+
+.aegis-starmap__control:hover {
+  border-color: var(--aegis-starmap-accent);
+  color: var(--aegis-starmap-focus);
+}
+
+.aegis-workflow-panel {
+  background: var(--aegis-elevated);
+  box-shadow: 20px 0 60px color-mix(in srgb, var(--aegis-text) 35%, transparent);
+}
+
+.aegis-workflow-canvas {
+  background: var(--aegis-bg);
+}
+
+.aegis-workflow-atmosphere {
+  background:
+    radial-gradient(circle at 16% 18%, color-mix(in srgb, var(--aegis-accent) 16%, transparent), transparent 34%),
+    radial-gradient(circle at 88% 78%, color-mix(in srgb, var(--aegis-danger-text) 8%, transparent), transparent 30%);
+}
+
+.aegis-workflow-grid {
+  background-image: radial-gradient(color-mix(in srgb, var(--aegis-focus) 35%, transparent) 0.75px, transparent 0.75px);
+  background-size: 19px 19px;
+}
+
+.aegis-workflow-overlay {
+  background: color-mix(in srgb, var(--aegis-surface) 90%, transparent);
+  box-shadow: 0 12px 28px color-mix(in srgb, var(--aegis-text) 22%, transparent);
+}
+
+.aegis-workflow-details {
+  background: color-mix(in srgb, var(--aegis-elevated) 95%, transparent);
+  box-shadow: 0 18px 70px color-mix(in srgb, var(--aegis-text) 38%, transparent);
+}
+
 .aegis-status-indicator {
   display: inline-block;
   flex: none;
@@ -580,6 +772,11 @@ body {
 .aegis-status-indicator--danger {
   background: var(--aegis-danger-text);
   box-shadow: 0 0 6px color-mix(in srgb, var(--aegis-danger-text) 48%, transparent);
+}
+
+.aegis-status-indicator--accent {
+  background: var(--aegis-accent);
+  box-shadow: 0 0 6px color-mix(in srgb, var(--aegis-accent) 55%, transparent);
 }
 
 .aegis-status-indicator--muted { background: var(--aegis-text-muted); }
@@ -1158,7 +1355,7 @@ body {
 .workflow-edge-flow--live {
   animation: workflow-edge-flow 1.8s linear infinite;
   opacity: 0.95;
-  filter: drop-shadow(0 0 4px rgba(103, 232, 249, 0.55));
+  filter: drop-shadow(0 0 4px color-mix(in srgb, var(--aegis-focus) 55%, transparent));
 }
 
 .workflow-edge-flow--done {
@@ -1179,7 +1376,7 @@ body {
 .workflow-edge-flow--surge {
   animation: workflow-edge-flow 0.8s linear infinite;
   opacity: 1;
-  filter: drop-shadow(0 0 6px rgba(167, 237, 255, 0.8));
+  filter: drop-shadow(0 0 6px color-mix(in srgb, var(--aegis-focus) 80%, transparent));
 }
 
 /* P0-2 节点生长：出生 scale 弹入 / 完成回弹 / 失败抖动 */
@@ -1297,10 +1494,10 @@ body {
 /* P0-4 live 画布边缘呼吸光 */
 @keyframes workflow-canvas-breathe {
   0%, 100% {
-    box-shadow: inset 0 0 44px rgba(251, 191, 36, 0.05);
+    box-shadow: inset 0 0 44px color-mix(in srgb, var(--aegis-warning-text) 5%, transparent);
   }
   50% {
-    box-shadow: inset 0 0 72px rgba(251, 191, 36, 0.13);
+    box-shadow: inset 0 0 72px color-mix(in srgb, var(--aegis-warning-text) 13%, transparent);
   }
 }
 
