@@ -70,10 +70,16 @@ def _run_ontology_script(script: Path, lock: threading.Lock, label: str) -> dict
 
 
 class OntologyService:
-    STANDARD_GRAPH = _env_path(
+    # v3 三层图谱是唯一真实来源。compile 只把它写到 alias 路径供旧调用点兼容。
+    STANDARD_GRAPH_V3 = _env_path(
+        "AISOC_ONTOLOGY_STANDARD_GRAPH_V3",
+        "~/.hermes/profiles/aisoc/artifacts/ontology/standard/standard-graph_v3.json",
+    )
+    STANDARD_GRAPH_ALIAS = _env_path(
         "AISOC_ONTOLOGY_STANDARD_GRAPH",
         "~/.hermes/profiles/aisoc/artifacts/ontology/standard/standard-graph.json",
     )
+    STANDARD_GRAPH = STANDARD_GRAPH_V3
     SCANS_ROOT = _env_path(
         "AISOC_ONTOLOGY_SCANS_ROOT",
         "~/.hermes/profiles/aisoc/artifacts/ontology/scans",
@@ -101,23 +107,78 @@ class OntologyService:
 
     @staticmethod
     def compile_standard_graph() -> dict[str, Any]:
-        return _run_ontology_script(
-            OntologyService.SKILL_SCRIPTS / "graph_compiler.py",
-            _compile_lock,
-            "compile",
+        # v3 图是权威源；旧的 graph_compiler.py 走 model_v2，已废弃。
+        # 这里只做：读 v3 → 写 alias → 返回统计信息（兼容老的 /compile 响应）。
+        src = OntologyService.STANDARD_GRAPH_V3
+        if not src.exists():
+            raise OntologyError(f"Authoritative v3 graph missing: {src}")
+        data = OntologyService._read_json(src)
+        OntologyService.STANDARD_GRAPH_ALIAS.parent.mkdir(parents=True, exist_ok=True)
+        OntologyService.STANDARD_GRAPH_ALIAS.write_text(
+            json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8"
         )
+        return {
+            "output": str(OntologyService.STANDARD_GRAPH_ALIAS),
+            "weight_total": data.get("weight_total", 100.0),
+            "layer_counts": data.get("layer_counts", {}),
+            "edge_stats": data.get("edge_stats", {}),
+            "skipped": 0,
+        }
 
     @staticmethod
     def run_scan() -> dict[str, Any]:
-        return _run_ontology_script(
-            OntologyService.SKILL_SCRIPTS / "scanner.py",
-            _scan_lock,
-            "scan",
+        # AI-only mainline: collect -> Hermes judgment -> deterministic guarded roll-up.
+        # 单飞锁仍然保留，避免同一进程内并发 AI 扫描。
+        from aisoc.backend.services.ontology_ai_service import (
+            OntologyAIError,
+            OntologyAIService,
         )
+
+        if not _scan_lock.acquire(blocking=False):
+            raise OntologyBusyError("scan is already in progress")
+        try:
+            try:
+                return OntologyAIService.run_ai_scan()
+            except OntologyAIError as exc:
+                logger.exception("AI scan failed: %s", exc)
+                raise OntologyError(f"scan failed: {exc}")
+        finally:
+            _scan_lock.release()
 
     @staticmethod
     def get_standard_graph() -> dict[str, Any]:
-        return OntologyService._read_json(OntologyService.STANDARD_GRAPH)
+        # 优先读 v3；否则回退 alias（兼容尚未升级的部署）。
+        if OntologyService.STANDARD_GRAPH_V3.exists():
+            return OntologyService._read_json(OntologyService.STANDARD_GRAPH_V3)
+        return OntologyService._read_json(OntologyService.STANDARD_GRAPH_ALIAS)
+
+    @staticmethod
+    def _recent_scans(limit: int = 5) -> list[dict[str, Any]]:
+        """最近 N 次 AI 扫描的概览（scan-ai-* 目录），供 overview 上侧摘要。
+        单次目录任一文件缺失就跳过，不阻断整个响应。"""
+        out: list[dict[str, Any]] = []
+        if not OntologyService.SCANS_ROOT.exists():
+            return out
+        for path in sorted(OntologyService.SCANS_ROOT.glob("scan-ai-*"), reverse=True)[:limit]:
+            try:
+                scorecard = OntologyService._read_json(path / "scorecard.json")
+                mapped = OntologyService._read_json(path / "mapped-graph.json")
+                observed_path = path / "observed-graph.json"
+                generated_at = None
+                if observed_path.exists():
+                    observed = OntologyService._read_json(observed_path)
+                    generated_at = observed.get("generated_at")
+                out.append(
+                    {
+                        "scan_id": path.name,
+                        "score": scorecard.get("completeness_score"),
+                        "generated_at": generated_at,
+                        "status_counts": mapped.get("status_counts", {}),
+                    }
+                )
+            except Exception:
+                continue
+        return out
 
     @staticmethod
     def get_latest_bundle() -> dict[str, Any]:
@@ -134,6 +195,7 @@ class OntologyService:
         latest = bundle["latest"]
         scorecard = bundle["scorecard"]
         mapped = bundle["mapped"]
+        std = OntologyService.get_standard_graph()
         return {
             "latest_scan_id": latest.name,
             "standard_graph_path": str(OntologyService.STANDARD_GRAPH),
@@ -147,14 +209,18 @@ class OntologyService:
                 str(latest / "scorecard.json"),
                 str(latest / "gap-report.json"),
             ],
+            "standard_graph_schema": std.get("schema_version") or std.get("schema"),
+            "standard_graph_counts": std.get("layer_counts", {}),
+            "recent_scans": OntologyService._recent_scans(),
         }
 
     @staticmethod
     def get_artifact(name: str) -> Any:
-        bundle = OntologyService.get_latest_bundle()
-        latest = bundle["latest"]
+        # standard graph 独立于 scan 快照 —— 前置判断避免因 scan 目录缺失导致
+        # 标准图谱接口也 404
         if name == "standard":
             return OntologyService.get_standard_graph()
+        bundle = OntologyService.get_latest_bundle()
         if name == "mapped":
             return bundle["mapped"]
         if name == "scorecard":
@@ -215,6 +281,14 @@ class OntologyService:
 
         bundle = OntologyService.get_latest_bundle()
         mapped_nodes = bundle["mapped"].get("mapped_nodes", [])
+        # 从 AI provenance 中拉每个对象的推荐建议（若存在），供 L2 汇总时穿透使用
+        ai_prov: dict[str, Any] = {}
+        try:
+            ai_prov = OntologyService._read_json(bundle["latest"] / "ai_provenance.json")
+        except Exception:
+            ai_prov = {}
+        object_judgments = ai_prov.get("object_judgments", {}) if isinstance(ai_prov, dict) else {}
+
         candidates = [n for n in mapped_nodes if n["status"] in {"partial", "missing"}]
         candidates.sort(key=lambda n: (-float(n.get("importance_weight", 0)), float(n.get("fulfillment_ratio", 0))))
         items = []
@@ -238,6 +312,14 @@ class OntologyService:
             kb = get_remediation(node["id"]) or {}
             name = node["name_zh"]
 
+            # 从 object_detail 里挑不达标的对象级 AI 建议（有 recommendation 且满足度未接近满分）
+            ai_obj_recs: list[str] = []
+            for od in node.get("object_detail", []) or []:
+                js = object_judgments.get(od.get("object_id"), {})
+                rec = js.get("recommendation")
+                if rec and od.get("satisfaction", 0) < 0.95:
+                    ai_obj_recs.append(f"{od.get('name_zh') or od.get('object_id')}: {rec}")
+
             # evidence-grounded status phrasing
             if status == "missing":
                 status_phrase = "环境中未发现可扫描实现证据"
@@ -246,8 +328,17 @@ class OntologyService:
             else:
                 status_phrase = f"已部分实现（{ev_count} 处证据，满足度 {int(ratio*100)}%）"
 
+            # D5 情报能力有个特化话术：接近满分时强调"直接实现证据未沉淀"
+            if node["domain"] == "D5" and ratio >= 0.9:
+                status_phrase = f"情报能力已基本具备，当前主要缺少直接实现证据沉淀（满足度 {int(ratio*100)}%）"
+
             gap = kb.get("gap") or f"{name} {status_phrase}，尚未标准化为可映射、可评分对象。"
-            action = kb.get("action") or f"补齐 {name} 的可扫描实现证据与标准属性，建立到相邻能力的关系，使其可映射、可评分。"
+            generic_action = kb.get("action") or f"补齐 {name} 的可扫描实现证据与标准属性，建立到相邻能力的关系，使其可映射、可评分。"
+            # 有 ≥2 条对象级 AI 建议时优先用具体建议，避免通用 boilerplate
+            if ai_obj_recs and len(ai_obj_recs) >= 2:
+                action = "优先按下列 L3 对象级建议补齐直接证据与调用链，避免重复建设。"
+            else:
+                action = generic_action
             assets = kb.get("assets", "")
             impact = kb.get("impact", "")
             effort = kb.get("effort", "M")
@@ -265,6 +356,8 @@ class OntologyService:
 
             # composite human-readable recommendation
             rec_parts = [f"【现状】{status_phrase}。", f"【缺口】{gap}", f"【建议】{action}"]
+            if ai_obj_recs:
+                rec_parts.append(f"【AI对象级建议】{'；'.join(ai_obj_recs[:4])}")
             if assets:
                 rec_parts.append(f"【涉及数据源/集成】{assets}。")
             if impact:
@@ -290,6 +383,7 @@ class OntologyService:
                     "evidence_samples": ev_paths,
                     "rationale": f"权重 {node['importance_weight']} × 缺口 {round(1.0 - ratio, 2)} = 加权缺口 {round(gap_size, 2)}，优先级 {priority}。",
                     "recommendation": recommendation,
+                    "ai_object_recommendations": ai_obj_recs[:4],
                 }
             )
         return {"items": items}

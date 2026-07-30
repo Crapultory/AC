@@ -494,6 +494,9 @@ export function useAgentChat(options: UseAgentChatOptions = {}): {
               sessionIdRef.current = tuiSid;
               // Update tab with new tuiId
               const resumedDbId = res.resumed || cachedDbId;
+              // Snapshot cached messages BEFORE tab update reshapes the tabs array
+              const cachedTab = tabsRef.current.find(t => t.dbId === cachedDbId);
+              const cachedMsgs = cachedTab?.messages ?? [];
               setTabs(prev => {
                 const updated = prev.map(t =>
                   t.dbId === cachedDbId
@@ -507,19 +510,28 @@ export function useAgentChat(options: UseAgentChatOptions = {}): {
                 persistTabs(tabsKey, updated);
                 return updated;
               });
-              const msgs: ChatMessage[] = (res.messages || []).map((m: any) => ({
+              const serverMsgs: ChatMessage[] = (res.messages || []).map((m: any) => ({
                 role: m.role === "assistant" ? "agent" : m.role,
                 id: nextMsgId(),
                 text: m.text || "",
                 done: true,
               }));
-              // When switching tabs, messages were already loaded optimistically
-              // from cache — skip the redundant setState to avoid a flash.
+              // Prefer the local cache: it preserves streaming-only artifacts
+              // (tool.start / tool.complete bubbles, thinking, etc.) that the
+              // server-side session store doesn't persist. Only fall back to
+              // server history when we have nothing cached (e.g. cross-device
+              // login), or when the local cache is clearly stale relative to
+              // the server (fewer user turns than the server saw).
+              const cachedUserTurns = cachedMsgs.filter(m => m.role === "user").length;
+              const serverUserTurns = serverMsgs.filter(m => m.role === "user").length;
+              const preferCache = cachedMsgs.length > 0 && cachedUserTurns >= serverUserTurns;
               if (skipResumeMessagesRef.current) {
                 skipResumeMessagesRef.current = false;
                 setState((s) => ({ ...s, phase: "idle", sessionId: tuiSid }));
+              } else if (preferCache) {
+                setState({ phase: "idle", sessionId: tuiSid, messages: trimMessages(cachedMsgs), activeApproval: null, activeClarify: null, error: null });
               } else {
-                setState({ phase: "idle", sessionId: tuiSid, messages: trimMessages(msgs), activeApproval: null, activeClarify: null, error: null });
+                setState({ phase: "idle", sessionId: tuiSid, messages: trimMessages(serverMsgs), activeApproval: null, activeClarify: null, error: null });
               }
               needsReconnectRef.current = false;
               resetIdleTimer();
