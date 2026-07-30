@@ -10,8 +10,10 @@ from aisoc.backend.services.ontology_schemas import (
     OntologyFilePayload,
     OntologyOverviewResponse,
     OntologyRoadmapResponse,
+    OntologyScanJobResponse,
     OntologyScanResponse,
 )
+from aisoc.backend.services.ontology_job_service import OntologyJobService
 from aisoc.backend.services.ontology_service import (
     OntologyBusyError,
     OntologyError,
@@ -54,10 +56,17 @@ def build_ontology_router() -> APIRouter:
             "score": result["weight_total"],
         }
 
-    @router.post("/scan", response_model=OntologyScanResponse)
-    async def run_ontology_scan() -> OntologyScanResponse:
-        result = _run_mutation("scan", OntologyService.run_scan)
-        return OntologyScanResponse(**result)
+    @router.post("/scan", response_model=OntologyScanJobResponse)
+    async def run_ontology_scan() -> dict:
+        # 异步 job：立即返回 job_id，实际扫描在后台线程完成。客户端轮询 /scan/{job_id}。
+        return _run_mutation("scan", OntologyJobService.create_scan_job)
+
+    @router.get("/scan/{job_id}", response_model=OntologyScanJobResponse)
+    async def get_ontology_scan_job(job_id: str) -> dict:
+        try:
+            return OntologyJobService.get_job(job_id)
+        except OntologyError as exc:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=str(exc))
 
     @router.get("/overview", response_model=OntologyOverviewResponse)
     async def ontology_overview() -> OntologyOverviewResponse:

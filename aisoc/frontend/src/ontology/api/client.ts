@@ -3,7 +3,7 @@ import { getStoredToken } from '../../lib/auth';
 
 const apiClient = axios.create({
   baseURL: import.meta.env.VITE_API_BASE_URL || '/api',
-  timeout: 30000,
+  timeout: 180000,
   headers: { 'Content-Type': 'application/json' },
 });
 
