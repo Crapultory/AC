@@ -43,7 +43,13 @@ describe('Aegis Settings restart controls', () => {
   });
 
   it('switches the local License mock with click and standard tab keyboard navigation', () => {
-    global.fetch = vi.fn(async () => jsonResponse({ status: 'ok', pid: 123 })) as typeof global.fetch;
+    global.fetch = vi.fn(async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/system-instructs') {
+        return jsonResponse({ instructions: [] });
+      }
+      return jsonResponse({ status: 'ok', pid: 123 });
+    }) as typeof global.fetch;
 
     render(<SettingsTab />);
 
@@ -74,9 +80,80 @@ describe('Aegis Settings restart controls', () => {
     expect(statusTab).toHaveAttribute('aria-selected', 'true');
 
     fireEvent.keyDown(statusTab, { key: 'End' });
-    expect(licenseTab).toHaveFocus();
-    expect(licenseTab).toHaveAttribute('aria-selected', 'true');
-    expect(global.fetch).toHaveBeenCalledTimes(1);
+    const systemInstructTab = screen.getByRole('tab', { name: 'System Instruct' });
+    expect(systemInstructTab).toHaveFocus();
+    expect(systemInstructTab).toHaveAttribute('aria-selected', 'true');
+  });
+
+  it('creates, updates, and deletes administrator system instructions from Settings', async () => {
+    const instruction = {
+      id: 'instruct-1',
+      name: 'Incident baseline',
+      describe: 'Baseline guidance for incident responders.',
+      instruct: 'Preserve evidence before remediation.',
+      create_time: '2026-07-30T10:00:00Z',
+      update_time: '2026-07-30T10:00:00Z',
+      status: 'enabled',
+    };
+    const updatedInstruction = {
+      ...instruction,
+      describe: 'Containment and evidence preservation order.',
+      instruct: 'Contain first, then preserve evidence.',
+      status: 'disabled',
+      update_time: '2026-07-30T10:01:00Z',
+    };
+    const requests: Array<{ url: string; method: string; body: string | undefined }> = [];
+    global.fetch = vi.fn(async (input, init) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      const method = init?.method || 'GET';
+      requests.push({ url, method, body: typeof init?.body === 'string' ? init.body : undefined });
+      if (url === '/health') return jsonResponse({ status: 'ok', pid: 123 });
+      if (url === '/api/system-instructs' && method === 'GET') return jsonResponse({ instructions: [] });
+      if (url === '/api/system-instructs' && method === 'POST') return jsonResponse(instruction, 201);
+      if (url === '/api/system-instructs/instruct-1' && method === 'PUT') return jsonResponse(updatedInstruction);
+      if (url === '/api/system-instructs/instruct-1' && method === 'DELETE') return jsonResponse({ deleted: true, id: 'instruct-1' });
+      throw new Error(`Unhandled request: ${method} ${url}`);
+    }) as typeof global.fetch;
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+
+    render(<SettingsTab />);
+    fireEvent.click(screen.getByRole('tab', { name: 'System Instruct' }));
+    expect(await screen.findByText(/no system instructions yet/i)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /new instruction/i }));
+    fireEvent.change(screen.getByLabelText(/system instruction name/i), { target: { value: instruction.name } });
+    fireEvent.change(screen.getByLabelText(/system instruction description/i), { target: { value: instruction.describe } });
+    fireEvent.change(screen.getByLabelText(/system instruction content/i), { target: { value: instruction.instruct } });
+    fireEvent.click(screen.getByRole('button', { name: /create instruction/i }));
+
+    expect(await screen.findByText(instruction.name)).toBeInTheDocument();
+    expect(requests).toContainEqual(expect.objectContaining({
+      url: '/api/system-instructs',
+      method: 'POST',
+      body: JSON.stringify({ name: instruction.name, describe: instruction.describe, instruct: instruction.instruct, status: 'enabled' }),
+    }));
+
+    fireEvent.click(screen.getByRole('button', { name: `Edit ${instruction.name}` }));
+    fireEvent.change(screen.getByLabelText(/system instruction description/i), { target: { value: updatedInstruction.describe } });
+    fireEvent.change(screen.getByLabelText(/system instruction content/i), { target: { value: updatedInstruction.instruct } });
+    fireEvent.change(screen.getByLabelText(/system instruction status/i), { target: { value: 'disabled' } });
+    fireEvent.click(screen.getByRole('button', { name: /save changes/i }));
+    await waitFor(() => expect(requests).toContainEqual(expect.objectContaining({
+      url: '/api/system-instructs/instruct-1',
+      method: 'PUT',
+      body: JSON.stringify({
+        name: instruction.name,
+        describe: updatedInstruction.describe,
+        instruct: updatedInstruction.instruct,
+        status: 'disabled',
+      }),
+    })));
+    expect(await screen.findByText(updatedInstruction.instruct)).toBeInTheDocument();
+    expect(await screen.findByText(updatedInstruction.describe)).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: `Delete ${instruction.name}` }));
+    await waitFor(() => expect(screen.queryByText(updatedInstruction.instruct)).not.toBeInTheDocument());
+    expect(requests).toContainEqual(expect.objectContaining({ url: '/api/system-instructs/instruct-1', method: 'DELETE' }));
   });
 
   it('requires both confirmation stages and the exact phrase before an authenticated restart', async () => {

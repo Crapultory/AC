@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent }
 import { Activity, Server } from 'lucide-react';
 
 import { ApiError, fetchJSON } from '../lib/api';
+import SystemInstructManager from './SystemInstructManager';
 
 interface HealthResponse {
   status: string;
@@ -15,11 +16,11 @@ interface RestartResponse {
   pid: number;
 }
 
-type SettingsView = 'status' | 'license';
+type SettingsView = 'status' | 'license' | 'system_instruct';
 
 const RESTART_CONFIRMATION_PHRASE = 'RESTART AEGIS';
 const DEFAULT_RECOVERY_POLL_MS = 1_000;
-const SETTINGS_VIEWS: SettingsView[] = ['status', 'license'];
+const SETTINGS_VIEWS: SettingsView[] = ['status', 'license', 'system_instruct'];
 const LICENSE_MOCK = {
   id: 'AEG-ENT-EVAL-2026-LOCAL',
   edition: 'Enterprise Evaluation',
@@ -315,6 +316,20 @@ export default function SettingsTab({
           >
             LIC Management
           </button>
+          <button
+            ref={(element) => { settingsTabRefs.current[2] = element; }}
+            id="settings-system-instruct-tab"
+            type="button"
+            role="tab"
+            tabIndex={activeView === 'system_instruct' ? 0 : -1}
+            aria-selected={activeView === 'system_instruct'}
+            aria-controls="settings-system-instruct-panel"
+            onClick={() => selectSettingsView('system_instruct')}
+            onKeyDown={(event) => handleSettingsTabKeyDown(event, 'system_instruct')}
+            className="aegis-page-tab"
+          >
+            System Instruct
+          </button>
         </div>
 
         {activeView === 'status' ? <section id="settings-status-panel" role="tabpanel" aria-labelledby="settings-status-tab" className="aegis-page-content">
@@ -396,6 +411,10 @@ export default function SettingsTab({
               <ul className="mt-4 flex flex-wrap gap-2">{LICENSE_MOCK.modules.map((module) => <li key={module} className="aegis-license-module">{module}</li>)}</ul>
             </section>
           </div>
+        </section> : null}
+
+        {activeView === 'system_instruct' ? <section id="settings-system-instruct-panel" role="tabpanel" aria-labelledby="settings-system-instruct-tab" className="aegis-page-content">
+          <SystemInstructManager onAuthExpired={onAuthExpired} />
         </section> : null}
       </div>
 

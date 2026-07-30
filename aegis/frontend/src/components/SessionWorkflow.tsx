@@ -20,7 +20,8 @@ interface SessionWorkflowProps {
   conversation?: Conversation;
   fullscreen: boolean;
   onFullscreenChange: (fullscreen: boolean) => void;
-  onClose: () => void;
+  onClose?: () => void;
+  showHeader?: boolean;
 }
 
 interface ViewportTransform {
@@ -153,6 +154,7 @@ export default function SessionWorkflow({
   fullscreen,
   onFullscreenChange,
   onClose,
+  showHeader = true,
 }: SessionWorkflowProps) {
   const canvasRef = useRef<HTMLDivElement>(null);
   const dragRef = useRef<{ pointerId: number; x: number; y: number; originX: number; originY: number } | null>(null);
@@ -507,9 +509,10 @@ export default function SessionWorkflow({
     <aside
       role="complementary"
       aria-label={`Workflow for ${conversation?.title || 'Current Session'}`}
-      className={`aegis-workflow-panel ${fullscreen ? 'w-full' : 'w-1/2'} h-full shrink-0 flex flex-col border-r border-cyan-900/50`}
+      className="aegis-workflow-panel h-full min-w-0 flex flex-col"
       data-testid="session-workflow"
     >
+      {showHeader ? (
       <header className="h-16 shrink-0 px-4 border-b border-slate-800/90 bg-[#03080f]/95 flex items-center gap-3">
         <div className="aegis-status-glow--accent h-8 w-8 rounded-full border border-cyan-700/50 bg-cyan-950/30 text-cyan-300 flex items-center justify-center">
           <Workflow className="h-4 w-4" aria-hidden="true" />
@@ -530,17 +533,20 @@ export default function SessionWorkflow({
           >
             {fullscreen ? <Minimize2 className="h-4 w-4" /> : <Maximize2 className="h-4 w-4" />}
           </button>
-          <button
-            type="button"
-            aria-label="Close workflow visualization"
-            onClick={onClose}
-            className="h-8 w-8 rounded border border-slate-800 bg-[#07131d] text-slate-400 hover:text-cyan-300 hover:border-cyan-800/60 transition-colors flex items-center justify-center"
-            title="Close workflow"
-          >
-            <X className="h-4 w-4" aria-hidden="true" />
-          </button>
+          {onClose ? (
+            <button
+              type="button"
+              aria-label="Close workflow visualization"
+              onClick={onClose}
+              className="h-8 w-8 rounded border border-slate-800 bg-[#07131d] text-slate-400 hover:text-cyan-300 hover:border-cyan-800/60 transition-colors flex items-center justify-center"
+              title="Close workflow"
+            >
+              <X className="h-4 w-4" aria-hidden="true" />
+            </button>
+          ) : null}
         </div>
       </header>
+      ) : null}
 
       <div
         ref={canvasRef}

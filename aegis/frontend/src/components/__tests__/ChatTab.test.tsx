@@ -37,6 +37,15 @@ class MockWebSocket {
   }
 }
 
+function getComposer(): HTMLDivElement {
+  return screen.getByRole('combobox', { name: 'Chat message' }) as HTMLDivElement;
+}
+
+function setComposerText(composer: HTMLDivElement, text: string) {
+  composer.textContent = text;
+  fireEvent.input(composer);
+}
+
 describe('ChatTab', () => {
   const OriginalWebSocket = globalThis.WebSocket;
   const clipboardWriteText = vi.fn().mockResolvedValue(undefined);
@@ -64,16 +73,82 @@ describe('ChatTab', () => {
     render(<ChatTab agents={[]} />);
 
     fireEvent.click(screen.getByRole('button', { name: /新建对话/i }));
-    const composer = screen.getByPlaceholderText(/ask aegis anything/i);
-    fireEvent.change(composer, { target: { value: 'keep this draft' } });
+    const composer = getComposer();
+    setComposerText(composer, 'keep this draft');
     expect(screen.getByTestId('session-status-ticker')).toHaveTextContent('AWAITING FIRST TURN');
 
     fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
 
     expect(screen.getByRole('complementary', { name: /workflow for new investigation/i })).toBeInTheDocument();
     expect(within(screen.getByTestId('session-workflow')).getByText('AWAITING FIRST TURN')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/ask aegis anything/i)).toHaveValue('keep this draft');
-    expect(screen.getByTestId('chat-workspace')).toHaveClass('w-1/2');
+    expect(getComposer()).toHaveTextContent('keep this draft');
+    expect(screen.getByTestId('chat-workspace')).toHaveStyle({ width: 'calc(50% - 5px)' });
+    expect(screen.getByRole('tab', { name: /session workflow/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('separator', { name: /resize chat workspace panels/i })).toBeInTheDocument();
+  });
+
+  it('loads the architecture test tab into an isolated HTML iframe', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(
+      new Response(JSON.stringify({
+        title: 'architecture-showcase.html',
+        content: '<!doctype html><html><body><h1>Architecture Preview</h1></body></html>',
+      }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ChatTab agents={[]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    fireEvent.click(screen.getByRole('tab', { name: /architecture test/i }));
+
+    const frame = await screen.findByTestId('architecture-showcase-frame');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/chat/drawer-html?path=2026-06-07-aegis-architecture-showcase.html',
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+    expect(frame).toHaveAttribute('title', 'architecture-showcase.html');
+    expect(frame).toHaveAttribute('sandbox', 'allow-scripts');
+    expect(frame).toHaveAttribute('srcdoc', expect.stringContaining('Architecture Preview'));
+    expect(screen.getByRole('tab', { name: /architecture test/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('button', { name: /enter workspace fullscreen/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /exit workspace fullscreen/i })).toBeInTheDocument();
+  });
+
+  it('resizes the drawer by pointer and remembers the selected width', () => {
+    const { unmount } = render(<ChatTab agents={[]} />);
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+
+    const drawer = screen.getByTestId('chat-workflow-drawer');
+    const root = drawer.parentElement as HTMLDivElement;
+    vi.spyOn(root, 'getBoundingClientRect').mockReturnValue({
+      bottom: 800,
+      height: 800,
+      left: 0,
+      right: 1000,
+      top: 0,
+      width: 1000,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    const splitter = screen.getByRole('separator', { name: /resize chat workspace panels/i });
+    fireEvent(splitter, new MouseEvent('pointerdown', { bubbles: true, clientX: 500 }));
+    fireEvent(splitter, new MouseEvent('pointermove', { bubbles: true, clientX: 400 }));
+    fireEvent(splitter, new MouseEvent('pointerup', { bubbles: true, clientX: 400 }));
+
+    expect(drawer).toHaveStyle({ width: 'calc(40% - 5px)' });
+    expect(window.localStorage.getItem('aegis_chat_workflow_drawer_width')).toBe('40');
+    fireEvent.keyDown(splitter, { key: 'ArrowRight' });
+    expect(drawer).toHaveStyle({ width: 'calc(41% - 5px)' });
+    fireEvent.keyDown(splitter, { key: 'Home' });
+    expect(drawer).toHaveStyle({ width: 'calc(36% - 5px)' });
+    unmount();
+
+    render(<ChatTab agents={[]} />);
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    expect(screen.getByTestId('chat-workflow-drawer')).toHaveStyle({ width: 'calc(36% - 5px)' });
   });
 
   it('uses the status ticker as the accessible workflow entry point', () => {
@@ -194,8 +269,8 @@ describe('ChatTab', () => {
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
     render(<ChatTab agents={[]} />);
 
-    const composer = screen.getByPlaceholderText(/ask aegis anything/i);
-    fireEvent.change(composer, { target: { value: 'Existing draft' } });
+    const composer = getComposer();
+    setComposerText(composer, 'Existing draft');
     fireEvent.click(screen.getByRole('button', { name: /open prompt templates/i }));
 
     expect(await screen.findByRole('complementary', { name: /prompt templates/i })).toBeInTheDocument();
@@ -203,8 +278,103 @@ describe('ChatTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /alert triage/i }));
 
     expect(screen.queryByRole('complementary', { name: /prompt templates/i })).not.toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/ask aegis anything/i)).toHaveValue('Existing draft Assess this alert.');
+    expect(getComposer()).toHaveTextContent('Existing draft Assess this alert.');
     expect(MockWebSocket.instances).toHaveLength(0);
+  });
+
+  it('navigates @ commands by keyboard, keeps typing after a token, and sends raw text', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/chat/quick-commands') {
+        return new Response(JSON.stringify({
+          commands: [
+            {
+              type: 'agent',
+              name: 'incident-responder',
+              desc: 'Investigates active incidents.',
+              content: 'Use remote agent {agent_name} as {name}.',
+            },
+            {
+              type: 'prompt',
+              name: 'triage',
+              desc: 'Classifies incident severity.',
+              content: 'Classify the incident.',
+            },
+          ],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`Unhandled request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ChatTab agents={[]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /新建/i }));
+    const composer = getComposer();
+    fireEvent.focus(composer);
+    setComposerText(composer, '@');
+
+    const commandList = await screen.findByRole('listbox', { name: /available quick commands/i });
+    const agentCommand = await within(commandList).findByRole('option', { name: /incident-responder/i });
+    const promptCommand = await within(commandList).findByRole('option', { name: /triage/i });
+    expect(agentCommand).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(composer, { key: 'ArrowDown' });
+    expect(promptCommand).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(composer, { key: 'ArrowUp' });
+    expect(agentCommand).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    expect(composer.textContent).toBe('@[agent_incident-responder] ');
+    const shortcutToken = document.querySelector('.aegis-shortcut-token');
+    expect(shortcutToken).toHaveTextContent('@[agent_incident-responder]');
+    expect(shortcutToken?.tagName).toBe('STRONG');
+    expect(shortcutToken?.querySelector('u')).toHaveTextContent('@[agent_incident-responder]');
+    setComposerText(composer, '@[agent_incident-responder] investigate now');
+    expect(composer).toHaveTextContent('@[agent_incident-responder] investigate now');
+
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({ type: 'session.bound', session_id: 'quick-command-session', title: 'Quick command', resumed: false });
+
+    await waitFor(() => expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+    const payload = socket.sent.map((item) => JSON.parse(item)).find((item) => item.type === 'message.send');
+    expect(payload).toMatchObject({ text: '@[agent_incident-responder] investigate now' });
+  });
+
+  it('restores the raw shortcut draft when the server rejects its template', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      commands: [{
+        type: 'agent',
+        name: 'unresolved-agent',
+        desc: 'Uses an unsupported variable.',
+        content: 'Delegate {region}.',
+      }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    render(<ChatTab agents={[]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /新建/i }));
+    const composer = getComposer();
+    setComposerText(composer, '@');
+    const command = await screen.findByRole('option', { name: /unresolved-agent/i });
+    fireEvent.mouseDown(command);
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({ type: 'session.bound', session_id: 'invalid-quick-command', title: 'Invalid quick command', resumed: false });
+    await waitFor(() => expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+    const payload = socket.sent.map((item) => JSON.parse(item)).find((item) => item.type === 'message.send');
+    socket.emit({
+      type: 'error',
+      code: 'invalid_quick_command',
+      client_msg_id: payload.client_msg_id,
+      message: 'Agent command has unsupported variable: {region}.',
+    });
+
+    expect(await screen.findByText(/unsupported variable/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(composer).toHaveTextContent('@[agent_unresolved-agent]');
+    });
+    expect(screen.queryAllByTestId('chat-message')).toHaveLength(0);
   });
 
   it('browses cached A2A agents in a dialog without sending a chat message', async () => {
@@ -243,20 +413,20 @@ describe('ChatTab', () => {
     expect(screen.queryByRole('dialog', { name: /a2a agents/i })).not.toBeInTheDocument();
   });
 
-  it('exits workflow fullscreen before Escape closes the workflow drawer', () => {
+  it('exits workspace fullscreen before Escape closes the workflow drawer', () => {
     render(<ChatTab agents={[]} />);
 
     fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
-    fireEvent.click(screen.getByRole('button', { name: /enter workflow fullscreen/i }));
+    fireEvent.click(screen.getByRole('button', { name: /enter workspace fullscreen/i }));
 
-    expect(screen.getByTestId('session-workflow')).toHaveClass('w-full');
+    expect(screen.getByTestId('chat-workflow-drawer')).toHaveStyle({ width: '100%' });
     expect(screen.queryByTestId('chat-workspace')).not.toBeInTheDocument();
 
     fireEvent.keyDown(document, { key: 'Escape' });
 
-    expect(screen.getByTestId('session-workflow')).toHaveClass('w-1/2');
+    expect(screen.getByTestId('chat-workflow-drawer')).toHaveStyle({ width: 'calc(50% - 5px)' });
     expect(screen.getByTestId('chat-workspace')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /enter workflow fullscreen/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /enter workspace fullscreen/i })).toBeInTheDocument();
 
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByTestId('session-workflow')).not.toBeInTheDocument();
@@ -274,14 +444,12 @@ describe('ChatTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /expand session sidebar/i }));
     expect(screen.getByText('CENTRAL ARCHIVE')).toBeInTheDocument();
 
-    const initialComposer = screen.getByPlaceholderText(/ask aegis anything/i);
-    expect(initialComposer.tagName).toBe('INPUT');
+    const initialComposer = getComposer();
+    expect(initialComposer.tagName).toBe('DIV');
     fireEvent.click(screen.getByRole('button', { name: /expand composer/i }));
-    expect(screen.getByPlaceholderText(/ask aegis anything/i).tagName).toBe('TEXTAREA');
+    expect(getComposer().tagName).toBe('DIV');
 
-    fireEvent.change(screen.getByPlaceholderText(/ask aegis anything/i), {
-      target: { value: 'hello over websocket' },
-    });
+    setComposerText(getComposer(), 'hello over websocket');
     fireEvent.click(screen.getByRole('button', { name: /发送/i }));
 
     await waitFor(() => {
@@ -522,7 +690,7 @@ describe('ChatTab', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /collapse composer/i }));
-    expect(screen.getByPlaceholderText(/ask aegis anything/i).tagName).toBe('INPUT');
+    expect(getComposer().tagName).toBe('DIV');
 
     const messageCards = screen.getAllByTestId('chat-message');
     const userMessage = messageCards.find((card) => card.getAttribute('data-sender') === 'user');
@@ -624,9 +792,7 @@ describe('ChatTab', () => {
   it('keeps delegate delta text when its stream completes and renders final-only delegate replies', async () => {
     render(<ChatTab agents={[]} />);
 
-    fireEvent.change(screen.getByPlaceholderText(/ask aegis anything/i), {
-      target: { value: 'delegate please' },
-    });
+    setComposerText(getComposer(), 'delegate please');
     fireEvent.click(screen.getByRole('button', { name: /发送/i }));
 
     await waitFor(() => {
@@ -705,9 +871,7 @@ describe('ChatTab', () => {
     render(<ChatTab agents={[]} />);
 
     const submit = (text: string) => {
-      fireEvent.change(screen.getByPlaceholderText(/ask aegis anything/i), {
-        target: { value: text },
-      });
+      setComposerText(getComposer(), text);
       fireEvent.click(screen.getByRole('button', { name: /发送/i }));
     };
 
@@ -892,9 +1056,7 @@ describe('ChatTab', () => {
     render(<ChatTab agents={[]} />);
 
     fireEvent.click(screen.getAllByRole('button', { name: /新建/i })[0]);
-    fireEvent.change(screen.getByPlaceholderText(/ask aegis anything/i), {
-      target: { value: 'start clarify flow' },
-    });
+    setComposerText(getComposer(), 'start clarify flow');
     fireEvent.click(screen.getByRole('button', { name: /发送/i }));
 
     await waitFor(() => {
@@ -950,8 +1112,8 @@ describe('ChatTab', () => {
     expect(await screen.findByRole('button', { name: /other/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /other/i }));
 
-    const composer = screen.getByPlaceholderText(/answer clarify prompt/i);
-    fireEvent.change(composer, { target: { value: 'Need all Linux endpoints.' } });
+    const composer = getComposer();
+    setComposerText(composer, 'Need all Linux endpoints.');
     fireEvent.click(screen.getByRole('button', { name: /发送/i }));
 
     await waitFor(() => {
@@ -1017,7 +1179,7 @@ describe('ChatTab', () => {
     render(<ChatTab agents={[]} />);
 
     const pasted = new File(['png-bytes'], 'pasted.png', { type: 'image/png' });
-    fireEvent.paste(screen.getByPlaceholderText(/ask aegis anything/i), {
+    fireEvent.paste(getComposer(), {
       clipboardData: { files: [pasted] },
     });
 

@@ -13,6 +13,7 @@ from aegis.backend.models import (
     AgentUpsertRequest,
 )
 from aegis.backend.services.agent_service import AgentService
+from aegis.backend.services.chat_quick_command_service import ChatQuickCommandService
 from aegis.backend.services.user_service import UserService
 
 
@@ -20,6 +21,7 @@ def build_agents_router(
     settings: AegisSettings,
     user_service: UserService,
     service: AgentService | None = None,
+    quick_command_service: ChatQuickCommandService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/agents", tags=["agents"])
 
@@ -29,6 +31,10 @@ def build_agents_router(
     def _ensure_admin(request: Request) -> None:
         user, _payload = require_authenticated_user(request, settings, user_service)
         require_admin_user(user)
+
+    def _invalidate_quick_commands() -> None:
+        if quick_command_service is not None:
+            quick_command_service.invalidate_all()
 
     @router.get("", response_model=AgentListResponse)
     async def list_agents(request: Request) -> AgentListResponse:
@@ -47,17 +53,22 @@ def build_agents_router(
     )
     async def create_agent(agent_id: str, body: AgentUpsertRequest, request: Request) -> AgentResponse:
         _ensure_admin(request)
-        return _service().create_agent(agent_id, body)
+        response = _service().create_agent(agent_id, body)
+        _invalidate_quick_commands()
+        return response
 
     @router.put("/{agent_id}", response_model=AgentResponse)
     async def update_agent(agent_id: str, body: AgentUpsertRequest, request: Request) -> AgentResponse:
         _ensure_admin(request)
-        return _service().update_agent(agent_id, body)
+        response = _service().update_agent(agent_id, body)
+        _invalidate_quick_commands()
+        return response
 
     @router.delete("/{agent_id}", response_model=AgentDeleteResponse)
     async def delete_agent(agent_id: str, request: Request) -> AgentDeleteResponse:
         _ensure_admin(request)
         _service().delete_agent(agent_id)
+        _invalidate_quick_commands()
         return AgentDeleteResponse(deleted=True, agent_id=agent_id)
 
     return router

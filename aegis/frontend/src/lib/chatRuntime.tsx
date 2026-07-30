@@ -42,6 +42,11 @@ export type ChatSocketEvent = {
   message?: string;
 };
 
+export interface RejectedChatInput {
+  clientMsgId: string;
+  text: string;
+}
+
 type PendingBoundAction =
   | { type: 'message.send'; text: string; clientMsgId: string; attachments: ChatAttachment[] }
   | { type: 'approval.respond'; choice: 'once' | 'session' | 'always' | 'deny' }
@@ -59,6 +64,7 @@ type ChatRuntimeContextValue = {
   activeConvId: string;
   activeConversation?: Conversation;
   transportError: string;
+  rejectedInput?: RejectedChatInput;
   chatAttentionCount: number;
   setActiveConversation: (conversationId: string) => void;
   createConversation: () => void;
@@ -70,6 +76,7 @@ type ChatRuntimeContextValue = {
   markClarifyAwaitingText: () => void;
   resumeActiveConversation: () => void;
   setTransportError: (message: string) => void;
+  clearRejectedInput: () => void;
 };
 
 const STORAGE_KEY = 'aegis_convs';
@@ -335,6 +342,7 @@ export function AegisChatProvider({
   const [conversations, setConversations] = useState<Conversation[]>(() => loadCachedConversations());
   const [activeConvId, setActiveConvId] = useState<string>(() => loadCachedConversations()[0]?.id || '');
   const [transportError, setTransportError] = useState('');
+  const [rejectedInput, setRejectedInput] = useState<RejectedChatInput>();
   const conversationsRef = useRef<Conversation[]>(conversations);
   const activeConvIdRef = useRef(activeConvId);
   const isChatVisibleRef = useRef(isChatVisible);
@@ -483,6 +491,35 @@ export function AegisChatProvider({
   function handleSocketEvent(localConversationId: string, payload: ChatSocketEvent) {
     const payloadSessionId = payload.session_id;
     if (payload.type === 'error') {
+      const rejectedClientMsgId = payload.client_msg_id;
+      if (rejectedClientMsgId) {
+        const rejectedMessage = conversationsRef.current
+          .find((conversation) =>
+            conversation.id === localConversationId ||
+            (!!payloadSessionId && conversation.sessionId === payloadSessionId),
+          )
+          ?.messages.find((message) => message.clientMsgId === rejectedClientMsgId);
+        if (rejectedMessage) {
+          updateConversations((current) =>
+            current.map((conversation) => {
+              const matched =
+                conversation.id === localConversationId ||
+                (!!payloadSessionId && conversation.sessionId === payloadSessionId);
+              if (!matched) return conversation;
+              return {
+                ...conversation,
+                messages: conversation.messages.filter(
+                  (message) => message.clientMsgId !== rejectedClientMsgId,
+                ),
+              };
+            }),
+          );
+          setRejectedInput({
+            clientMsgId: rejectedClientMsgId,
+            text: rejectedMessage.text,
+          });
+        }
+      }
       setTransportError(payload.message || 'Chat transport error.');
       return;
     }
@@ -799,6 +836,7 @@ export function AegisChatProvider({
     if (!trimmedText && attachments.length === 0) {
       return;
     }
+    const sentText = text.endsWith('\n') ? `${text.trimEnd()}\n` : trimmedText;
     const conversation =
       conversationsRef.current.find((item) => item.id === activeConvIdRef.current) ||
       ensureConversation();
@@ -816,7 +854,7 @@ export function AegisChatProvider({
       id: createMessageId('user'),
       sender: 'user',
       kind: 'chat',
-      text: trimmedText,
+      text: sentText,
       timestamp: formatClock(),
       clientMsgId,
       attachments: attachments.map(({ cache_path: _cachePath, ...summary }): ChatAttachmentSummary => summary),
@@ -850,7 +888,7 @@ export function AegisChatProvider({
           }
         : {
             type: 'message.send' as const,
-            text: trimmedText,
+            text: sentText,
             clientMsgId,
             attachments,
           }),
@@ -868,6 +906,10 @@ export function AegisChatProvider({
       type: 'approval.respond',
       choice,
     });
+  }
+
+  function clearRejectedInput() {
+    setRejectedInput(undefined);
   }
 
   function respondClarify(answer: string) {
@@ -956,6 +998,7 @@ export function AegisChatProvider({
       activeConvId,
       activeConversation,
       transportError,
+      rejectedInput,
       chatAttentionCount,
       setActiveConversation,
       createConversation,
@@ -967,6 +1010,7 @@ export function AegisChatProvider({
       markClarifyAwaitingText,
       resumeActiveConversation,
       setTransportError,
+      clearRejectedInput,
     }),
     [
       activeConvId,
@@ -974,6 +1018,7 @@ export function AegisChatProvider({
       chatAttentionCount,
       conversations,
       transportError,
+      rejectedInput,
     ],
   );
 

@@ -150,6 +150,72 @@ class PromptTemplateDeleteResponse(BaseModel):
     id: str
 
 
+SystemInstructStatus = Literal["enabled", "disabled"]
+
+
+class SystemInstructRequest(BaseModel):
+    """Administrator-managed system instruction payload."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(min_length=1, max_length=128)
+    describe: str = Field(default="", max_length=512)
+    instruct: str = Field(min_length=1, max_length=50_000)
+    status: SystemInstructStatus = "enabled"
+
+    @field_validator("name", "instruct", mode="before")
+    @classmethod
+    def require_nonblank_value(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("Value must not be blank.")
+        return normalized
+
+    @field_validator("describe", mode="before")
+    @classmethod
+    def normalize_description(cls, value: str | None) -> str:
+        return str(value or "").strip()
+
+
+class SystemInstructResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    name: str
+    describe: str
+    instruct: str
+    create_time: str
+    update_time: str
+    status: SystemInstructStatus
+
+
+class SystemInstructListResponse(BaseModel):
+    instructions: list[SystemInstructResponse] = Field(default_factory=list)
+
+
+class SystemInstructDeleteResponse(BaseModel):
+    deleted: bool
+    id: str
+
+
+ChatQuickCommandType = Literal["agent", "prompt", "instruct"]
+
+
+class ChatQuickCommandResponse(BaseModel):
+    """One composer shortcut available to the authenticated chat user."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: ChatQuickCommandType
+    name: str
+    desc: str
+    content: str
+
+
+class ChatQuickCommandListResponse(BaseModel):
+    commands: list[ChatQuickCommandResponse] = Field(default_factory=list)
+
+
 class UserManualSummary(BaseModel):
     """One published, read-only Markdown manual."""
 

@@ -799,6 +799,125 @@ def test_chat_ws_binds_and_streams_main_agent_events(
             assert completed["content"] == "hello world: hello aegis"
 
 
+def test_chat_ws_resolves_cached_quick_command_tokens_before_running_the_agent(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
+    monkeypatch.setenv("USE_ACTIVE_AGENT_PROMPT", "Delegate to {agent_name} as {name}.")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    received_messages: list[str] = []
+
+    class _CapturingAgent(_StreamingAgent):
+        def run_conversation(self, user_message: str, **kwargs) -> dict[str, Any]:
+            received_messages.append(user_message)
+            return super().run_conversation(user_message, **kwargs)
+
+    app.state.chat_manager.set_agent_factory(lambda session_id: _CapturingAgent(session_id))
+
+    with TestClient(app) as client:
+        headers = {"Authorization": f"Bearer {AUTH_TOKEN}"}
+        assert client.post(
+            "/api/agents/incident-responder",
+            headers=headers,
+            json={
+                "url": "http://127.0.0.1:9086/a2a",
+                "description": "Investigates incidents.",
+                "headers": {},
+                "status": "active",
+                "extcapabilities": [],
+            },
+        ).status_code == 201
+        assert client.post(
+            "/api/prompt-templates",
+            headers=headers,
+            json={"tag": "Triage", "desc": "Classifies alerts.", "prompt": "Classify the alert."},
+        ).status_code == 201
+        assert client.post(
+            "/api/system-instructs",
+            headers=headers,
+            json={
+                "name": "Evidence",
+                "describe": "Preserve evidence.",
+                "instruct": "Do not alter originals.",
+                "status": "enabled",
+            },
+        ).status_code == 201
+
+        with client.websocket_connect(f"/api/chat/ws?token={AUTH_TOKEN}") as ws:
+            ws.send_json({"type": "session.bind", "title": "Quick commands"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "client_msg_id": "quick-command-1",
+                    "text": "@[agent_incident-responder] @[prompt_Triage] @[instruct_Evidence]Review.",
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            completed = _recv_until(ws, "message.completed")
+
+    expected = "Delegate to incident-responder as incident-responder. Classify the alert. Do not alter originals.\nReview."
+    assert received_messages == [expected]
+    assert completed["content"] == f"hello world: {expected}"
+
+
+def test_chat_ws_rejects_unsupported_agent_template_variables_before_a_turn_starts(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
+    monkeypatch.setenv("USE_ACTIVE_AGENT_PROMPT", "Delegate {name} in {region}.")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    received_messages: list[str] = []
+
+    class _CapturingAgent(_StreamingAgent):
+        def run_conversation(self, user_message: str, **kwargs) -> dict[str, Any]:
+            received_messages.append(user_message)
+            return super().run_conversation(user_message, **kwargs)
+
+    app.state.chat_manager.set_agent_factory(lambda session_id: _CapturingAgent(session_id))
+
+    with TestClient(app) as client:
+        headers = {"Authorization": f"Bearer {AUTH_TOKEN}"}
+        assert client.post(
+            "/api/agents/unresolved-agent",
+            headers=headers,
+            json={
+                "url": "http://127.0.0.1:9088/a2a",
+                "description": "Has an unsupported template variable.",
+                "headers": {},
+                "status": "active",
+                "extcapabilities": [],
+            },
+        ).status_code == 201
+        with client.websocket_connect(f"/api/chat/ws?token={AUTH_TOKEN}") as ws:
+            ws.send_json({"type": "session.bind", "title": "Invalid quick command"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "client_msg_id": "quick-command-invalid",
+                    "text": "@[agent_unresolved-agent]",
+                }
+            )
+            error = _recv_until(ws, "error")
+
+    assert error == {
+        "type": "error",
+        "code": "invalid_quick_command",
+        "message": "Agent command \u201cunresolved-agent\u201d contains unsupported variable: {region}.",
+        "client_msg_id": "quick-command-invalid",
+    }
+    assert received_messages == []
+
+
 def test_chat_ws_starts_new_main_message_after_a2a_delegate_completion(
     load_backend,
     monkeypatch,

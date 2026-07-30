@@ -46,6 +46,13 @@ import {
   useOptionalAegisChatRuntime,
 } from "../lib/chatRuntime";
 import { fetchJSON, getApiErrorMessage } from "../lib/api";
+import {
+  findShortcutQuery,
+  quickCommandToken,
+  type ChatQuickCommand,
+  type ChatQuickCommandListResponse,
+  type ShortcutQuery,
+} from "../lib/chatQuickCommands";
 import SessionWorkflow from "./SessionWorkflow";
 
 interface ChatTabProps {
@@ -62,6 +69,93 @@ interface PendingAttachment {
   attachment?: ChatAttachment;
   status: "uploading" | "ready" | "failed";
   error?: string;
+}
+
+type WorkflowDrawerTab = "workflow" | "architecture";
+
+const WORKFLOW_DRAWER_WIDTH_STORAGE_KEY = "aegis_chat_workflow_drawer_width";
+const DEFAULT_WORKFLOW_DRAWER_WIDTH = 50;
+const MIN_WORKSPACE_PANE_WIDTH = 360;
+const ARCHITECTURE_SHOWCASE_FILE =
+  "2026-06-07-aegis-architecture-showcase.html";
+
+function drawerWidthBounds(containerWidth: number) {
+  if (!containerWidth || containerWidth <= MIN_WORKSPACE_PANE_WIDTH * 2) {
+    return { min: 20, max: 80 };
+  }
+  return {
+    min: Math.max(20, (MIN_WORKSPACE_PANE_WIDTH / containerWidth) * 100),
+    max: Math.min(80, 100 - (MIN_WORKSPACE_PANE_WIDTH / containerWidth) * 100),
+  };
+}
+
+function clampDrawerWidth(width: number, containerWidth: number): number {
+  const { min, max } = drawerWidthBounds(containerWidth);
+  return Math.min(max, Math.max(min, width));
+}
+
+interface QuickCommandTypeIconProps {
+  type: ChatQuickCommand["type"];
+}
+
+function QuickCommandTypeIcon({ type }: QuickCommandTypeIconProps) {
+  const iconClassName = "h-3.5 w-3.5";
+  if (type === "agent") return <Bot className={iconClassName} aria-hidden="true" />;
+  if (type === "prompt") return <Code2 className={iconClassName} aria-hidden="true" />;
+  return <ShieldAlert className={iconClassName} aria-hidden="true" />;
+}
+
+function loadWorkflowDrawerWidth(): number {
+  const rawValue = window.localStorage.getItem(WORKFLOW_DRAWER_WIDTH_STORAGE_KEY);
+  if (rawValue === null) {
+    return DEFAULT_WORKFLOW_DRAWER_WIDTH;
+  }
+  const stored = Number(rawValue);
+  if (!Number.isFinite(stored)) {
+    return DEFAULT_WORKFLOW_DRAWER_WIDTH;
+  }
+  return clampDrawerWidth(stored, window.innerWidth);
+}
+
+interface ArchitecturePreviewProps {
+  title: string;
+  content: string;
+  loading: boolean;
+  error: string;
+}
+
+function ArchitecturePreview({
+  title,
+  content,
+  loading,
+  error,
+}: ArchitecturePreviewProps) {
+  if (loading) {
+    return (
+      <div className="aegis-drawer-preview__status" role="status">
+        LOADING ARCHITECTURE SHOWCASE…
+      </div>
+    );
+  }
+  if (error) {
+    return (
+      <div className="aegis-alert aegis-alert--danger m-4" role="alert">
+        {error}
+      </div>
+    );
+  }
+  if (!content) {
+    return null;
+  }
+  return (
+    <iframe
+      title={title || "Aegis architecture showcase"}
+      data-testid="architecture-showcase-frame"
+      className="aegis-drawer-preview__frame"
+      sandbox="allow-scripts"
+      srcDoc={content}
+    />
+  );
 }
 
 function ChatMarkdown({ content }: { content: string }) {
@@ -318,6 +412,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
     activeConvId,
     activeConversation,
     transportError,
+    rejectedInput,
     setActiveConversation,
     createConversation,
     clearHistory,
@@ -328,6 +423,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
     markClarifyAwaitingText,
     resumeActiveConversation,
     setTransportError,
+    clearRejectedInput,
   } = useAegisChatRuntime();
   const [inputVal, setInputVal] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -344,6 +440,16 @@ function ChatTabContent({ agents }: ChatTabProps) {
   >("announce");
   const [workflowDrawerOpen, setWorkflowDrawerOpen] = useState(false);
   const [workflowFullscreen, setWorkflowFullscreen] = useState(false);
+  const [workflowDrawerTab, setWorkflowDrawerTab] =
+    useState<WorkflowDrawerTab>("workflow");
+  const [workflowDrawerWidth, setWorkflowDrawerWidth] = useState(
+    loadWorkflowDrawerWidth,
+  );
+  const [workflowDrawerResizing, setWorkflowDrawerResizing] = useState(false);
+  const [architectureTitle, setArchitectureTitle] = useState("");
+  const [architectureHtml, setArchitectureHtml] = useState("");
+  const [architectureLoading, setArchitectureLoading] = useState(false);
+  const [architectureError, setArchitectureError] = useState("");
   const [promptTemplateDrawerOpen, setPromptTemplateDrawerOpen] =
     useState(false);
   const [promptTemplates, setPromptTemplates] = useState<PromptTemplate[]>([]);
@@ -359,10 +465,22 @@ function ChatTabContent({ agents }: ChatTabProps) {
   const [pendingAttachments, setPendingAttachments] = useState<
     PendingAttachment[]
   >([]);
+  const [quickCommands, setQuickCommands] = useState<ChatQuickCommand[]>([]);
+  const [quickCommandsLoaded, setQuickCommandsLoaded] = useState(false);
+  const [quickCommandsLoading, setQuickCommandsLoading] = useState(false);
+  const [quickCommandsError, setQuickCommandsError] = useState("");
+  const [shortcutQuery, setShortcutQuery] = useState<ShortcutQuery | null>(null);
+  const [activeQuickCommandIndex, setActiveQuickCommandIndex] = useState(0);
   const bottomRef = useRef<HTMLDivElement>(null);
   const copyFeedbackTimeoutRef = useRef<number | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const pendingAttachmentsRef = useRef<PendingAttachment[]>([]);
+  const chatWorkspaceRef = useRef<HTMLDivElement>(null);
+  const drawerResizePointerRef = useRef<number | null>(null);
+  const composerInputRef = useRef<HTMLDivElement>(null);
+  const composerDomValueRef = useRef("");
+  const shortcutQueryRef = useRef<ShortcutQuery | null>(null);
+  const pendingComposerCaretRef = useRef<number | null>(null);
 
   useEffect(() => {
     return () => {
@@ -388,6 +506,129 @@ function ChatTabContent({ agents }: ChatTabProps) {
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [conversations, activeConvId]);
+
+  function syncRichComposer(text: string) {
+    const composer = composerInputRef.current;
+    if (!composer) return;
+    const knownTokens = new Set(quickCommands.map(quickCommandToken));
+    const tokenPattern = /@\[(?:agent|prompt|instruct)_[^\]]+\]/g;
+    const fragment = document.createDocumentFragment();
+    let cursor = 0;
+    let match: RegExpExecArray | null;
+    while ((match = tokenPattern.exec(text)) !== null) {
+      if (match.index > cursor) {
+        fragment.append(document.createTextNode(text.slice(cursor, match.index)));
+      }
+      const token = match[0];
+      if (knownTokens.has(token)) {
+        const strong = document.createElement("strong");
+        strong.className = "aegis-shortcut-token";
+        strong.contentEditable = "false";
+        strong.dataset.shortcutToken = token;
+        const underline = document.createElement("u");
+        underline.textContent = token;
+        strong.append(underline);
+        fragment.append(strong);
+      } else {
+        fragment.append(document.createTextNode(token));
+      }
+      cursor = match.index + token.length;
+    }
+    if (cursor < text.length) fragment.append(document.createTextNode(text.slice(cursor)));
+    composer.replaceChildren(fragment);
+    composerDomValueRef.current = text;
+  }
+
+  function getComposerCaretOffset(): number | null {
+    const composer = composerInputRef.current;
+    const selection = window.getSelection();
+    if (!composer || !selection?.rangeCount || !composer.contains(selection.anchorNode)) {
+      return null;
+    }
+    const range = document.createRange();
+    range.selectNodeContents(composer);
+    range.setEnd(selection.anchorNode, selection.anchorOffset);
+    return range.toString().length;
+  }
+
+  function setComposerCaret(offset: number) {
+    const composer = composerInputRef.current;
+    if (!composer) return;
+    const range = document.createRange();
+    const walker = document.createTreeWalker(composer, NodeFilter.SHOW_TEXT);
+    let remaining = offset;
+    let node = walker.nextNode();
+    while (node) {
+      const length = node.textContent?.length || 0;
+      if (remaining <= length) {
+        range.setStart(node, remaining);
+        range.collapse(true);
+        const selection = window.getSelection();
+        selection?.removeAllRanges();
+        selection?.addRange(range);
+        return;
+      }
+      remaining -= length;
+      node = walker.nextNode();
+    }
+    range.selectNodeContents(composer);
+    range.collapse(false);
+    const selection = window.getSelection();
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+  }
+
+  useEffect(() => {
+    if (composerDomValueRef.current !== inputVal) {
+      syncRichComposer(inputVal);
+    }
+    const caret = pendingComposerCaretRef.current;
+    if (caret === null) return;
+    pendingComposerCaretRef.current = null;
+    composerInputRef.current?.focus();
+    setComposerCaret(caret);
+  }, [inputVal, quickCommands]);
+
+  useEffect(() => {
+    if (!rejectedInput) return;
+    pendingComposerCaretRef.current = rejectedInput.text.length;
+    setInputVal((current) => current || rejectedInput.text);
+    shortcutQueryRef.current = null;
+    setShortcutQuery(null);
+    clearRejectedInput();
+  }, [clearRejectedInput, rejectedInput]);
+
+  useEffect(() => {
+    if (
+      shortcutQuery === null ||
+      quickCommandsLoaded
+    ) {
+      return;
+    }
+    let cancelled = false;
+    setQuickCommandsLoading(true);
+    setQuickCommandsError("");
+    void fetchJSON<ChatQuickCommandListResponse>("/api/chat/quick-commands")
+      .then((response) => {
+        if (!cancelled) {
+          setQuickCommands(response.commands);
+          setQuickCommandsLoaded(true);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setQuickCommandsError(
+            getApiErrorMessage(error, "Unable to load quick commands."),
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setQuickCommandsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [quickCommandsLoaded, shortcutQuery === null]);
 
   const sessionStatus = buildSessionStatus(activeConversation);
   const sessionStatusNeedsMarquee = sessionStatus.length > 36;
@@ -420,6 +661,61 @@ function ChatTabContent({ agents }: ChatTabProps) {
   }, [workflowDrawerOpen, workflowFullscreen]);
 
   useEffect(() => {
+    if (!workflowDrawerOpen || workflowDrawerTab !== "architecture") {
+      return;
+    }
+    if (architectureHtml || architectureLoading) {
+      return;
+    }
+
+    let cancelled = false;
+    setArchitectureLoading(true);
+    setArchitectureError("");
+    void fetchJSON<{ title: string; content: string }>(
+      `/api/chat/drawer-html?path=${encodeURIComponent(ARCHITECTURE_SHOWCASE_FILE)}`,
+    )
+      .then(({ title, content }) => {
+        if (!cancelled) {
+          setArchitectureTitle(title);
+          setArchitectureHtml(content);
+        }
+      })
+      .catch((error: unknown) => {
+        if (!cancelled) {
+          setArchitectureError(
+            getApiErrorMessage(error, "Unable to load the architecture showcase."),
+          );
+        }
+      })
+      .finally(() => {
+        if (!cancelled) {
+          setArchitectureLoading(false);
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [architectureHtml, workflowDrawerOpen, workflowDrawerTab]);
+
+  useEffect(() => {
+    window.localStorage.setItem(
+      WORKFLOW_DRAWER_WIDTH_STORAGE_KEY,
+      String(workflowDrawerWidth),
+    );
+  }, [workflowDrawerWidth]);
+
+  useEffect(() => {
+    const clampStoredDrawerWidth = () => {
+      const containerWidth = chatWorkspaceRef.current?.clientWidth || window.innerWidth;
+      setWorkflowDrawerWidth((current) =>
+        clampDrawerWidth(current, containerWidth),
+      );
+    };
+    window.addEventListener("resize", clampStoredDrawerWidth);
+    return () => window.removeEventListener("resize", clampStoredDrawerWidth);
+  }, []);
+
+  useEffect(() => {
     if (!a2aDialogOpen) {
       return;
     }
@@ -434,12 +730,79 @@ function ChatTabContent({ agents }: ChatTabProps) {
 
   function closeWorkflow() {
     setWorkflowFullscreen(false);
+    setWorkflowDrawerTab("workflow");
     setWorkflowDrawerOpen(false);
   }
 
   function openWorkflowFromSessionStatus() {
     setWorkflowFullscreen(false);
+    setWorkflowDrawerTab("workflow");
     setWorkflowDrawerOpen(true);
+  }
+
+  function setDrawerWidthFromPointer(clientX: number) {
+    const bounds = chatWorkspaceRef.current?.getBoundingClientRect();
+    if (!bounds?.width || !Number.isFinite(clientX)) {
+      return;
+    }
+    const nextWidth = ((clientX - bounds.left) / bounds.width) * 100;
+    setWorkflowDrawerWidth(clampDrawerWidth(nextWidth, bounds.width));
+  }
+
+  function handleDrawerResizePointerDown(
+    event: React.PointerEvent<HTMLDivElement>,
+  ) {
+    const pointerId = event.pointerId ?? 0;
+    drawerResizePointerRef.current = pointerId;
+    setWorkflowDrawerResizing(true);
+    event.currentTarget.setPointerCapture?.(pointerId);
+    setDrawerWidthFromPointer(event.clientX);
+  }
+
+  function handleDrawerResizePointerMove(
+    event: React.PointerEvent<HTMLDivElement>,
+  ) {
+    if (drawerResizePointerRef.current === (event.pointerId ?? 0)) {
+      setDrawerWidthFromPointer(event.clientX);
+    }
+  }
+
+  function handleDrawerResizePointerUp(
+    event: React.PointerEvent<HTMLDivElement>,
+  ) {
+    const pointerId = event.pointerId ?? 0;
+    if (drawerResizePointerRef.current !== pointerId) {
+      return;
+    }
+    drawerResizePointerRef.current = null;
+    setWorkflowDrawerResizing(false);
+    event.currentTarget.releasePointerCapture?.(pointerId);
+  }
+
+  function handleDrawerResizeKeyDown(
+    event: React.KeyboardEvent<HTMLDivElement>,
+  ) {
+    const bounds = chatWorkspaceRef.current?.getBoundingClientRect();
+    const containerWidth = bounds?.width || window.innerWidth;
+    const { min, max } = drawerWidthBounds(containerWidth);
+    const increment = event.shiftKey ? 5 : 1;
+    if (event.key === "ArrowRight") {
+      event.preventDefault();
+      setWorkflowDrawerWidth((current) =>
+        clampDrawerWidth(current + increment, containerWidth),
+      );
+    } else if (event.key === "ArrowLeft") {
+      event.preventDefault();
+      setWorkflowDrawerWidth((current) =>
+        clampDrawerWidth(current - increment, containerWidth),
+      );
+    } else if (event.key === "Home") {
+      event.preventDefault();
+      setWorkflowDrawerWidth(min);
+    } else if (event.key === "End") {
+      event.preventDefault();
+      setWorkflowDrawerWidth(max);
+    }
   }
 
   function handleSessionStatusKeyDown(
@@ -471,6 +834,73 @@ function ChatTabContent({ agents }: ChatTabProps) {
     deleteConversation(id);
   }
 
+  function updateShortcutQuery(value: string, caret: number | null) {
+    const nextQuery =
+      findShortcutQuery(value, caret ?? value.length) ||
+      (caret !== value.length ? findShortcutQuery(value, value.length) : null);
+    const previousQuery = shortcutQueryRef.current;
+    const queryChanged =
+      previousQuery?.query !== nextQuery?.query ||
+      previousQuery?.start !== nextQuery?.start ||
+      previousQuery?.end !== nextQuery?.end;
+    shortcutQueryRef.current = nextQuery;
+    setShortcutQuery(nextQuery);
+    if (queryChanged) setActiveQuickCommandIndex(0);
+  }
+
+  function handleComposerInput(event: React.FormEvent<HTMLDivElement>) {
+    const value = (event.currentTarget.textContent || "").replace(/\u00a0/g, " ");
+    composerDomValueRef.current = value;
+    setInputVal(value);
+    updateShortcutQuery(value, getComposerCaretOffset());
+  }
+
+  function handleComposerSelect() {
+    updateShortcutQuery(inputVal, getComposerCaretOffset());
+  }
+
+  const matchingQuickCommands = shortcutQuery
+    ? quickCommands.filter((command) => {
+        const query = shortcutQuery.query.toLocaleLowerCase();
+        return [command.type, command.name, command.desc]
+          .join(" ")
+          .toLocaleLowerCase()
+          .includes(query);
+      })
+    : [];
+
+  function selectQuickCommand(command: ChatQuickCommand) {
+    const query = shortcutQuery;
+    if (!query) return;
+    const token = quickCommandToken(command);
+    const nextValue = `${inputVal.slice(0, query.start)}${token} ${inputVal.slice(query.end)}`;
+    const nextCaret = query.start + token.length + 1;
+    pendingComposerCaretRef.current = nextCaret;
+    setInputVal(nextValue);
+    shortcutQueryRef.current = null;
+    setShortcutQuery(null);
+  }
+
+  function removeTokenBeforeCaret(): boolean {
+    const selection = window.getSelection();
+    const caret = getComposerCaretOffset();
+    if (caret === null || !selection?.isCollapsed) return false;
+    const trailingSpaceLength = inputVal[caret - 1] === " " ? 1 : 0;
+    const tokenEnd = caret - trailingSpaceLength;
+    const matchingToken = quickCommands
+      .map(quickCommandToken)
+      .sort((left, right) => right.length - left.length)
+      .find((token) => inputVal.slice(0, tokenEnd).endsWith(token));
+    if (!matchingToken) return false;
+    const tokenStart = tokenEnd - matchingToken.length;
+    const nextValue = `${inputVal.slice(0, tokenStart)}${inputVal.slice(caret)}`;
+    pendingComposerCaretRef.current = tokenStart;
+    setInputVal(nextValue);
+    shortcutQueryRef.current = null;
+    setShortcutQuery(null);
+    return true;
+  }
+
   function handleSubmit() {
     const attachments = pendingAttachments
       .filter(
@@ -482,6 +912,8 @@ function ChatTabContent({ agents }: ChatTabProps) {
     }
     submitInput(inputVal, attachments);
     setInputVal("");
+    shortcutQueryRef.current = null;
+    setShortcutQuery(null);
     clearPendingAttachments();
   }
 
@@ -576,14 +1008,36 @@ function ChatTabContent({ agents }: ChatTabProps) {
   }
 
   function handleComposerPaste(
-    event: React.ClipboardEvent<HTMLInputElement | HTMLTextAreaElement>,
+    event: React.ClipboardEvent<HTMLDivElement>,
   ) {
     const images = Array.from(event.clipboardData.files).filter((file) =>
       file.type.startsWith("image/"),
     );
-    if (images.length === 0) return;
+    if (images.length > 0) {
+      event.preventDefault();
+      queueAttachments(images);
+      return;
+    }
+    const pastedText = event.clipboardData.getData("text/plain");
+    if (!pastedText) return;
     event.preventDefault();
-    queueAttachments(images);
+    const selection = window.getSelection();
+    const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+    if (!range) return;
+    range.deleteContents();
+    const textNode = document.createTextNode(pastedText);
+    range.insertNode(textNode);
+    range.setStartAfter(textNode);
+    range.collapse(true);
+    selection?.removeAllRanges();
+    selection?.addRange(range);
+    const composer = composerInputRef.current;
+    if (composer) {
+      const value = (composer.textContent || "").replace(/\u00a0/g, " ");
+      composerDomValueRef.current = value;
+      setInputVal(value);
+      updateShortcutQuery(value, getComposerCaretOffset());
+    }
   }
 
   function handleApproval(choice: "once" | "session" | "always" | "deny") {
@@ -672,8 +1126,42 @@ function ChatTabContent({ agents }: ChatTabProps) {
   }
 
   function handleComposerKeyDown(
-    event: React.KeyboardEvent<HTMLInputElement | HTMLTextAreaElement>,
+    event: React.KeyboardEvent<HTMLDivElement>,
   ) {
+    if (shortcutQuery) {
+      if (event.key === "ArrowDown" && matchingQuickCommands.length > 0) {
+        event.preventDefault();
+        setActiveQuickCommandIndex((current) =>
+          (current + 1) % matchingQuickCommands.length,
+        );
+        return;
+      }
+      if (event.key === "ArrowUp" && matchingQuickCommands.length > 0) {
+        event.preventDefault();
+        setActiveQuickCommandIndex((current) =>
+          (current - 1 + matchingQuickCommands.length) % matchingQuickCommands.length,
+        );
+        return;
+      }
+      if (
+        (event.key === "Enter" || event.key === "Tab") &&
+        matchingQuickCommands[activeQuickCommandIndex]
+      ) {
+        event.preventDefault();
+        selectQuickCommand(matchingQuickCommands[activeQuickCommandIndex]);
+        return;
+      }
+      if (event.key === "Escape") {
+        event.preventDefault();
+        shortcutQueryRef.current = null;
+        setShortcutQuery(null);
+        return;
+      }
+    }
+    if (event.key === "Backspace" && removeTokenBeforeCaret()) {
+      event.preventDefault();
+      return;
+    }
     if (!composerExpanded && event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
       handleSubmit();
@@ -686,6 +1174,27 @@ function ChatTabContent({ agents }: ChatTabProps) {
     ) {
       event.preventDefault();
       handleSubmit();
+      return;
+    }
+    if (composerExpanded && event.key === "Enter") {
+      event.preventDefault();
+      const selection = window.getSelection();
+      const range = selection?.rangeCount ? selection.getRangeAt(0) : null;
+      if (!range) return;
+      range.deleteContents();
+      const lineBreak = document.createTextNode("\n");
+      range.insertNode(lineBreak);
+      range.setStartAfter(lineBreak);
+      range.collapse(true);
+      selection?.removeAllRanges();
+      selection?.addRange(range);
+      const composer = composerInputRef.current;
+      if (composer) {
+        const value = (composer.textContent || "").replace(/\u00a0/g, " ");
+        composerDomValueRef.current = value;
+        setInputVal(value);
+        updateShortcutQuery(value, getComposerCaretOffset());
+      }
     }
   }
 
@@ -717,11 +1226,12 @@ function ChatTabContent({ agents }: ChatTabProps) {
   }, {});
   return (
     <div
+      ref={chatWorkspaceRef}
       className={`flex bg-[#020408] items-stretch overflow-hidden text-xs ${
         workflowDrawerOpen
           ? "fixed inset-0 z-50 h-screen w-screen"
           : "h-full w-full"
-      }`}
+      } ${workflowDrawerResizing ? "aegis-chat-workspace--resizing" : ""}`}
     >
       {!workflowDrawerOpen ? (
         <div
@@ -768,6 +1278,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
                   aria-pressed={workflowDrawerOpen}
                   onClick={() => {
                     setWorkflowFullscreen(false);
+                    setWorkflowDrawerTab("workflow");
                     setWorkflowDrawerOpen(true);
                   }}
                   className="p-2 rounded border border-slate-800 bg-[#080C14] text-slate-400 hover:text-cyan-300 hover:border-cyan-900/50 transition-all"
@@ -908,18 +1419,152 @@ function ChatTabContent({ agents }: ChatTabProps) {
       ) : null}
 
       {workflowDrawerOpen ? (
-        <SessionWorkflow
-          conversation={activeConversation}
-          fullscreen={workflowFullscreen}
-          onFullscreenChange={setWorkflowFullscreen}
-          onClose={closeWorkflow}
+        <aside
+          className="aegis-chat-drawer order-1 flex h-full min-w-0 shrink-0 flex-col"
+          style={{
+            width: workflowFullscreen
+              ? "100%"
+              : `calc(${workflowDrawerWidth}% - 5px)`,
+          }}
+          data-testid="chat-workflow-drawer"
+        >
+          <header className="aegis-chat-drawer__header">
+            <div
+              aria-label="Chat workspace panels"
+              className="aegis-chat-drawer__tabs"
+              role="tablist"
+            >
+              <button
+                aria-controls="chat-workflow-panel"
+                aria-selected={workflowDrawerTab === "workflow"}
+                className={`aegis-chat-drawer__tab ${
+                  workflowDrawerTab === "workflow"
+                    ? "aegis-chat-drawer__tab--active"
+                    : ""
+                }`}
+                id="chat-workflow-tab"
+                onClick={() => setWorkflowDrawerTab("workflow")}
+                role="tab"
+                type="button"
+              >
+                <Workflow aria-hidden="true" className="h-3.5 w-3.5" />
+                <span>SESSION WORKFLOW</span>
+              </button>
+              <button
+                aria-controls="chat-architecture-panel"
+                aria-selected={workflowDrawerTab === "architecture"}
+                className={`aegis-chat-drawer__tab ${
+                  workflowDrawerTab === "architecture"
+                    ? "aegis-chat-drawer__tab--active"
+                    : ""
+                }`}
+                id="chat-architecture-tab"
+                onClick={() => setWorkflowDrawerTab("architecture")}
+                role="tab"
+                type="button"
+              >
+                <FileText aria-hidden="true" className="h-3.5 w-3.5" />
+                <span>ARCHITECTURE TEST</span>
+              </button>
+            </div>
+            <div className="ml-auto flex shrink-0 items-center gap-1">
+              <button
+                type="button"
+                aria-label="Enter workspace fullscreen"
+                onClick={() => setWorkflowFullscreen(true)}
+                className="aegis-chat-drawer__icon-button"
+                disabled={workflowFullscreen}
+                title="Fullscreen"
+              >
+                <Maximize2 className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                aria-label="Exit workspace fullscreen"
+                onClick={() => setWorkflowFullscreen(false)}
+                className="aegis-chat-drawer__icon-button"
+                disabled={!workflowFullscreen}
+                title="Restore split view"
+              >
+                <Minimize2 className="h-3.5 w-3.5" />
+              </button>
+              <button
+                type="button"
+                aria-label="Close workflow visualization"
+                onClick={closeWorkflow}
+                className="aegis-chat-drawer__icon-button"
+                title="Close workspace drawer"
+              >
+                <X className="h-4 w-4" aria-hidden="true" />
+              </button>
+            </div>
+          </header>
+          <div className="min-h-0 flex-1">
+            <div
+              aria-labelledby="chat-workflow-tab"
+              className="h-full"
+              hidden={workflowDrawerTab !== "workflow"}
+              id="chat-workflow-panel"
+              role="tabpanel"
+            >
+              <SessionWorkflow
+                conversation={activeConversation}
+                fullscreen={workflowFullscreen}
+                onFullscreenChange={setWorkflowFullscreen}
+                showHeader={false}
+              />
+            </div>
+            <div
+              aria-labelledby="chat-architecture-tab"
+              className="aegis-drawer-preview h-full"
+              hidden={workflowDrawerTab !== "architecture"}
+              id="chat-architecture-panel"
+              role="tabpanel"
+            >
+              <ArchitecturePreview
+                content={architectureHtml}
+                error={architectureError}
+                loading={architectureLoading}
+                title={architectureTitle}
+              />
+            </div>
+          </div>
+        </aside>
+      ) : null}
+
+      {workflowDrawerOpen && !workflowFullscreen ? (
+        <div
+          aria-label="Resize chat workspace panels"
+          aria-orientation="vertical"
+          aria-valuemax={Math.round(
+            drawerWidthBounds(chatWorkspaceRef.current?.clientWidth || window.innerWidth)
+              .max,
+          )}
+          aria-valuemin={Math.round(
+            drawerWidthBounds(chatWorkspaceRef.current?.clientWidth || window.innerWidth)
+              .min,
+          )}
+          aria-valuenow={Math.round(workflowDrawerWidth)}
+          className="aegis-chat-drawer__splitter order-2"
+          onKeyDown={handleDrawerResizeKeyDown}
+          onPointerDown={handleDrawerResizePointerDown}
+          onPointerMove={handleDrawerResizePointerMove}
+          onPointerUp={handleDrawerResizePointerUp}
+          onPointerCancel={handleDrawerResizePointerUp}
+          role="separator"
+          tabIndex={0}
         />
       ) : null}
 
       {!workflowFullscreen ? (
         <div
           data-testid="chat-workspace"
-          className={`${workflowDrawerOpen ? "w-1/2 shrink-0" : "flex-1"} flex flex-col h-full min-w-0 bg-[#020408] relative ${composerExpanded ? "pb-32" : "pb-16"}`}
+          className={`${workflowDrawerOpen ? "order-3 shrink-0" : "flex-1"} flex flex-col h-full min-w-0 bg-[#020408] relative ${composerExpanded ? "pb-32" : "pb-16"}`}
+          style={
+            workflowDrawerOpen
+              ? { width: `calc(${100 - workflowDrawerWidth}% - 5px)` }
+              : undefined
+          }
         >
           <div className="min-h-16 p-4 border-b border-slate-800 bg-[#03060C] flex items-center gap-3">
             <h3
@@ -1451,36 +2096,82 @@ function ChatTabContent({ agents }: ChatTabProps) {
                 </button>
 
                 <div className="relative min-w-0 flex-1">
-                  {composerExpanded ? (
-                    <textarea
-                      value={inputVal}
-                      onChange={(event) => setInputVal(event.target.value)}
+                  <div className={`aegis-shortcut-composer ${composerExpanded ? "aegis-shortcut-composer--expanded" : ""}`}>
+                    <div
+                      ref={composerInputRef}
+                      aria-autocomplete="list"
+                      aria-activedescendant={
+                        shortcutQuery && matchingQuickCommands.length > 0
+                          ? `chat-quick-command-option-${activeQuickCommandIndex}`
+                          : undefined
+                      }
+                      aria-controls={shortcutQuery ? "chat-quick-command-listbox" : undefined}
+                      aria-expanded={Boolean(shortcutQuery)}
+                      aria-label="Chat message"
+                      aria-multiline="true"
+                      aria-placeholder={composerPlaceholder}
+                      aria-disabled={isConversationBusy(activeConversation)}
+                      className="aegis-shortcut-composer__input"
+                      contentEditable={!isConversationBusy(activeConversation)}
+                      data-placeholder={composerPlaceholder}
                       onKeyDown={handleComposerKeyDown}
+                      onInput={handleComposerInput}
                       onPaste={handleComposerPaste}
-                      disabled={isConversationBusy(activeConversation)}
-                      placeholder={composerPlaceholder}
-                      rows={4}
-                      className="w-full resize-none bg-[#020408] border border-slate-800 rounded px-3 py-2 pr-10 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500"
+                      onSelect={handleComposerSelect}
+                      role="combobox"
+                      suppressContentEditableWarning
                     />
-                  ) : (
-                    <input
-                      type="text"
-                      value={inputVal}
-                      onChange={(event) => setInputVal(event.target.value)}
-                      onKeyDown={handleComposerKeyDown}
-                      onPaste={handleComposerPaste}
-                      disabled={isConversationBusy(activeConversation)}
-                      placeholder={composerPlaceholder}
-                      className="w-full bg-[#020408] border border-slate-800 rounded px-3 py-2 pr-10 text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-500"
-                    />
-                  )}
+                  </div>
+                  {shortcutQuery ? (
+                    <div
+                      id="chat-quick-command-listbox"
+                      role="listbox"
+                      aria-label="Available quick commands"
+                      className="aegis-quick-command-menu"
+                    >
+                      {quickCommandsLoading ? (
+                        <div className="aegis-quick-command-menu__status" role="status">
+                          LOADING QUICK COMMANDS…
+                        </div>
+                      ) : null}
+                      {quickCommandsError ? (
+                        <div className="aegis-quick-command-menu__status aegis-quick-command-menu__status--error" role="alert">
+                          {quickCommandsError}
+                        </div>
+                      ) : null}
+                      {!quickCommandsLoading && !quickCommandsError && matchingQuickCommands.length === 0 ? (
+                        <div className="aegis-quick-command-menu__status">NO MATCHING COMMANDS</div>
+                      ) : null}
+                      {!quickCommandsLoading && !quickCommandsError ? matchingQuickCommands.map((command, index) => (
+                        <button
+                          key={`${command.type}-${command.name}-${index}`}
+                          id={`chat-quick-command-option-${index}`}
+                          aria-selected={index === activeQuickCommandIndex}
+                          className={`aegis-quick-command-menu__option ${index === activeQuickCommandIndex ? "aegis-quick-command-menu__option--active" : ""}`}
+                          onMouseDown={(event) => {
+                            event.preventDefault();
+                            selectQuickCommand(command);
+                          }}
+                          role="option"
+                          type="button"
+                        >
+                          <span className="aegis-quick-command-menu__icon"><QuickCommandTypeIcon type={command.type} /></span>
+                          <span className="min-w-0 flex-1 text-left">
+                            <span className="block truncate font-mono text-[11px] font-bold tracking-wide text-[var(--aegis-text)]">{command.name}</span>
+                            <span className="block truncate text-[10px] text-[var(--aegis-text-muted)]">{command.desc || "No description"}</span>
+                          </span>
+                          <span className="aegis-quick-command-menu__type">{command.type}</span>
+                        </button>
+                      )) : null}
+                    </div>
+                  ) : null}
                   <button
                     type="button"
                     aria-label={
                       composerExpanded ? "Collapse composer" : "Expand composer"
                     }
                     onClick={() => setComposerExpanded((current) => !current)}
-                    className="absolute bottom-2 right-2 h-6 w-6 rounded text-slate-500 hover:text-cyan-300 hover:bg-slate-800/70 transition-all flex items-center justify-center"
+                    className="absolute bottom-2 right-2 z-20 h-6 w-6 rounded text-slate-500 hover:text-cyan-300 hover:bg-slate-800/70 transition-all flex items-center justify-center"
                     title={
                       composerExpanded ? "Collapse composer" : "Expand composer"
                     }
