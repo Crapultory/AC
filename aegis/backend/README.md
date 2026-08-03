@@ -95,6 +95,10 @@ Login response returns an access token. Protected endpoints expect:
 Authorization: Bearer <jwt_access_token>
 ```
 
+The exception is the public, read-only skill JavaScript route described below;
+it exposes only regular `.js` files under the repository's `aegis/skills/`
+directory for generated HTML previews.
+
 The frontend login page also uses the same JWT for `/api/chat/ws?token=...`.
 
 ## Storage
@@ -126,9 +130,14 @@ The standalone backend currently supports these API areas:
 - Auth and session: `/api/auth/login`, `/api/auth/register`, `/api/auth/session`, `/api/auth/logout`, `/api/auth/password`
 - User management: `/api/users`, `/api/users/{uid}/status`, `/api/users/{uid}/password`, `/api/users/{uid}`
 - System: `/health`, `/api/system/bootstrap`
+- Public skill JavaScript: `/static/skills/html-deliverable/assets/agent2ui-bridge.js`
 - Overview: `/api/overview/agents`, `/api/overview/stats`
 - Agents: `/api/agents`, `/api/agents/{agent_id}`
 - Global routing: `/api/routing/global`, `/api/routing/global/{rule_id}`
+
+The public skill JavaScript route only serves regular `.js` files located under
+the repository's `aegis/skills/` directory. It does not list directories or
+expose templates, documents, or other file types.
 
 ## Recent Chat Updates
 

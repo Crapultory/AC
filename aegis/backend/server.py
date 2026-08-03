@@ -27,6 +27,7 @@ from aegis.backend.routes.prompt_templates import build_prompt_templates_router
 from aegis.backend.routes.routing import build_routing_router
 from aegis.backend.routes.system import build_system_router
 from aegis.backend.routes.system_instructs import build_system_instructs_router
+from aegis.backend.routes.skills_static import build_skills_static_router
 from aegis.backend.routes.user_manuals import build_user_manuals_router
 from aegis.backend.routes.users import build_users_router
 from aegis.backend.services.user_service import UserService
@@ -207,6 +208,7 @@ def create_app(settings: AegisSettings | None = None) -> FastAPI:
             quick_command_service=quick_command_service,
         )
     )
+    app.include_router(build_skills_static_router())
     _install_docs_bearer_auth(app)
 
     dist_index = None
