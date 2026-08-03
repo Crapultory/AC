@@ -139,10 +139,18 @@ describe('ChatTab', () => {
     expect(modifiedFiles).toHaveAttribute('aria-label', 'Overview files');
     expect(within(modifiedFiles).getByText('OVERVIEW FILES')).toBeInTheDocument();
     expect(modifiedFiles.closest('[data-testid="chat-message"]')).toBeNull();
+    const overviewToggle = within(modifiedFiles).getByRole('button', { name: /overview files/i });
+    expect(overviewToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(within(modifiedFiles).queryByText('aegis/frontend/src/alpha.ts')).not.toBeInTheDocument();
+    fireEvent.click(overviewToggle);
+    expect(overviewToggle).toHaveAttribute('aria-expanded', 'true');
     expect(within(modifiedFiles).getByText('aegis/frontend/src/alpha.ts')).toBeInTheDocument();
-    expect(within(modifiedFiles).queryByText('README.md')).not.toBeInTheDocument();
-    fireEvent.click(within(modifiedFiles).getByRole('button', { name: /show 1 more/i }));
     expect(within(modifiedFiles).getByText('README.md')).toBeInTheDocument();
+
+    fireEvent.click(overviewToggle);
+    expect(overviewToggle).toHaveAttribute('aria-expanded', 'false');
+    expect(within(modifiedFiles).queryByText('aegis/frontend/src/alpha.ts')).not.toBeInTheDocument();
+    fireEvent.click(overviewToggle);
 
     fireEvent.click(within(modifiedFiles).getByRole('button', { name: /aegis\/frontend\/src\/alpha\.ts/i }));
     const previewTab = await screen.findByRole('tab', { name: 'alpha.ts' });

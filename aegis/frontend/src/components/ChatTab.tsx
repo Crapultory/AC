@@ -2077,9 +2077,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
               const isExpanded = !!expandedMessageIds[message.id];
               const modifiedFiles = message.modifiedFiles || [];
               const modifiedFilesExpanded = !!expandedModifiedFileLists[message.id];
-              const visibleModifiedFiles = modifiedFilesExpanded
-                ? modifiedFiles
-                : modifiedFiles.slice(0, 3);
+              const modifiedFilesListId = `modified-files-${message.id}`;
               const isAegis = message.sender === "aegis";
               const agentBadge = isAegis
                 ? message.source === "delegate"
@@ -2317,34 +2315,32 @@ function ChatTabContent({ agents }: ChatTabProps) {
                       className="aegis-modified-files"
                       data-testid="modified-files"
                     >
-                      <div className="aegis-modified-files__header">
+                      <button
+                        aria-controls={modifiedFilesListId}
+                        aria-expanded={modifiedFilesExpanded}
+                        className="aegis-modified-files__header"
+                        onClick={() => toggleModifiedFilesExpanded(message.id)}
+                        type="button"
+                      >
                         <FileText aria-hidden="true" className="h-3.5 w-3.5" />
                         <span>OVERVIEW FILES</span>
                         <span className="aegis-modified-files__count">{modifiedFiles.length}</span>
-                      </div>
-                      <div className="aegis-modified-files__list">
-                        {visibleModifiedFiles.map((path) => (
-                          <button
-                            key={path}
-                            className="aegis-modified-files__item"
-                            onClick={() => openModifiedFile(path)}
-                            title={`Open ${path}`}
-                            type="button"
-                          >
-                            <FileText aria-hidden="true" className="h-3 w-3 shrink-0" />
-                            <span>{path}</span>
-                          </button>
-                        ))}
-                      </div>
-                      {modifiedFiles.length > 3 ? (
-                        <button
-                          aria-expanded={modifiedFilesExpanded}
-                          className="aegis-modified-files__toggle"
-                          onClick={() => toggleModifiedFilesExpanded(message.id)}
-                          type="button"
-                        >
-                          {modifiedFilesExpanded ? "SHOW LESS" : `SHOW ${modifiedFiles.length - 3} MORE`}
-                        </button>
+                      </button>
+                      {modifiedFilesExpanded ? (
+                        <div className="aegis-modified-files__list" id={modifiedFilesListId}>
+                          {modifiedFiles.map((path) => (
+                            <button
+                              key={path}
+                              className="aegis-modified-files__item"
+                              onClick={() => openModifiedFile(path)}
+                              title={`Open ${path}`}
+                              type="button"
+                            >
+                              <FileText aria-hidden="true" className="h-3 w-3 shrink-0" />
+                              <span>{path}</span>
+                            </button>
+                          ))}
+                        </div>
                       ) : null}
                     </section>
                   ) : null}
