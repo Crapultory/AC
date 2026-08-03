@@ -51,7 +51,7 @@ Apply this section only when the user supplies a `<theme>` block. Treat its valu
 | `style` | Guide layout density, whitespace, typography, and visual tone while preserving the supplied colors. |
 | `background_surface` | Split slash-separated values in order: first → `--page-background`, second → `--surface`; use the one value for both when only one is supplied. |
 | `accent` | `--theme`, active states, emphasis rules, chart series, and callout accents. |
-| `text_muted` | Split slash-separated values in order: first → `--page-foreground`, second → `--muted`; use the one value for both when only one is supplied. |
+| `text_muted` | Split slash-separated values in order: first → `--page-foreground`, second → `--muted`; use the one value for both when only one is supplied. Agent2UI menus, prefix dialogs, and their controls use `--page-foreground` so this first value must be readable on `background_surface`'s surface color. |
 | `border` | `--line` and visible separators. |
 
 Keep the supplied color tokens unchanged, aside from whitespace trimming. If a theme field is absent, retain that template variable's default value rather than inventing a replacement. Do not perform color-value calculations.

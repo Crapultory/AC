@@ -53,6 +53,15 @@ describe("html-deliverable Agent2UI bridge", () => {
     window.removeEventListener("message", listener);
   });
 
+  it("uses the page foreground for menus on a dark surface", () => {
+    installBridge();
+
+    const style = document.head.querySelector("style")!;
+    expect(style.textContent).toContain(
+      "color:var(--page-foreground, var(--surface-foreground, #142235))",
+    );
+  });
+
   it("serializes every marked form field as id and value on native submit", async () => {
     const messages: unknown[] = [];
     const listener = (event: MessageEvent) => messages.push(event.data);

@@ -11,7 +11,7 @@
   style.textContent = `
     .agent2ui-object { cursor:pointer; }
     .agent2ui-object:focus-visible, .agent2ui-menu button:focus-visible, .agent2ui-prefix input:focus-visible { outline:3px solid var(--theme, #087ea4); outline-offset:3px; }
-    .agent2ui-menu, .agent2ui-prefix { position:fixed; z-index:2147483647; width:min(248px, calc(100vw - 24px)); padding:6px; border:1px solid var(--line, #c6d2e0); border-radius:10px; background:var(--surface, #fff); color:var(--surface-foreground, #142235); box-shadow:0 12px 34px rgb(20 34 53 / .22); }
+    .agent2ui-menu, .agent2ui-prefix { position:fixed; z-index:2147483647; width:min(248px, calc(100vw - 24px)); padding:6px; border:1px solid var(--line, #c6d2e0); border-radius:10px; background:var(--surface, #fff); color:var(--page-foreground, var(--surface-foreground, #142235)); box-shadow:0 12px 34px rgb(20 34 53 / .22); }
     .agent2ui-menu button { display:block; width:100%; border:0; border-radius:7px; padding:9px 10px; background:transparent; color:inherit; font:inherit; text-align:left; cursor:pointer; }
     .agent2ui-menu button:hover, .agent2ui-menu button:focus-visible { background:var(--page-background, #f4f7fb); }
     .agent2ui-prefix { display:grid; gap:8px; padding:10px; }
