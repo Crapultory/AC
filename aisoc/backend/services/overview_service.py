@@ -21,6 +21,7 @@ _DEFAULT_MEMORY_LIMIT = 2200
 _DEFAULT_USER_LIMIT = 1375
 _KEYWORD_WINDOW_SECONDS = 7 * 86400
 _EVENT_SUMMARY_MAX_CHARS = 180
+_SECURITY_SESSION_WINDOW_SECONDS = 3 * 86400
 
 _SECURITY_JOB_TYPES: dict[str, dict[str, str]] = {
     "f721eacc24df": {"type": "vuln_tracking", "label": "漏洞追踪", "icon": "shield"},
@@ -31,6 +32,19 @@ _SECURITY_JOB_TYPES: dict[str, dict[str, str]] = {
     "614ad4c64bdb": {"type": "vuln_assessment", "label": "漏洞研判", "icon": "search"},
 }
 _DEFAULT_SECURITY_TYPE = {"type": "investigate", "label": "安全事件", "icon": "investigate"}
+_SESSION_INVESTIGATION_TYPE = {"type": "session_investigation", "label": "会话调查", "icon": "investigate"}
+
+# Heuristic keyword set for flagging a non-cron session as a security
+# investigation.  Curated + easily tunable; bare "安全" is intentionally
+# excluded to avoid matching ordinary dev/chat sessions.
+_SECURITY_KEYWORDS: list[str] = [
+    # english (matched as lowercased substrings)
+    "cve", "vulnerab", "exploit", "malware", "phishing", "ransomware", "attack",
+    "threat", "incident", "breach", "compromise", "backdoor", "webshell", "ioc", "0day", "apt",
+    # chinese
+    "漏洞", "攻击", "钓鱼", "恶意", "应急", "溯源", "入侵", "威胁", "勒索",
+    "后门", "提权", "横向移动", "失陷", "研判", "安全事件",
+]
 
 _EN_STOP_WORDS = {
     "the",
@@ -100,25 +114,38 @@ def _query_all(db: SessionDB, sql: str, params: tuple[Any, ...] = ()) -> list[di
     return [dict(row) for row in rows]
 
 
-def _memory_totals() -> tuple[int, int]:
-    used = 0
-    for reader in (memory_service.read_soul, memory_service.read_user_preferences):
-        try:
-            payload = reader()
-        except Exception:
-            continue
-        used += len((payload or {}).get("content") or "")
+def _read_memory_len(reader) -> int:
+    try:
+        payload = reader()
+    except Exception:
+        return 0
+    return len((payload or {}).get("content") or "")
 
-    memory_total = _DEFAULT_MEMORY_LIMIT
-    user_total = _DEFAULT_USER_LIMIT
+
+def _memory_breakdown() -> dict[str, int]:
+    """Per-store character usage + limits for soul and user-preferences memory."""
+    soul_used = _read_memory_len(memory_service.read_soul)
+    user_used = _read_memory_len(memory_service.read_user_preferences)
+
+    soul_limit = _DEFAULT_MEMORY_LIMIT
+    user_limit = _DEFAULT_USER_LIMIT
     try:
         config = load_config()
         mem_cfg = (config or {}).get("memory") or {}
-        memory_total = int(mem_cfg.get("memory_char_limit", _DEFAULT_MEMORY_LIMIT))
-        user_total = int(mem_cfg.get("user_char_limit", _DEFAULT_USER_LIMIT))
+        soul_limit = int(mem_cfg.get("memory_char_limit", _DEFAULT_MEMORY_LIMIT))
+        user_limit = int(mem_cfg.get("user_char_limit", _DEFAULT_USER_LIMIT))
     except Exception:
         pass
-    return used, max(memory_total + user_total, 0)
+    return {
+        "soul_used": soul_used,
+        "soul_limit": soul_limit,
+        "user_used": user_used,
+        "user_limit": user_limit,
+    }
+
+
+def _memory_percent(used: int, limit: int) -> float:
+    return round(used / limit * 100, 1) if limit > 0 else 0.0
 
 
 def _escape_like(value: str) -> str:
@@ -371,10 +398,11 @@ def get_stats() -> dict[str, Any]:
               COUNT(*) AS total_sessions,
               SUM(CASE WHEN s.started_at > ? AND s.ended_at IS NULL THEN 1 ELSE 0 END) AS active_sessions,
               SUM(CASE WHEN s.started_at >= ? THEN COALESCE(s.input_tokens, 0) ELSE 0 END) AS today_input_tokens,
-              SUM(CASE WHEN s.started_at >= ? THEN COALESCE(s.output_tokens, 0) ELSE 0 END) AS today_output_tokens
+              SUM(CASE WHEN s.started_at >= ? THEN COALESCE(s.output_tokens, 0) ELSE 0 END) AS today_output_tokens,
+              SUM(CASE WHEN s.started_at >= ? THEN COALESCE(s.actual_cost_usd, s.estimated_cost_usd, 0) ELSE 0 END) AS today_cost_usd
             FROM sessions s
             """,
-            (day_ago, today_start, today_start),
+            (day_ago, today_start, today_start, today_start),
         )
         source_rows = _query_all(
             db,
@@ -396,11 +424,18 @@ def get_stats() -> dict[str, Any]:
     cron_total = len(jobs)
     cron_enabled = sum(1 for job in jobs if job.get("enabled", True))
 
-    memory_used_chars, memory_total_chars = _memory_totals()
-    memory_percent = round(memory_used_chars / memory_total_chars * 100, 1) if memory_total_chars > 0 else 0
+    mem = _memory_breakdown()
+    soul_used, soul_limit = mem["soul_used"], mem["soul_limit"]
+    user_used, user_limit = mem["user_used"], mem["user_limit"]
+    memory_used_chars = soul_used + user_used
+    memory_total_chars = max(soul_limit + user_limit, 0)
+    memory_percent = _memory_percent(memory_used_chars, memory_total_chars)
+    soul_percent = _memory_percent(soul_used, soul_limit)
+    user_percent = _memory_percent(user_used, user_limit)
 
     today_input_tokens = int(summary.get("today_input_tokens") or 0)
     today_output_tokens = int(summary.get("today_output_tokens") or 0)
+    today_cost_usd = round(float(summary.get("today_cost_usd") or 0.0), 4)
     source_distribution = {str(row.get("source") or "unknown"): int(row.get("count") or 0) for row in source_rows}
 
     return {
@@ -409,11 +444,18 @@ def get_stats() -> dict[str, Any]:
         "today_tokens": today_input_tokens + today_output_tokens,
         "today_input_tokens": today_input_tokens,
         "today_output_tokens": today_output_tokens,
+        "today_cost_usd": today_cost_usd,
         "cron_jobs_total": cron_total,
         "cron_jobs_enabled": cron_enabled,
         "memory_used_chars": memory_used_chars,
         "memory_total_chars": memory_total_chars,
         "memory_percent": memory_percent,
+        "memory_soul_chars": soul_used,
+        "memory_soul_limit": soul_limit,
+        "memory_soul_percent": soul_percent,
+        "memory_user_chars": user_used,
+        "memory_user_limit": user_limit,
+        "memory_user_percent": user_percent,
         "source_distribution": source_distribution,
     }
 
@@ -467,11 +509,148 @@ def get_token_trend(days: int) -> list[dict[str, Any]]:
     return results
 
 
+def get_model_usage(period: str) -> dict[str, Any]:
+    now_ts = time.time()
+    start_ts = _period_start(period, now_ts)
+
+    db = SessionDB()
+    try:
+        rows = _query_all(
+            db,
+            """
+            SELECT
+              COALESCE(model, 'unknown') AS model,
+              COUNT(*) AS sessions,
+              COALESCE(SUM(input_tokens), 0) AS input_tokens,
+              COALESCE(SUM(output_tokens), 0) AS output_tokens,
+              COALESCE(SUM(cache_read_tokens), 0) AS cache_read_tokens,
+              COALESCE(SUM(cache_write_tokens), 0) AS cache_write_tokens,
+              COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+              COALESCE(SUM(COALESCE(actual_cost_usd, estimated_cost_usd, 0)), 0) AS cost_usd
+            FROM sessions
+            WHERE started_at >= ?
+            GROUP BY COALESCE(model, 'unknown')
+            ORDER BY (COALESCE(SUM(input_tokens), 0) + COALESCE(SUM(output_tokens), 0)) DESC
+            """,
+            (start_ts,),
+        )
+    finally:
+        db.close()
+
+    models: list[dict[str, Any]] = []
+    grand_total_tokens = 0
+    grand_cost = 0.0
+    for row in rows:
+        input_tokens = int(row.get("input_tokens") or 0)
+        output_tokens = int(row.get("output_tokens") or 0)
+        total_tokens = input_tokens + output_tokens
+        cost_usd = float(row.get("cost_usd") or 0.0)
+        grand_total_tokens += total_tokens
+        grand_cost += cost_usd
+        models.append(
+            {
+                "model": str(row.get("model") or "unknown"),
+                "sessions": int(row.get("sessions") or 0),
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+                "total_tokens": total_tokens,
+                "cache_read_tokens": int(row.get("cache_read_tokens") or 0),
+                "cache_write_tokens": int(row.get("cache_write_tokens") or 0),
+                "reasoning_tokens": int(row.get("reasoning_tokens") or 0),
+                "cost_usd": round(cost_usd, 4),
+            }
+        )
+
+    for model in models:
+        model["percent_of_total"] = (
+            round(model["total_tokens"] / grand_total_tokens * 100, 1) if grand_total_tokens > 0 else 0.0
+        )
+
+    return {
+        "period": period,
+        "total_tokens": grand_total_tokens,
+        "total_cost_usd": round(grand_cost, 4),
+        "models": models,
+    }
+
+
+def _session_row_to_event(db: SessionDB, row: dict[str, Any], meta: dict[str, str]) -> dict[str, Any] | None:
+    session_id = str(row.get("id") or "")
+    if not session_id:
+        return None
+    assistant = _query_one(
+        db,
+        """
+        SELECT content FROM messages
+        WHERE session_id = ? AND role = 'assistant'
+        ORDER BY timestamp DESC
+        LIMIT 1
+        """,
+        (session_id,),
+    )
+    final_text = str(assistant.get("content") or "")
+    started_at = row.get("started_at")
+    ended_at = row.get("ended_at")
+    duration = None
+    if started_at is not None and ended_at is not None:
+        try:
+            duration = max(int(float(ended_at) - float(started_at)), 0)
+        except Exception:
+            duration = None
+    risk_level = _detect_risk_level(final_text)
+    status = _detect_event_status(str(row.get("end_reason") or ""), final_text)
+    verdict = ""
+    if status == "failed":
+        verdict = "BLOCK"
+    elif risk_level in {"Critical", "High"}:
+        verdict = "REVIEW"
+    return {
+        "session_id": session_id,
+        "type": meta["type"],
+        "type_label": meta["label"],
+        "icon": meta["icon"],
+        "time": started_at,
+        "duration": duration,
+        "tokens": int(row.get("total_tokens") or 0),
+        "status": status,
+        "risk_level": risk_level,
+        "summary": _build_event_summary(str(row.get("title") or ""), final_text),
+        "entities": _extract_entities(final_text),
+        "verdict": verdict,
+    }
+
+
+def _recent_security_session_rows(db: SessionDB, since: float, limit: int) -> list[dict[str, Any]]:
+    """Recent non-cron sessions whose title or any message hits a security keyword."""
+    like_patterns = [f"%{_escape_like(keyword.lower())}%" for keyword in _SECURITY_KEYWORDS]
+    title_ors = " OR ".join(["LOWER(COALESCE(s.title, '')) LIKE ? ESCAPE '\\'"] * len(like_patterns))
+    msg_ors = " OR ".join(["LOWER(COALESCE(m.content, '')) LIKE ? ESCAPE '\\'"] * len(like_patterns))
+    sql = f"""
+        SELECT s.id AS id, s.title AS title, s.started_at AS started_at, s.ended_at AS ended_at,
+               s.end_reason AS end_reason,
+               COALESCE(s.input_tokens, 0) + COALESCE(s.output_tokens, 0) AS total_tokens
+        FROM sessions s
+        WHERE s.started_at > ?
+          AND COALESCE(s.source, '') != 'cron'
+          AND (
+            ({title_ors})
+            OR EXISTS (
+              SELECT 1 FROM messages m
+              WHERE m.session_id = s.id AND ({msg_ors})
+            )
+          )
+        ORDER BY s.started_at DESC
+        LIMIT ?
+    """
+    params = [since, *like_patterns, *like_patterns, limit]
+    return _query_all(db, sql, tuple(params))
+
+
 def list_security_events(limit: int) -> list[dict[str, Any]]:
     safe_limit = min(max(int(limit or 0), 1), 50)
     db = SessionDB()
     try:
-        rows = _query_all(
+        cron_rows = _query_all(
             db,
             """
             SELECT id, title, started_at, ended_at, end_reason,
@@ -483,55 +662,27 @@ def list_security_events(limit: int) -> list[dict[str, Any]]:
             """,
             (safe_limit,),
         )
+        session_rows = _recent_security_session_rows(
+            db, time.time() - _SECURITY_SESSION_WINDOW_SECONDS, safe_limit
+        )
+
         events: list[dict[str, Any]] = []
-        for row in rows:
+        seen: set[str] = set()
+        for row, meta in (
+            *((row, _event_type_from_session_id(str(row.get("id") or ""))) for row in cron_rows),
+            *((row, _SESSION_INVESTIGATION_TYPE) for row in session_rows),
+        ):
             session_id = str(row.get("id") or "")
-            if not session_id:
+            if not session_id or session_id in seen:
                 continue
-            assistant = _query_one(
-                db,
-                """
-                SELECT content FROM messages
-                WHERE session_id = ? AND role = 'assistant'
-                ORDER BY timestamp DESC
-                LIMIT 1
-                """,
-                (session_id,),
-            )
-            final_text = str(assistant.get("content") or "")
-            meta = _event_type_from_session_id(session_id)
-            started_at = row.get("started_at")
-            ended_at = row.get("ended_at")
-            duration = None
-            if started_at is not None and ended_at is not None:
-                try:
-                    duration = max(int(float(ended_at) - float(started_at)), 0)
-                except Exception:
-                    duration = None
-            risk_level = _detect_risk_level(final_text)
-            status = _detect_event_status(str(row.get("end_reason") or ""), final_text)
-            verdict = ""
-            if status == "failed":
-                verdict = "BLOCK"
-            elif risk_level in {"Critical", "High"}:
-                verdict = "REVIEW"
-            events.append(
-                {
-                    "session_id": session_id,
-                    "type": meta["type"],
-                    "type_label": meta["label"],
-                    "icon": meta["icon"],
-                    "time": started_at,
-                    "duration": duration,
-                    "tokens": int(row.get("total_tokens") or 0),
-                    "status": status,
-                    "risk_level": risk_level,
-                    "summary": _build_event_summary(str(row.get("title") or ""), final_text),
-                    "entities": _extract_entities(final_text),
-                    "verdict": verdict,
-                }
-            )
-        return events
+            event = _session_row_to_event(db, row, meta)
+            if event is None:
+                continue
+            seen.add(session_id)
+            events.append(event)
+
+        events.sort(key=lambda event: (event.get("time") is not None, event.get("time") or 0), reverse=True)
+        return events[:safe_limit]
     finally:
         db.close()
 
@@ -574,26 +725,24 @@ def list_keywords() -> list[dict[str, Any]]:
     if not corpus:
         return []
 
-    en_counter: Counter[str] = Counter()
-    for word in re.findall(r"\b[A-Za-z][A-Za-z0-9_-]{3,24}\b", corpus):
-        normalized = word.lower()
-        if normalized in _EN_STOP_WORDS:
-            continue
-        if normalized.startswith("http"):
-            continue
-        en_counter[normalized] += 1
-
-    zh_counter: Counter[str] = Counter()
-    for word in re.findall(r"[\u4e00-\u9fff]{2,8}", corpus):
-        if word in _ZH_STOP_WORDS:
-            continue
-        zh_counter[word] += 1
-
+    # Only surface security-relevant keywords: count occurrences of the curated
+    # security vocabulary (_SECURITY_KEYWORDS) in the recent-session corpus.
+    lowered = corpus.lower()
     keywords: list[dict[str, Any]] = []
-    for word, count in en_counter.most_common(14):
-        keywords.append({"word": word, "count": int(count), "lang": "en"})
-    for word, count in zh_counter.most_common(10):
-        keywords.append({"word": word, "count": int(count), "lang": "zh"})
+    for term in _SECURITY_KEYWORDS:
+        term_lower = term.lower()
+        if re.search(r"[\u4e00-\u9fff]", term):
+            count = lowered.count(term_lower)
+            lang = "zh"
+        else:
+            # Word-initial match so short stems (e.g. "apt") don't match inside
+            # unrelated words like "laptop"; the trailing run catches inflections
+            # ("attack" -> "attacks", "vulnerab" -> "vulnerability").
+            count = len(re.findall(r"(?<![a-z0-9])" + re.escape(term_lower) + r"[a-z0-9]*", lowered))
+            lang = "en"
+        if count <= 0:
+            continue
+        keywords.append({"word": term, "count": int(count), "lang": lang})
 
     keywords.sort(key=lambda item: (-int(item["count"]), str(item["word"])))
     return keywords[:20]

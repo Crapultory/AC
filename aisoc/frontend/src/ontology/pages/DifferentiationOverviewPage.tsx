@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { useQueryClient } from '@tanstack/react-query';
 import { Radar, AlertTriangle, CheckCircle2, MinusCircle, PlusCircle, ArrowUpRight, Search } from 'lucide-react';
 import { ontologyApi, type OntologyScanResponse } from '../api/ontology';
@@ -57,20 +57,37 @@ export function DifferentiationOverviewPage() {
     setStage(next);
   }, [scanBusy, scanState?.stage]);
 
-  const runScan = async () => {
+  // Stops the polling loop below from hitting the backend once this component
+  // instance is gone — e.g. the user switched to Standard Graph or Ontology
+  // Chat. Without this, navigating away and back N times leaves N orphaned
+  // polling loops running concurrently (their setState calls are silently
+  // dropped by React, but the network requests keep firing).
+  const cancelledRef = useRef(false);
+  useEffect(() => {
+    cancelledRef.current = false;
+    return () => {
+      cancelledRef.current = true;
+    };
+  }, []);
+
+  // Poll an in-flight job to completion. Shared by runScan() (after creating
+  // a fresh job) and the mount-time reattach effect below (after discovering
+  // one is already running) so both paths get identical progress/error
+  // handling.
+  const watchJob = async (initial: OntologyScanResponse) => {
     try {
       setScanBusy(true);
       setScanError(null);
-      setScanState(null);
-      const job = await ontologyApi.scan();
-      setScanState(job);
-      let latest = job;
+      setScanState(initial);
+      let latest = initial;
       let stableMisses = 0;
       for (let i = 0; i < 600; i += 1) {
+        if (cancelledRef.current) return;
         if (latest.status === 'completed' || latest.status === 'failed') break;
         await new Promise((r) => setTimeout(r, 1000));
+        if (cancelledRef.current) return;
         try {
-          latest = await ontologyApi.scanStatus(job.job_id);
+          latest = await ontologyApi.scanStatus(latest.job_id);
           setScanState(latest);
           stableMisses = 0;
         } catch (err) {
@@ -87,13 +104,42 @@ export function DifferentiationOverviewPage() {
         qc.invalidateQueries({ queryKey: ['ontologyRoadmap'] }),
         qc.invalidateQueries({ queryKey: ['ontologyHeatmap'] }),
       ]);
-      setScanState(latest);
+      if (!cancelledRef.current) setScanState(latest);
     } catch (e: any) {
-      setScanError(String(e?.message || e || 'unknown error'));
+      if (!cancelledRef.current) setScanError(String(e?.message || e || 'unknown error'));
     } finally {
-      setScanBusy(false);
+      if (!cancelledRef.current) setScanBusy(false);
     }
   };
+
+  const runScan = async () => {
+    const job = await ontologyApi.scan();
+    await watchJob(job);
+  };
+
+  // On mount (including after navigating away from this page and back),
+  // check the backend for a scan that's already running — the job survives
+  // in a daemon thread + on-disk state file regardless of whether this React
+  // component instance was ever around to see it. This is what makes the
+  // progress box reappear instead of silently vanishing on remount.
+  useEffect(() => {
+    let ignore = false;
+    ontologyApi
+      .scanActive()
+      .then((job) => {
+        if (ignore || cancelledRef.current) return;
+        if (job.status === 'queued' || job.status === 'running') {
+          watchJob(job);
+        }
+      })
+      .catch(() => {
+        // 404 (nothing running) is the common case — nothing to do.
+      });
+    return () => {
+      ignore = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const rawMapped = useMemo(() => mappedGraph?.mapped_nodes || [], [mappedGraph]);
   const extraNodes = useMemo(() => mappedGraph?.extra_nodes || [], [mappedGraph]);

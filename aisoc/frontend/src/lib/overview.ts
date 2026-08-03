@@ -15,11 +15,18 @@ export type OverviewStats = {
   today_tokens: number;
   today_input_tokens: number;
   today_output_tokens: number;
+  today_cost_usd: number;
   cron_jobs_total: number;
   cron_jobs_enabled: number;
   memory_used_chars: number;
   memory_total_chars: number;
   memory_percent: number;
+  memory_soul_chars: number;
+  memory_soul_limit: number;
+  memory_soul_percent: number;
+  memory_user_chars: number;
+  memory_user_limit: number;
+  memory_user_percent: number;
   source_distribution: Record<string, number>;
 };
 
@@ -83,6 +90,26 @@ export type CronTokenDistribution = {
   grand_total: number;
   cron_percent: number;
   jobs: CronTokenDistributionJob[];
+};
+
+export type ModelUsageItem = {
+  model: string;
+  sessions: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  cache_read_tokens: number;
+  cache_write_tokens: number;
+  reasoning_tokens: number;
+  cost_usd: number;
+  percent_of_total: number;
+};
+
+export type ModelUsageDistribution = {
+  period: CronTokenPeriod;
+  total_tokens: number;
+  total_cost_usd: number;
+  models: ModelUsageItem[];
 };
 
 export type CronjobLastRun = {
@@ -216,6 +243,12 @@ export function getCronTokenDistribution(
   period: CronTokenPeriod = "today",
 ): Promise<CronTokenDistribution> {
   return fetchJSON<CronTokenDistribution>(`/api/overview/cron-token-dist?period=${period}`);
+}
+
+export function getOverviewModelUsage(
+  period: CronTokenPeriod = "7d",
+): Promise<ModelUsageDistribution> {
+  return fetchJSON<ModelUsageDistribution>(`/api/overview/model-usage?period=${period}`);
 }
 
 export function getCronjobs(page: number = 1, pageSize: number = 8): Promise<PaginatedCronjobs> {

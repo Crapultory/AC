@@ -46,4 +46,8 @@ def build_overview_router() -> APIRouter:
     async def cronjobs():
         return overview_service.get_cronjobs()
 
+    @router.get("/model-usage")
+    async def model_usage(period: Literal["today", "7d", "30d"] = "7d"):
+        return overview_service.get_model_usage(period=period)
+
     return router

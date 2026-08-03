@@ -253,7 +253,7 @@
 /* ══════ STATS ROW ══════ */
 .workbench-overview .stats-row {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(5, 1fr);
     gap: calc(16px * var(--ov-scale));
     margin-bottom: calc(22px * var(--ov-scale));
 }
@@ -358,6 +358,46 @@
     box-shadow: 0 0 6px var(--purple-dim);
 }
 
+.workbench-overview .memory-split {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+/* flex-wrap so a long value drops to its own line instead of being clipped
+   by the card's overflow:hidden */
+.workbench-overview .memory-row {
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    column-gap: 8px;
+    row-gap: 2px;
+    min-width: 0;
+}
+
+.workbench-overview .memory-row-label {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-secondary);
+    flex: 0 0 auto;
+}
+
+.workbench-overview .memory-row .memory-bar {
+    margin-top: 0;
+    flex: 1 1 40px;
+    min-width: 40px;
+}
+
+.workbench-overview .memory-row-val {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    flex: 0 0 auto;
+    margin-left: auto;
+    white-space: nowrap;
+}
+
 .workbench-overview .token-detail {
     font-family: var(--font-mono);
     font-size: 10px;
@@ -453,7 +493,14 @@
     margin-bottom: calc(22px * var(--ov-scale));
 }
 
+/* Let fr tracks size by ratio, not by canvas content width, so the trend
+   chart can't force the column (and page) to grow on redraw. */
+.workbench-overview .charts-row > * { min-width: 0; }
+
 .workbench-overview .chart-body { padding: 12px 10px 8px; }
+
+/* Canvas fills the panel body and never drives its parent's width. */
+.workbench-overview .chart-body canvas { display: block; width: 100%; }
 
 .workbench-overview .source-layout {
     display: flex;
@@ -1180,6 +1227,27 @@
 .workbench-overview .cron-token-summary strong {
     color: var(--cyan);
     font-weight: 500;
+}
+
+/* ── Model usage (adds a cost column to the cron-token row layout) ── */
+.workbench-overview .model-usage-list .cron-token-item {
+    grid-template-columns: 12px 1fr auto auto auto;
+}
+
+.workbench-overview .cron-token-cost {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--green);
+    min-width: 64px;
+    text-align: right;
+}
+
+.workbench-overview .model-usage-detail {
+    grid-column: 2 / -1;
+    font-family: var(--font-mono);
+    font-size: 10px;
+    color: var(--text-dim);
+    margin-top: 2px;
 }
 
 /* ── Responsive ── */
