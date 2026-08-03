@@ -9,7 +9,11 @@ from importlib import util
 from pathlib import Path
 from typing import Any, Callable, Optional
 
-from aisoc.backend.services.ontology_service import OntologyService
+from aisoc.backend.services.ontology_service import (
+    OntologyService,
+    _PROFILE,
+    _real_home,
+)
 
 
 logger = logging.getLogger(__name__)
@@ -56,33 +60,44 @@ class OntologyAIService:
         return OntologyService.SKILL_SCRIPTS
 
     @staticmethod
+    def _ontology_path_overrides() -> dict[str, str]:
+        """AISOC_ONTOLOGY_* → absolute-path overrides that make ``_paths.py``
+        (imported by scanner_ai.py, whether run as a subprocess or exec'd
+        in-process) resolve correctly no matter what the current HOME env var
+        happens to be.
+
+        The hermes runtime rewrites HOME to a per-profile sandbox at points
+        that aren't limited to "when it forks a child process" — it can
+        happen to *this* backend process's own env too (we've seen it land on
+        an unrelated profile like search_agent). ``_paths.py``'s ``_resolve()``
+        checks ``os.environ.get(env_name, ...)`` before ever falling back to
+        ``Path.home()``, so setting these explicitly makes it immune to
+        whatever HOME currently is. Deliberately excludes HOME itself — see
+        callers for why we don't touch that.
+        """
+        home_dir = _real_home()
+        return {
+            "AISOC_ONTOLOGY_PROFILE": _PROFILE,
+            "AISOC_ONTOLOGY_STANDARD_GRAPH": str(OntologyService.STANDARD_GRAPH_ALIAS),
+            "AISOC_ONTOLOGY_STANDARD_GRAPH_V3": str(OntologyService.STANDARD_GRAPH_V3),
+            "AISOC_ONTOLOGY_SCANS_ROOT": str(OntologyService.SCANS_ROOT),
+            "AISOC_ONTOLOGY_SKILL_SCRIPTS": str(OntologyService.SKILL_SCRIPTS),
+            "AISOC_ONTOLOGY_WIKI": f"{home_dir}/aisocwiki",
+            "AISOC_ONTOLOGY_WORKSPACE": f"{home_dir}/workspace",
+            "AISOC_ONTOLOGY_REPORTS": f"{home_dir}/reports",
+        }
+
+    @staticmethod
     def _subprocess_env() -> dict[str, str]:
-        """Env passed to skill-script subprocesses.
-
-        The hermes runtime rewrites HOME to a per-profile sandbox when it
-        forks child processes, and there's no guarantee the sandboxed HOME
-        points at the aisoc profile (we've seen it point at search_agent).
-        That breaks ``_paths.py``'s ``Path.home()`` fallback. To make the
-        scripts independent of any HOME rewrite, we hand them absolute paths
-        for every artifact they need via AISOC_ONTOLOGY_* env vars — those
-        take priority over the HOME-based defaults inside ``_paths.py``.
-
-        Also pin HOME back to the aisoc profile's home so anything that
-        derives paths from ``$HOME`` (WIKI, WORKSPACE fallbacks) lands under
-        the aisoc user's directory, not the sandbox.
+        """Env passed to skill-script subprocesses (collect()). Builds on
+        ``_ontology_path_overrides()`` and additionally pins HOME — safe here
+        because it's a *child process's* env, not this process's, so it can't
+        disturb whatever sandboxed HOME the hermes runtime wants in effect for
+        unrelated in-process work happening concurrently in this backend.
         """
         env = os.environ.copy()
-        profile_dir = OntologyService.SKILL_SCRIPTS.parent.parent.parent  # .../profiles/aisoc
-        home_dir = profile_dir.parent.parent  # .../<user>  (e.g. /Users/jiajia.xu)
-        env["HOME"] = str(home_dir)
-        env["AISOC_ONTOLOGY_PROFILE"] = str(profile_dir)
-        env["AISOC_ONTOLOGY_STANDARD_GRAPH"] = str(OntologyService.STANDARD_GRAPH_ALIAS)
-        env["AISOC_ONTOLOGY_STANDARD_GRAPH_V3"] = str(OntologyService.STANDARD_GRAPH_V3)
-        env["AISOC_ONTOLOGY_SCANS_ROOT"] = str(OntologyService.SCANS_ROOT)
-        env["AISOC_ONTOLOGY_SKILL_SCRIPTS"] = str(OntologyService.SKILL_SCRIPTS)
-        env["AISOC_ONTOLOGY_WIKI"] = str(home_dir / "aisocwiki")
-        env["AISOC_ONTOLOGY_WORKSPACE"] = str(home_dir / "workspace")
-        env["AISOC_ONTOLOGY_REPORTS"] = str(home_dir / "reports")
+        env["HOME"] = _real_home()
+        env.update(OntologyAIService._ontology_path_overrides())
         return env
 
     @staticmethod
@@ -267,8 +282,27 @@ class OntologyAIService:
         if spec is None or spec.loader is None:
             raise OntologyAIError(f"Failed loading scanner_ai module: {mod_path}")
         module = util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module.score(judgments_path, module.STANDARD_DEFAULT, promote_latest=promote_latest)
+        # Unlike collect()/judge(), this runs scanner_ai.py IN-PROCESS via
+        # importlib (not as a subprocess), so _subprocess_env()'s child-only
+        # env dict never applies here — exec_module reads THIS process's
+        # ambient os.environ directly, which the hermes runtime may have
+        # rewritten HOME on at any point. Temporarily set the ontology path
+        # overrides on our own env for the duration of the exec (not HOME
+        # itself — see _ontology_path_overrides()'s docstring), then restore
+        # whatever was there before so we don't leak overrides into unrelated
+        # code running concurrently in other threads of this backend.
+        overrides = OntologyAIService._ontology_path_overrides()
+        saved = {k: os.environ.get(k) for k in overrides}
+        os.environ.update(overrides)
+        try:
+            spec.loader.exec_module(module)
+            return module.score(judgments_path, module.STANDARD_DEFAULT, promote_latest=promote_latest)
+        finally:
+            for k, v in saved.items():
+                if v is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = v
 
     @staticmethod
     def run_ai_scan(progress_cb: Optional[Callable[[int, int], None]] = None) -> dict[str, Any]:

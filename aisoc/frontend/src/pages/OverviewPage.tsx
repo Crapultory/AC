@@ -5,6 +5,7 @@ import {
   getCronjobHistoryDrilldown,
   getCronjobs,
   getKeywordSessionsDrilldown,
+  getOverviewModelUsage,
   getOverviewStats,
   getOverviewStatus,
   getOverviewTokenTrend,
@@ -17,6 +18,7 @@ import {
   type Cronjob,
   type CronjobHistoryItem,
   type KeywordSession,
+  type ModelUsageDistribution,
   type OverviewKeyword,
   type OverviewStats,
   type OverviewStatus,
@@ -52,6 +54,7 @@ export type OverviewLoaderDeps = {
 export type OverviewInteractionDeps = {
   getOverviewTokenTrend: typeof getOverviewTokenTrend;
   getCronTokenDistribution: typeof getCronTokenDistribution;
+  getOverviewModelUsage: typeof getOverviewModelUsage;
   getCronjobs: typeof getCronjobs;
   listOverviewSecurityEventsPage: typeof listOverviewSecurityEventsPage;
   getCronjobHistoryDrilldown: typeof getCronjobHistoryDrilldown;
@@ -74,6 +77,12 @@ export type TrendSwitchResult = {
 export type CronPeriodResult = {
   period: CronTokenPeriod;
   dist: CronTokenDistribution | null;
+  error: string;
+};
+
+export type ModelUsagePeriodResult = {
+  period: CronTokenPeriod;
+  dist: ModelUsageDistribution | null;
   error: string;
 };
 
@@ -118,6 +127,7 @@ const defaultOverviewLoaderDeps: OverviewLoaderDeps = {
 const defaultOverviewInteractionDeps: OverviewInteractionDeps = {
   getOverviewTokenTrend,
   getCronTokenDistribution,
+  getOverviewModelUsage,
   getCronjobs,
   listOverviewSecurityEventsPage,
   getCronjobHistoryDrilldown,
@@ -128,6 +138,7 @@ const defaultOverviewInteractionDeps: OverviewInteractionDeps = {
 
 const CRON_COLORS = ["#00D4FF", "#00FF88", "#FF4D1C", "#A855F7", "#F59E0B", "#EC4899", "#06B6D4", "#84CC16"];
 const SOURCE_COLORS = ["#00D4FF", "#A855F7", "#00FF88", "#FF4D1C", "#FFD600"];
+const MODEL_COLORS = ["#00D4FF", "#A855F7", "#00FF88", "#F59E0B", "#EC4899", "#FF4D1C", "#06B6D4", "#84CC16", "#FFD600", "#6366F1"];
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
@@ -144,6 +155,13 @@ function formatCompactTokens(value: number | undefined | null): string {
   if (n >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
   if (n >= 1e3) return `${(n / 1e3).toFixed(1)}K`;
   return `${n}`;
+}
+
+function formatUsd(value: number | null | undefined): string {
+  if (typeof value !== "number" || Number.isNaN(value)) return "--";
+  if (value === 0) return "$0.00";
+  if (value < 1) return `$${value.toFixed(4)}`;
+  return `$${value.toFixed(2)}`;
 }
 
 function formatDuration(seconds: number | null | undefined): string {
@@ -234,12 +252,14 @@ function resolveEventIcon(icon: string | undefined): string {
 function drawTrendChart(canvas: HTMLCanvasElement, points: TokenTrendPoint[]): void {
   const ctx = canvas.getContext("2d");
   if (!ctx) return;
-  const width = canvas.parentElement?.clientWidth ?? 640;
-  const height = 240;
   const dpr = window.devicePixelRatio || 1;
+  // Read the canvas's own laid-out width (CSS width:100%). Do NOT set
+  // canvas.style.width from the parent clientWidth — that includes the
+  // parent padding and feeds back, widening the chart on every redraw.
+  const width = Math.floor(canvas.clientWidth || canvas.parentElement?.clientWidth || 640);
+  const height = 240;
   canvas.width = Math.floor(width * dpr);
   canvas.height = Math.floor(height * dpr);
-  canvas.style.width = `${width}px`;
   canvas.style.height = `${height}px`;
   ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
   ctx.clearRect(0, 0, width, height);
@@ -423,6 +443,62 @@ function drawCronTokenChart(canvas: HTMLCanvasElement, dist: CronTokenDistributi
   ctx.fillText(`${dist.cron_percent}% of all tokens`, cx, cy + 25);
 }
 
+function drawModelChart(canvas: HTMLCanvasElement, dist: ModelUsageDistribution | null): void {
+  const ctx = canvas.getContext("2d");
+  if (!ctx) return;
+  const size = 280;
+  const dpr = window.devicePixelRatio || 1;
+  canvas.width = Math.floor(size * dpr);
+  canvas.height = Math.floor(size * dpr);
+  canvas.style.width = `${size}px`;
+  canvas.style.height = `${size}px`;
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, size, size);
+
+  if (!dist) return;
+
+  const cx = size / 2;
+  const cy = size / 2;
+  const outer = 115;
+  const inner = 70;
+  const models = dist.models ?? [];
+  const total = Math.max(dist.total_tokens, 1);
+  let angle = -Math.PI / 2;
+
+  models.forEach((model, index) => {
+    const sweep = (model.total_tokens / total) * Math.PI * 2 - 0.03;
+    if (sweep <= 0) return;
+    const color = MODEL_COLORS[index % MODEL_COLORS.length];
+    ctx.beginPath();
+    ctx.arc(cx, cy, outer, angle, angle + sweep);
+    ctx.arc(cx, cy, inner, angle + sweep, angle, true);
+    ctx.closePath();
+    const grad = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
+    grad.addColorStop(0, `${color}44`);
+    grad.addColorStop(1, color);
+    ctx.fillStyle = grad;
+    ctx.fill();
+    angle += sweep + 0.03;
+  });
+
+  ctx.beginPath();
+  ctx.arc(cx, cy, inner - 2, 0, Math.PI * 2);
+  ctx.fillStyle = "#0A1018";
+  ctx.fill();
+
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = "#00D4FF";
+  ctx.font = '600 17px "JetBrains Mono", monospace';
+  ctx.fillText(formatCompactTokens(dist.total_tokens), cx, cy - 10);
+  ctx.fillStyle = "#5a7a9a";
+  ctx.font = '10px "JetBrains Mono", monospace';
+  ctx.fillText("TOKENS", cx, cy + 8);
+  ctx.fillStyle = "#00FF88";
+  ctx.font = '9px "JetBrains Mono", monospace';
+  ctx.fillText(formatUsd(dist.total_cost_usd), cx, cy + 24);
+}
+
 export async function loadOverviewDataResilient(
   deps: OverviewLoaderDeps = defaultOverviewLoaderDeps,
 ): Promise<OverviewLoadResult> {
@@ -502,6 +578,19 @@ export async function loadCronDistributionForPeriod(
     return { period, dist, error: "" };
   } catch (error) {
     const message = error instanceof Error ? error.message : "Failed to load cron token distribution.";
+    return { period, dist: null, error: message };
+  }
+}
+
+export async function loadModelUsageForPeriod(
+  period: CronTokenPeriod,
+  deps: Pick<OverviewInteractionDeps, "getOverviewModelUsage"> = defaultOverviewInteractionDeps,
+): Promise<ModelUsagePeriodResult> {
+  try {
+    const dist = await deps.getOverviewModelUsage(period);
+    return { period, dist, error: "" };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : "Failed to load model usage.";
     return { period, dist: null, error: message };
   }
 }
@@ -652,6 +741,11 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
   const [cronDistLoading, setCronDistLoading] = useState(false);
   const [cronDistError, setCronDistError] = useState("");
 
+  const [modelPeriod, setModelPeriod] = useState<CronTokenPeriod>("7d");
+  const [modelDist, setModelDist] = useState<ModelUsageDistribution | null>(null);
+  const [modelDistLoading, setModelDistLoading] = useState(false);
+  const [modelDistError, setModelDistError] = useState("");
+
   const cronPageSize = 8;
   const [cronPage, setCronPage] = useState(initialData?.cronjobs?.page ?? 1);
   const [cronPanel, setCronPanel] = useState<PaginatedCronjobs | null>(initialData?.cronjobs ?? null);
@@ -705,6 +799,7 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
   const trendCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null);
   const cronCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  const modelCanvasRef = useRef<HTMLCanvasElement | null>(null);
 
   const sourceEntries = useMemo(() => {
     const distribution = data?.stats?.source_distribution;
@@ -777,6 +872,23 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
   useEffect(() => {
     let cancelled = false;
     async function run() {
+      setModelDistLoading(true);
+      setModelDistError("");
+      const result = await loadModelUsageForPeriod(modelPeriod, deps);
+      if (cancelled) return;
+      setModelDist(result.dist);
+      setModelDistError(result.error);
+      setModelDistLoading(false);
+    }
+    void run();
+    return () => {
+      cancelled = true;
+    };
+  }, [modelPeriod, deps]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function run() {
       setKeywordsLoading(true);
       setKeywordsError("");
       try {
@@ -809,6 +921,10 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
     if (cronCanvasRef.current) drawCronTokenChart(cronCanvasRef.current, cronDist);
   }, [cronDist]);
 
+  useEffect(() => {
+    if (modelCanvasRef.current) drawModelChart(modelCanvasRef.current, modelDist);
+  }, [modelDist]);
+
   async function handleTrendSwitch(days: 7 | 30) {
     if (!shouldLoadTrendRange(trendDays, days, Boolean(trendPoints))) return;
     const requestId = ++trendRequestId.current;
@@ -825,6 +941,11 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
   function handleCronPeriodSwitch(period: CronTokenPeriod) {
     if (cronPeriod === period) return;
     setCronPeriod(period);
+  }
+
+  function handleModelPeriodSwitch(period: CronTokenPeriod) {
+    if (modelPeriod === period) return;
+    setModelPeriod(period);
   }
 
   async function handleCronPageChange(nextPage: number) {
@@ -883,6 +1004,12 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
   }
 
   const memoryPercent = data?.stats?.memory_percent ?? 0;
+  const soulPercent = data?.stats?.memory_soul_percent ?? 0;
+  const soulUsed = data?.stats?.memory_soul_chars ?? 0;
+  const soulLimit = data?.stats?.memory_soul_limit ?? 0;
+  const userPercent = data?.stats?.memory_user_percent ?? 0;
+  const userUsed = data?.stats?.memory_user_chars ?? 0;
+  const userLimit = data?.stats?.memory_user_limit ?? 0;
   const uptimeSeconds = data?.status?.uptime_seconds ?? 0;
   const hours = Math.floor(uptimeSeconds / 3600);
   const minutes = Math.floor((uptimeSeconds % 3600) / 60);
@@ -955,8 +1082,21 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
             <div className="stat-body">
               <div className="stat-value">{memoryPercent}%</div>
               <div className="stat-label">Memory 容量</div>
-              <div className="memory-bar">
-                <div className="memory-fill" style={{ width: `${Math.max(0, Math.min(100, memoryPercent))}%` }} />
+              <div className="memory-split">
+                <div className="memory-row">
+                  <span className="memory-row-label">Soul</span>
+                  <div className="memory-bar">
+                    <div className="memory-fill" style={{ width: `${Math.max(0, Math.min(100, soulPercent))}%` }} />
+                  </div>
+                  <span className="memory-row-val">{soulPercent}% · {soulUsed}/{soulLimit}</span>
+                </div>
+                <div className="memory-row">
+                  <span className="memory-row-label">偏好</span>
+                  <div className="memory-bar">
+                    <div className="memory-fill" style={{ width: `${Math.max(0, Math.min(100, userPercent))}%` }} />
+                  </div>
+                  <span className="memory-row-val">{userPercent}% · {userUsed}/{userLimit}</span>
+                </div>
               </div>
             </div>
           </article>
@@ -973,6 +1113,18 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
               <div className="token-detail">
                 IN: {formatCompactTokens(data.stats?.today_input_tokens)} / OUT: {formatCompactTokens(data.stats?.today_output_tokens)}
               </div>
+            </div>
+          </article>
+          <article className="stat-card card glow" style={{ animationDelay: "0.45s" }}>
+            <div className="stat-icon-wrap accent-green">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M12 6v12m-3-2.818l.879.659c1.171.879 3.07.879 4.242 0 1.172-.879 1.172-2.303 0-3.182C13.536 12.219 12.768 12 12 12c-.725 0-1.45-.22-2.003-.659-1.106-.879-1.106-2.303 0-3.182s2.9-.879 4.006 0l.415.33M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+              </svg>
+            </div>
+            <div className="stat-body">
+              <div className="stat-value">{formatUsd(data.stats?.today_cost_usd)}</div>
+              <div className="stat-label">今日成本</div>
+              <div className="token-detail">actual / estimated USD</div>
             </div>
           </article>
         </section>
@@ -1030,7 +1182,7 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
         <section className="panel panel-keywords" style={{ animationDelay: "0.7s" }}>
           <div className="panel-header">
             <h3>
-              <span className="panel-icon">◈</span>会话关键词
+              <span className="panel-icon">◈</span>安全关键词
             </h3>
             <span className="panel-hint">CLICK TO DRILL DOWN</span>
           </div>
@@ -1114,6 +1266,71 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
                     </span>
                     <span>
                       Runs: <strong>{cronDist.jobs.reduce((sum, job) => sum + job.runs, 0)}</strong>
+                    </span>
+                  </div>
+                ) : null}
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <section className="panel panel-model-usage" style={{ animationDelay: "0.78s" }}>
+          <div className="panel-header">
+            <h3>
+              <span className="panel-icon">◈</span>模型用量 & 成本
+            </h3>
+            <div className="panel-tabs">
+              <button className={`tab ${modelPeriod === "today" ? "active" : ""}`} type="button" onClick={() => handleModelPeriodSwitch("today")}>
+                今日
+              </button>
+              <button className={`tab ${modelPeriod === "7d" ? "active" : ""}`} type="button" onClick={() => handleModelPeriodSwitch("7d")}>
+                7天
+              </button>
+              <button className={`tab ${modelPeriod === "30d" ? "active" : ""}`} type="button" onClick={() => handleModelPeriodSwitch("30d")}>
+                30天
+              </button>
+            </div>
+          </div>
+          <div className="panel-body">
+            {modelDistLoading ? <p className="subtle-copy">Loading model usage...</p> : null}
+            {modelDistError ? <p className="error-text">{modelDistError}</p> : null}
+            <div className="cron-token-layout">
+              <div className="cron-token-chart-wrap">
+                <canvas ref={modelCanvasRef} aria-label="model usage chart" />
+              </div>
+              <div className="cron-token-list model-usage-list">
+                {(modelDist?.models ?? []).map((model, index) => {
+                  const color = MODEL_COLORS[index % MODEL_COLORS.length];
+                  return (
+                    <div key={model.model} className="cron-token-item">
+                      <div className="cron-token-dot" style={{ background: color, boxShadow: `0 0 6px ${color}88` }} />
+                      <div className="cron-token-name">{model.model}</div>
+                      <div className="cron-token-value">{formatCompactTokens(model.total_tokens)}</div>
+                      <div className="cron-token-pct">{model.percent_of_total}%</div>
+                      <div className="cron-token-cost">{formatUsd(model.cost_usd)}</div>
+                      <div className="cron-token-bar-wrap">
+                        <div className="cron-token-bar-fill" style={{ width: `${model.percent_of_total}%`, background: `linear-gradient(90deg, ${color}22, ${color})` }} />
+                      </div>
+                      <div className="model-usage-detail">
+                        IN {formatCompactTokens(model.input_tokens)} · OUT {formatCompactTokens(model.output_tokens)} · 缓存读 {formatCompactTokens(model.cache_read_tokens)}
+                        {model.reasoning_tokens > 0 ? ` · 思考 ${formatCompactTokens(model.reasoning_tokens)}` : ""}
+                      </div>
+                    </div>
+                  );
+                })}
+                {modelDist && modelDist.models.length === 0 && !modelDistLoading ? (
+                  <p className="subtle-copy">No model usage in this period.</p>
+                ) : null}
+                {modelDist ? (
+                  <div className="cron-token-summary">
+                    <span>
+                      总计 Token: <strong>{formatCompactTokens(modelDist.total_tokens)}</strong>
+                    </span>
+                    <span>
+                      总成本: <strong>{formatUsd(modelDist.total_cost_usd)}</strong>
+                    </span>
+                    <span>
+                      模型数: <strong>{modelDist.models.length}</strong>
                     </span>
                   </div>
                 ) : null}

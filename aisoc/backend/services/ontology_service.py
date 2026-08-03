@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import pwd
 import subprocess
 import threading
 from pathlib import Path
@@ -30,8 +31,27 @@ _compile_lock = threading.Lock()
 _scan_lock = threading.Lock()
 
 
+def _real_home() -> str:
+    """Return the OS-level home directory for the current uid.
+
+    Distinct from ``Path.home()`` / ``os.environ['HOME']`` — the hermes runtime's
+    ``prepare_hermes_home()`` rewrites ``HOME`` to a per-profile sandbox before
+    this module is imported, which would otherwise poison ``~`` expansion in
+    ``_env_path()`` defaults. ``getpwuid`` reads directly from the passwd
+    database, so it survives HOME manipulation.
+    """
+    return pwd.getpwuid(os.getuid()).pw_dir
+
+
 def _env_path(name: str, default: str) -> Path:
     return Path(os.environ.get(name, default)).expanduser()
+
+
+# Absolute path to the aisoc profile, resolved via the OS uid → home mapping
+# rather than ~. On the canonical deploy host this is /home/amber/.hermes/…;
+# on a Mac dev machine it's /Users/<login>/.hermes/…; either way it's a real
+# on-disk path unaffected by any HOME env manipulation.
+_PROFILE = f"{_real_home()}/.hermes/profiles/aisoc"
 
 
 def _run_ontology_script(script: Path, lock: threading.Lock, label: str) -> dict[str, Any]:
@@ -71,22 +91,25 @@ def _run_ontology_script(script: Path, lock: threading.Lock, label: str) -> dict
 
 class OntologyService:
     # v3 三层图谱是唯一真实来源。compile 只把它写到 alias 路径供旧调用点兼容。
+    # 默认值使用 _PROFILE（getpwuid 拿的真 home）而不是 ~，因为 hermes runtime
+    # 会在这个模块被 import 之前重写 HOME → sandbox 目录，此时 ~ 展开会得到
+    # sandbox 路径，一切都错位。
     STANDARD_GRAPH_V3 = _env_path(
         "AISOC_ONTOLOGY_STANDARD_GRAPH_V3",
-        "~/.hermes/profiles/aisoc/artifacts/ontology/standard/standard-graph_v3.json",
+        f"{_PROFILE}/artifacts/ontology/standard/standard-graph_v3.json",
     )
     STANDARD_GRAPH_ALIAS = _env_path(
         "AISOC_ONTOLOGY_STANDARD_GRAPH",
-        "~/.hermes/profiles/aisoc/artifacts/ontology/standard/standard-graph.json",
+        f"{_PROFILE}/artifacts/ontology/standard/standard-graph.json",
     )
     STANDARD_GRAPH = STANDARD_GRAPH_V3
     SCANS_ROOT = _env_path(
         "AISOC_ONTOLOGY_SCANS_ROOT",
-        "~/.hermes/profiles/aisoc/artifacts/ontology/scans",
+        f"{_PROFILE}/artifacts/ontology/scans",
     )
     SKILL_SCRIPTS = _env_path(
         "AISOC_ONTOLOGY_SKILL_SCRIPTS",
-        "~/.hermes/profiles/aisoc/skills/ontology/scripts",
+        f"{_PROFILE}/skills/ontology/scripts",
     )
 
     @staticmethod

@@ -45,6 +45,13 @@ def _run_mutation(label: str, fn):
 
 
 def build_ontology_router() -> APIRouter:
+    # Any scan job still marked queued/running from a *previous* incarnation
+    # of this process (e.g. it was killed/restarted mid-scan) is orphaned —
+    # its daemon thread died with it, so it will never progress again. Reap
+    # those now so GET /scan/active doesn't keep reporting a dead job as
+    # "running" until STALE_JOB_SECONDS (20 min) finally ages it out.
+    OntologyJobService.reap_orphaned_jobs()
+
     router = APIRouter(prefix="/api/ontology", tags=["ontology"])
 
     @router.post("/compile", response_model=OntologyScanResponse)
@@ -59,7 +66,20 @@ def build_ontology_router() -> APIRouter:
     @router.post("/scan", response_model=OntologyScanJobResponse)
     async def run_ontology_scan() -> dict:
         # 异步 job：立即返回 job_id，实际扫描在后台线程完成。客户端轮询 /scan/{job_id}。
+        # 若已有扫描在跑，create_scan_job 会直接返回同一个 job（不会重复起 AI 判定）。
         return _run_mutation("scan", OntologyJobService.create_scan_job)
+
+    # NOTE: must be registered before /scan/{job_id} — otherwise a GET to
+    # /scan/active would match the {job_id} route with job_id="active" first.
+    @router.get("/scan/active", response_model=OntologyScanJobResponse)
+    async def get_active_ontology_scan() -> dict:
+        # 页面刚挂载时用这个查"现在有没有扫描在跑"，不需要提前记住 job_id ——
+        # 无论是切换 tab 回来、刷新页面、还是换个浏览器，只要后端进程没重启，
+        # 都能接上正在跑的那个 job。
+        job = OntologyJobService.get_active_job()
+        if job is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="No ontology scan is currently running")
+        return job
 
     @router.get("/scan/{job_id}", response_model=OntologyScanJobResponse)
     async def get_ontology_scan_job(job_id: str) -> dict:

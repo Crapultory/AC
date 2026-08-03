@@ -65,6 +65,10 @@ export const ontologyApi = {
   scan: async (): Promise<OntologyScanResponse> => (await apiClient.post('/ontology/scan')).data,
   scanStatus: async (jobId: string): Promise<OntologyScanResponse> =>
     (await apiClient.get(`/ontology/scan/${jobId}`)).data,
+  /** Ask "is a scan currently running" without already knowing a job_id —
+   * lets a freshly (re)mounted page reattach to an in-flight scan after
+   * navigating away and back. Throws (404) when nothing is running. */
+  scanActive: async (): Promise<OntologyScanResponse> => (await apiClient.get('/ontology/scan/active')).data,
   overview: async (): Promise<OntologyOverview> => (await apiClient.get('/ontology/overview')).data,
   artifact: async (name: 'standard' | 'observed' | 'mapped' | 'scorecard' | 'gap') =>
     (await apiClient.get(`/ontology/artifacts/${name}`)).data.data,

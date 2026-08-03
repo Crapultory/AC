@@ -105,11 +105,18 @@ def test_get_stats_returns_expected_fields(monkeypatch, tmp_path) -> None:
         "today_tokens",
         "today_input_tokens",
         "today_output_tokens",
+        "today_cost_usd",
         "cron_jobs_total",
         "cron_jobs_enabled",
         "memory_used_chars",
         "memory_total_chars",
         "memory_percent",
+        "memory_soul_chars",
+        "memory_soul_limit",
+        "memory_soul_percent",
+        "memory_user_chars",
+        "memory_user_limit",
+        "memory_user_percent",
         "source_distribution",
     }
     assert payload["total_sessions"] == 3
@@ -117,10 +124,19 @@ def test_get_stats_returns_expected_fields(monkeypatch, tmp_path) -> None:
     assert payload["today_input_tokens"] == 300
     assert payload["today_output_tokens"] == 150
     assert payload["today_tokens"] == 450
+    assert payload["today_cost_usd"] == 0.0
     assert payload["cron_jobs_total"] == 2
     assert payload["cron_jobs_enabled"] == 1
     assert payload["memory_used_chars"] == 30
     assert payload["memory_total_chars"] == 150
+    # soul: 10/100 chars, user: 20/50 chars — get_stats() now breaks the combined
+    # memory_percent down per-store so the UI can show soul vs. user usage separately.
+    assert payload["memory_soul_chars"] == 10
+    assert payload["memory_soul_limit"] == 100
+    assert payload["memory_soul_percent"] == 10.0
+    assert payload["memory_user_chars"] == 20
+    assert payload["memory_user_limit"] == 50
+    assert payload["memory_user_percent"] == 40.0
     assert payload["source_distribution"] == {"api": 1, "cli": 1, "cron": 1}
 
 
@@ -241,22 +257,26 @@ def test_list_keywords_and_keyword_sessions_return_minimum_shape(monkeypatch, tm
     db_path = tmp_path / "state.db"
     db = SessionDB(db_path=db_path)
     try:
+        # list_keywords() now only surfaces terms from the curated security
+        # vocabulary (_SECURITY_KEYWORDS) — a generic codename like the old
+        # "apollo" fixture no longer counts as a trending keyword, so this
+        # seeds actual security-relevant terms instead.
         db.create_session("s_kw_1", "cli", model="gpt-5")
         db.update_token_counts("s_kw_1", input_tokens=20, output_tokens=10)
-        db.append_message("s_kw_1", "user", content="apollo network review checklist")
+        db.append_message("s_kw_1", "user", content="phishing attack network review checklist")
 
         db.create_session("s_kw_2", "api", model="gpt-5")
         db.update_token_counts("s_kw_2", input_tokens=15, output_tokens=5)
-        db.append_message("s_kw_2", "user", content="apollo baseline hardening report")
+        db.append_message("s_kw_2", "user", content="ransomware attack baseline hardening report")
 
         with db._lock:
             db._conn.execute(
                 "UPDATE sessions SET started_at = ?, title = ?, message_count = 4 WHERE id = ?",
-                (now_ts - 3000, "Apollo security review", "s_kw_1"),
+                (now_ts - 3000, "Incident response review", "s_kw_1"),
             )
             db._conn.execute(
                 "UPDATE sessions SET started_at = ?, title = ?, message_count = 4 WHERE id = ?",
-                (now_ts - 2000, "Weekly apollo sync", "s_kw_2"),
+                (now_ts - 2000, "Weekly attack simulation sync", "s_kw_2"),
             )
     finally:
         db.close()
@@ -268,8 +288,9 @@ def test_list_keywords_and_keyword_sessions_return_minimum_shape(monkeypatch, tm
     assert isinstance(keywords, list)
     assert keywords
     assert set(keywords[0].keys()) == {"word", "count", "lang"}
+    assert keywords[0]["word"] == "attack"
 
-    sessions = overview_service.list_keyword_sessions("apollo")
+    sessions = overview_service.list_keyword_sessions("attack")
     assert isinstance(sessions, list)
     assert sessions
     assert {
