@@ -55,8 +55,16 @@ export interface PendingHtmlPreview {
   path: string;
 }
 
+export type ChatMessageArgs = Record<string, unknown>;
+
 type PendingBoundAction =
-  | { type: 'message.send'; text: string; clientMsgId: string; attachments: ChatAttachment[] }
+  | {
+      type: 'message.send';
+      text: string;
+      clientMsgId: string;
+      attachments: ChatAttachment[];
+      args?: ChatMessageArgs;
+    }
   | { type: 'approval.respond'; choice: 'once' | 'session' | 'always' | 'deny' }
   | { type: 'clarify.respond'; answer: string }
   | { type: 'session.resume' };
@@ -79,7 +87,7 @@ type ChatRuntimeContextValue = {
   createConversation: () => void;
   clearHistory: () => boolean;
   deleteConversation: (conversationId: string) => void;
-  submitInput: (text: string, attachments?: ChatAttachment[]) => void;
+  submitInput: (text: string, attachments?: ChatAttachment[], args?: ChatMessageArgs) => void;
   respondApproval: (choice: 'once' | 'session' | 'always' | 'deny') => void;
   respondClarify: (answer: string) => void;
   markClarifyAwaitingText: () => void;
@@ -361,7 +369,7 @@ export function AegisChatProvider({
 }) {
   const [conversations, setConversations] = useState<Conversation[]>(() => loadCachedConversations());
   const [activeConvId, setActiveConvId] = useState<string>(() => loadCachedConversations()[0]?.id || '');
-  const [transportError, setTransportError] = useState('');
+  const [transportErrors, setTransportErrors] = useState<Record<string, string>>({});
   const [rejectedInput, setRejectedInput] = useState<RejectedChatInput>();
   const [pendingHtmlPreviews, setPendingHtmlPreviews] = useState<Record<string, PendingHtmlPreview>>({});
   const conversationsRef = useRef<Conversation[]>(conversations);
@@ -374,6 +382,7 @@ export function AegisChatProvider({
     () => conversations.find((conversation) => conversation.id === activeConvId),
     [activeConvId, conversations],
   );
+  const transportError = transportErrors[activeConvId] || '';
 
   const chatAttentionCount = useMemo(
     () =>
@@ -434,6 +443,29 @@ export function AegisChatProvider({
     });
   }
 
+  function setConversationTransportError(conversationId: string, message: string) {
+    if (!conversationId) {
+      return;
+    }
+    setTransportErrors((current) => {
+      if (!message) {
+        if (!(conversationId in current)) {
+          return current;
+        }
+        const { [conversationId]: _cleared, ...remaining } = current;
+        return remaining;
+      }
+      if (current[conversationId] === message) {
+        return current;
+      }
+      return { ...current, [conversationId]: message };
+    });
+  }
+
+  function setTransportError(message: string) {
+    setConversationTransportError(activeConvIdRef.current, message);
+  }
+
   function closeSocketForConversation(conversationId: string) {
     const entry = socketsRef.current[conversationId];
     if (!entry) {
@@ -460,7 +492,7 @@ export function AegisChatProvider({
     const entry = socketsRef.current[localConversationId];
     const socket = entry?.socket;
     if (!socket || socket.readyState !== getOpenReadyState()) {
-      setTransportError('Chat transport is not connected.');
+      setConversationTransportError(localConversationId, 'Chat transport is not connected.');
       return;
     }
     if (action.type === 'message.send') {
@@ -471,6 +503,7 @@ export function AegisChatProvider({
           text: action.text,
           client_msg_id: action.clientMsgId,
           attachments: action.attachments,
+          args: action.args,
         }),
       );
       return;
@@ -541,8 +574,12 @@ export function AegisChatProvider({
           });
         }
       }
-      setTransportError(payload.message || 'Chat transport error.');
+      setConversationTransportError(localConversationId, payload.message || 'Chat transport error.');
       return;
+    }
+
+    if (payload.type === 'message.accepted') {
+      setConversationTransportError(localConversationId, '');
     }
 
     const completedSource = payload.source || 'main';
@@ -744,7 +781,7 @@ export function AegisChatProvider({
   ): boolean {
     const token = getStoredToken();
     if (!token) {
-      setTransportError('Missing access token for chat transport.');
+      setConversationTransportError(targetConversation.id, 'Missing access token for chat transport.');
       return false;
     }
 
@@ -777,7 +814,7 @@ export function AegisChatProvider({
     setConversationTransportState(targetConversation.id, 'connecting');
 
     socket.onopen = () => {
-      setTransportError('');
+      setConversationTransportError(targetConversation.id, '');
       setConversationTransportState(targetConversation.id, 'connected');
       socket.send(
         JSON.stringify({
@@ -806,7 +843,10 @@ export function AegisChatProvider({
     };
 
     socket.onerror = () => {
-      setTransportError('Chat transport degraded. Reconnect or open a new conversation.');
+      setConversationTransportError(
+        targetConversation.id,
+        'Chat transport degraded. Reconnect or open a new conversation.',
+      );
       setConversationTransportState(targetConversation.id, 'error');
     };
 
@@ -840,7 +880,6 @@ export function AegisChatProvider({
     updateConversations((current) => [created, ...current]);
     setActiveConvId(created.id);
     activeConvIdRef.current = created.id;
-    setTransportError('');
   }
 
   function clearHistory(): boolean {
@@ -854,7 +893,7 @@ export function AegisChatProvider({
     conversationsRef.current = [];
     setActiveConvId('');
     activeConvIdRef.current = '';
-    setTransportError('');
+    setTransportErrors({});
     setPendingHtmlPreviews({});
     return true;
   }
@@ -862,6 +901,7 @@ export function AegisChatProvider({
   function deleteConversation(conversationId: string) {
     closeSocketForConversation(conversationId);
     delete pendingBoundActionsRef.current[conversationId];
+    setConversationTransportError(conversationId, '');
     setPendingHtmlPreviews((current) => {
       if (!current[conversationId]) return current;
       const { [conversationId]: _removed, ...remaining } = current;
@@ -898,7 +938,11 @@ export function AegisChatProvider({
     setPendingHtmlPreviews({});
   }
 
-  function submitInput(text: string, attachments: ChatAttachment[] = []) {
+  function submitInput(
+    text: string,
+    attachments: ChatAttachment[] = [],
+    args?: ChatMessageArgs,
+  ) {
     const trimmedText = text.trim();
     if (!trimmedText && attachments.length === 0) {
       return;
@@ -958,6 +1002,7 @@ export function AegisChatProvider({
             text: sentText,
             clientMsgId,
             attachments,
+            args,
           }),
     });
   }

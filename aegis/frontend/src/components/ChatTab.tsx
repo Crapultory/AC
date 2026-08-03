@@ -32,6 +32,7 @@ import {
   Minimize2,
   Paperclip,
   PanelRightOpen,
+  PanelsTopLeft,
   Plus,
   RefreshCw,
   Send,
@@ -45,6 +46,17 @@ import {
   useAegisChatRuntime,
   useOptionalAegisChatRuntime,
 } from "../lib/chatRuntime";
+import { getStoredUser } from "../lib/auth";
+import {
+  clearCachedDrawerTabs,
+  loadCachedDrawerTabs,
+  saveCachedDrawerTabs,
+  type CachedDrawerTabsByConversation,
+} from "../lib/chatDrawerTabs";
+import {
+  insertAgent2UIComposerText,
+  parseAgent2UIComposerInsertIntent,
+} from "../lib/agent2ui";
 import { fetchJSON, getApiErrorMessage } from "../lib/api";
 import {
   findShortcutQuery,
@@ -53,6 +65,7 @@ import {
   type ChatQuickCommandListResponse,
   type ShortcutQuery,
 } from "../lib/chatQuickCommands";
+import { AEGIS_THEMES, getStoredTheme } from "../lib/theme";
 import SessionWorkflow from "./SessionWorkflow";
 
 interface ChatTabProps {
@@ -96,6 +109,33 @@ interface SessionDrawerTabs {
 const WORKFLOW_DRAWER_WIDTH_STORAGE_KEY = "aegis_chat_workflow_drawer_width";
 const DEFAULT_WORKFLOW_DRAWER_WIDTH = 50;
 const MIN_WORKSPACE_PANE_WIDTH = 360;
+const SHORTCUT_TOKEN_PATTERN = /@\[(?:agent|prompt|instruct)_[^\]]+\]/g;
+const HAS_SHORTCUT_TOKEN_PATTERN = /@\[(?:agent|prompt|instruct)_[^\]]+\]/;
+
+function renderShortcutTokens(text: string): React.ReactNode[] {
+  const tokens: React.ReactNode[] = [];
+  let cursor = 0;
+  let match: RegExpExecArray | null;
+
+  SHORTCUT_TOKEN_PATTERN.lastIndex = 0;
+  while ((match = SHORTCUT_TOKEN_PATTERN.exec(text)) !== null) {
+    if (match.index > cursor) {
+      tokens.push(text.slice(cursor, match.index));
+    }
+    const token = match[0];
+    tokens.push(
+      <strong className="aegis-shortcut-token" key={`${match.index}-${token}`}>
+        <u>{token}</u>
+      </strong>,
+    );
+    cursor = match.index + token.length;
+  }
+  if (cursor < text.length) {
+    tokens.push(text.slice(cursor));
+  }
+  return tokens;
+}
+
 function drawerWidthBounds(containerWidth: number) {
   if (!containerWidth || containerWidth <= MIN_WORKSPACE_PANE_WIDTH * 2) {
     return { min: 20, max: 80 };
@@ -140,6 +180,8 @@ interface DrawerFilePreviewProps {
   content: string;
   loading: boolean;
   error: string;
+  active: boolean;
+  onComposerInsert: (text: string) => void;
 }
 
 function DrawerFilePreview({
@@ -148,7 +190,26 @@ function DrawerFilePreview({
   content,
   loading,
   error,
+  active,
+  onComposerInsert,
 }: DrawerFilePreviewProps) {
+  const iframeRef = useRef<HTMLIFrameElement>(null);
+
+  useEffect(() => {
+    const handleMessage = (event: MessageEvent<unknown>) => {
+      if (
+        !active ||
+        event.source !== iframeRef.current?.contentWindow
+      ) {
+        return;
+      }
+      const intent = parseAgent2UIComposerInsertIntent(event.data);
+      if (intent) onComposerInsert(intent.text);
+    };
+    window.addEventListener("message", handleMessage);
+    return () => window.removeEventListener("message", handleMessage);
+  }, [active, onComposerInsert]);
+
   if (loading && !content) {
     return (
       <div className="aegis-drawer-preview__status" role="status">
@@ -181,10 +242,12 @@ function DrawerFilePreview({
   }
   return (
     <iframe
+      ref={iframeRef}
       title={title || "Aegis file preview"}
       data-testid="drawer-html-frame"
       className="aegis-drawer-preview__frame"
-      sandbox="allow-scripts"
+      sandbox="allow-scripts allow-forms"
+      referrerPolicy="no-referrer"
       srcDoc={content}
     />
   );
@@ -437,6 +500,44 @@ function getMessageCopyText(message: Message): string {
   return message.text;
 }
 
+function getThemeMessageArgument(): string {
+  const activeTheme = document.documentElement.dataset.aegisTheme;
+  const theme =
+    AEGIS_THEMES.find((candidate) => candidate.id === activeTheme) ??
+    AEGIS_THEMES.find((candidate) => candidate.id === getStoredTheme()) ??
+    AEGIS_THEMES[0];
+  const { preview } = theme;
+  return JSON.stringify({
+    style: theme.description,
+    background_surface: `${preview.background} / ${preview.surface}`,
+    accent: preview.accent,
+    text_muted: `${preview.text} / ${preview.muted}`,
+    border: preview.border,
+  });
+}
+
+function hydrateDrawerTabs(
+  cached: CachedDrawerTabsByConversation,
+): Record<string, SessionDrawerTabs> {
+  return Object.fromEntries(
+    Object.entries(cached).map(([conversationId, sessionTabs]) => [
+      conversationId,
+      {
+        activeTab: sessionTabs.activeTab,
+        tabs: sessionTabs.tabs.map((tab) => ({
+          ...tab,
+          type: "text",
+          content: "",
+          loading: false,
+          refreshVersion: 0,
+          settledVersion: -1,
+          error: "",
+        })),
+      },
+    ]),
+  );
+}
+
 function ChatTabContent({ agents }: ChatTabProps) {
   void agents;
   const {
@@ -459,6 +560,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
     clearRejectedInput,
     consumePendingHtmlPreview,
   } = useAegisChatRuntime();
+  const drawerTabsUserId = getStoredUser()?.uid || "";
   const [inputVal, setInputVal] = useState("");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
@@ -466,6 +568,7 @@ function ChatTabContent({ agents }: ChatTabProps) {
   const [showDelegateTools, setShowDelegateTools] = useState(false);
   const [markdownRenderingEnabled, setMarkdownRenderingEnabled] =
     useState(true);
+  const [a2uiEnabled, setA2uiEnabled] = useState(false);
   const [expandedMessageIds, setExpandedMessageIds] = useState<
     Record<string, boolean>
   >({});
@@ -476,7 +579,14 @@ function ChatTabContent({ agents }: ChatTabProps) {
   const [workflowFullscreen, setWorkflowFullscreen] = useState(false);
   const [drawerTabsByConversation, setDrawerTabsByConversation] = useState<
     Record<string, SessionDrawerTabs>
-  >({});
+  >(() =>
+    hydrateDrawerTabs(
+      loadCachedDrawerTabs(
+        drawerTabsUserId,
+        conversations.map((conversation) => conversation.id),
+      ),
+    ),
+  );
   const [workflowDrawerWidth, setWorkflowDrawerWidth] = useState(
     loadWorkflowDrawerWidth,
   );
@@ -515,6 +625,8 @@ function ChatTabContent({ agents }: ChatTabProps) {
   const composerDomValueRef = useRef("");
   const shortcutQueryRef = useRef<ShortcutQuery | null>(null);
   const pendingComposerCaretRef = useRef<number | null>(null);
+  const pendingComposerFocusRef = useRef(true);
+  const lastComposerCaretRef = useRef<number | null>(null);
   const activeDrawerTabs = activeConvId ? drawerTabsByConversation[activeConvId] : undefined;
   const workflowDrawerTab = activeDrawerTabs?.activeTab || "workflow";
   const dynamicDrawerTabs = activeDrawerTabs?.tabs || [];
@@ -549,7 +661,8 @@ function ChatTabContent({ agents }: ChatTabProps) {
     const composer = composerInputRef.current;
     if (!composer) return;
     const knownTokens = new Set(quickCommands.map(quickCommandToken));
-    const tokenPattern = /@\[(?:agent|prompt|instruct)_[^\]]+\]/g;
+    const tokenPattern = SHORTCUT_TOKEN_PATTERN;
+    tokenPattern.lastIndex = 0;
     const fragment = document.createDocumentFragment();
     let cursor = 0;
     let match: RegExpExecArray | null;
@@ -623,9 +736,14 @@ function ChatTabContent({ agents }: ChatTabProps) {
     const caret = pendingComposerCaretRef.current;
     if (caret === null) return;
     pendingComposerCaretRef.current = null;
-    composerInputRef.current?.focus();
+    const shouldFocus = pendingComposerFocusRef.current;
+    pendingComposerFocusRef.current = true;
+    if (shouldFocus && !isConversationBusy(activeConversation)) {
+      composerInputRef.current?.focus();
+    }
     setComposerCaret(caret);
-  }, [inputVal, quickCommands]);
+    lastComposerCaretRef.current = caret;
+  }, [activeConversation, inputVal, quickCommands]);
 
   useEffect(() => {
     if (!rejectedInput) return;
@@ -772,6 +890,14 @@ function ChatTabContent({ agents }: ChatTabProps) {
   }, [workflowDrawerWidth]);
 
   useEffect(() => {
+    saveCachedDrawerTabs(
+      drawerTabsUserId,
+      drawerTabsByConversation,
+      conversations.map((conversation) => conversation.id),
+    );
+  }, [conversations, drawerTabsByConversation, drawerTabsUserId]);
+
+  useEffect(() => {
     const clampStoredDrawerWidth = () => {
       const containerWidth = chatWorkspaceRef.current?.clientWidth || window.innerWidth;
       setWorkflowDrawerWidth((current) =>
@@ -888,6 +1014,8 @@ function ChatTabContent({ agents }: ChatTabProps) {
 
   function handleClearHistory() {
     if (clearHistory()) {
+      setDrawerTabsByConversation({});
+      clearCachedDrawerTabs(drawerTabsUserId);
       setInputVal("");
       clearPendingAttachments();
       setTransportError("");
@@ -897,6 +1025,10 @@ function ChatTabContent({ agents }: ChatTabProps) {
   function handleDeleteConversation(id: string, event: React.MouseEvent) {
     event.stopPropagation();
     deleteConversation(id);
+    setDrawerTabsByConversation((current) => {
+      const { [id]: _removed, ...remaining } = current;
+      return remaining;
+    });
   }
 
   function updateShortcutQuery(value: string, caret: number | null) {
@@ -917,11 +1049,36 @@ function ChatTabContent({ agents }: ChatTabProps) {
     const value = (event.currentTarget.textContent || "").replace(/\u00a0/g, " ");
     composerDomValueRef.current = value;
     setInputVal(value);
-    updateShortcutQuery(value, getComposerCaretOffset());
+    const caret = getComposerCaretOffset();
+    lastComposerCaretRef.current = caret;
+    updateShortcutQuery(value, caret);
   }
 
   function handleComposerSelect() {
-    updateShortcutQuery(inputVal, getComposerCaretOffset());
+    const caret = getComposerCaretOffset();
+    lastComposerCaretRef.current = caret;
+    updateShortcutQuery(inputVal, caret);
+  }
+
+  function rememberComposerCaret() {
+    const caret = getComposerCaretOffset();
+    if (caret !== null) lastComposerCaretRef.current = caret;
+  }
+
+  function insertAgent2UIIntoComposer(text: string) {
+    shortcutQueryRef.current = null;
+    setShortcutQuery(null);
+    setInputVal((current) => {
+      const next = insertAgent2UIComposerText(
+        current,
+        text,
+        lastComposerCaretRef.current,
+      );
+      pendingComposerCaretRef.current = next.caret;
+      pendingComposerFocusRef.current = !isConversationBusy(activeConversation);
+      lastComposerCaretRef.current = next.caret;
+      return next.text;
+    });
   }
 
   const matchingQuickCommands = shortcutQuery
@@ -975,7 +1132,18 @@ function ChatTabContent({ agents }: ChatTabProps) {
     if (!inputVal.trim() && attachments.length === 0) {
       return;
     }
-    submitInput(inputVal, attachments);
+    const text =
+      a2uiEnabled && !inputVal.includes("@[instruct_a2ui]")
+        ? `@[instruct_a2ui]\n${inputVal}`
+        : inputVal;
+    submitInput(
+      text,
+      attachments,
+      {
+        theme_color: getThemeMessageArgument(),
+        date: new Date().toISOString(),
+      },
+    );
     setInputVal("");
     shortcutQueryRef.current = null;
     setShortcutQuery(null);
@@ -1709,9 +1877,11 @@ function ChatTabContent({ agents }: ChatTabProps) {
                   </div>
                 ) : null}
                 <DrawerFilePreview
+                  active={workflowDrawerTab === tab.id}
                   content={tab.content}
                   error={tab.error}
                   loading={tab.loading}
+                  onComposerInsert={insertAgent2UIIntoComposer}
                   title={tab.title}
                   type={tab.type}
                 />
@@ -1823,6 +1993,15 @@ function ChatTabContent({ agents }: ChatTabProps) {
                     ? "DELEGATE TOOLS ON"
                     : "DELEGATE TOOLS OFF"}
                 </span>
+              </button>
+              <button
+                type="button"
+                aria-label="Open prompt templates"
+                onClick={() => void openPromptTemplateDrawer()}
+                className="inline-flex h-7 w-7 items-center justify-center rounded border border-slate-800 bg-[#080C14] text-slate-400 transition-all hover:border-cyan-900/50 hover:bg-slate-800/80 hover:text-cyan-300"
+                title="Prompt templates"
+              >
+                <PanelRightOpen className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
               <button
                 type="button"
@@ -2102,7 +2281,12 @@ function ChatTabContent({ agents }: ChatTabProps) {
                               data-markdown-rendered={markdownRenderingEnabled}
                               className={`${markdownRenderingEnabled ? "aegis-markdown" : "whitespace-pre-wrap"} text-sm leading-relaxed select-text cursor-text`}
                             >
-                              {markdownRenderingEnabled ? (
+                              {message.sender === "user" &&
+                              HAS_SHORTCUT_TOKEN_PATTERN.test(message.text) ? (
+                                <span className="whitespace-pre-wrap">
+                                  {renderShortcutTokens(message.text)}
+                                </span>
+                              ) : markdownRenderingEnabled ? (
                                 <ChatMarkdown content={message.text} />
                               ) : (
                                 message.text
@@ -2350,7 +2534,9 @@ function ChatTabContent({ agents }: ChatTabProps) {
                       contentEditable={!isConversationBusy(activeConversation)}
                       data-placeholder={composerPlaceholder}
                       onKeyDown={handleComposerKeyDown}
+                      onKeyUp={rememberComposerCaret}
                       onInput={handleComposerInput}
+                      onMouseUp={rememberComposerCaret}
                       onPaste={handleComposerPaste}
                       onSelect={handleComposerSelect}
                       role="combobox"
@@ -2419,15 +2605,36 @@ function ChatTabContent({ agents }: ChatTabProps) {
                   </button>
                 </div>
 
-                <button
-                  type="button"
-                  aria-label="Open prompt templates"
-                  onClick={() => void openPromptTemplateDrawer()}
-                  className="shrink-0 rounded border border-slate-800 bg-[#05080F] p-2 text-slate-400 transition-all hover:border-cyan-900/50 hover:bg-slate-800/80 hover:text-cyan-300"
-                  title="Prompt templates"
-                >
-                  <PanelRightOpen className="h-4 w-4" />
-                </button>
+                <div className="group relative shrink-0">
+                  <button
+                    type="button"
+                    aria-label={
+                      a2uiEnabled
+                        ? "Disable A2UI preview"
+                        : "Enable A2UI preview"
+                    }
+                    aria-describedby="a2ui-preview-help"
+                    aria-pressed={a2uiEnabled}
+                    onClick={() => setA2uiEnabled((current) => !current)}
+                    className={`inline-flex h-9 items-center gap-1.5 rounded border px-2 text-[10px] font-mono font-bold tracking-wide transition-all ${
+                      a2uiEnabled
+                        ? "border-cyan-700 bg-cyan-950/40 text-cyan-200"
+                        : "border-slate-800 bg-[#05080F] text-slate-400 hover:border-cyan-900/50 hover:bg-slate-800/80 hover:text-cyan-300"
+                    }`}
+                    title="A2UI preview"
+                  >
+                    <PanelsTopLeft className="h-4 w-4" aria-hidden="true" />
+                    <span>A2UI</span>
+                  </button>
+                  <span
+                    id="a2ui-preview-help"
+                    role="tooltip"
+                    className="pointer-events-none absolute bottom-full left-0 z-30 mb-2 w-56 rounded border border-slate-700 bg-[#080C14] px-3 py-2 text-left text-[11px] leading-relaxed text-slate-300 opacity-0 shadow-xl transition-opacity group-hover:opacity-100 group-focus-within:opacity-100"
+                  >
+                    Adds the A2UI quick-instruction prefix when this message
+                    is sent.
+                  </span>
+                </div>
 
                 <button
                   type="button"

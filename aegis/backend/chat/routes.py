@@ -17,7 +17,7 @@ from aegis.backend.models import ChatQuickCommandListResponse, DrawerFileRespons
 from aegis.backend.services.agent_service import AgentService
 from aegis.backend.services.chat_quick_command_service import (
     ChatQuickCommandService,
-    QuickCommandResolutionError,
+    MessageArgumentResolutionError,
 )
 from aegis.backend.services.prompt_template_service import PromptTemplateService
 from aegis.backend.services.prompt_template_store import PromptTemplateStore
@@ -214,6 +214,7 @@ def build_chat_router(
                         resolved_text = resolved_quick_command_service.resolve_text(
                             current_user.uid if current_user is not None else "",
                             str(payload.get("text") or ""),
+                            args=payload.get("args"),
                         )
                         attachments = session_manager.attachments.resolve(
                             payload.get("attachments"),
@@ -224,11 +225,11 @@ def build_chat_router(
                             client_msg_id=str(payload.get("client_msg_id") or "").strip() or None,
                             attachments=attachments,
                         )
-                    except QuickCommandResolutionError as exc:
+                    except MessageArgumentResolutionError as exc:
                         await websocket.send_json(
                             {
                                 "type": "error",
-                                "code": "invalid_quick_command",
+                                "code": "invalid_message_args",
                                 "message": str(exc),
                                 "client_msg_id": str(payload.get("client_msg_id") or "").strip() or None,
                             }

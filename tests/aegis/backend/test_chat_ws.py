@@ -982,7 +982,7 @@ def test_chat_ws_resolves_cached_quick_command_tokens_before_running_the_agent(
     assert completed["content"] == f"hello world: {expected}"
 
 
-def test_chat_ws_rejects_unsupported_agent_template_variables_before_a_turn_starts(
+def test_chat_ws_keeps_unprovided_agent_template_variables_after_name_resolution(
     load_backend,
     monkeypatch,
     hermes_home,
@@ -1007,32 +1007,158 @@ def test_chat_ws_rejects_unsupported_agent_template_variables_before_a_turn_star
             headers=headers,
             json={
                 "url": "http://127.0.0.1:9088/a2a",
-                "description": "Has an unsupported template variable.",
+                "description": "Has a template variable supplied by a future prompt.",
                 "headers": {},
                 "status": "active",
                 "extcapabilities": [],
             },
         ).status_code == 201
         with client.websocket_connect(f"/api/chat/ws?token={AUTH_TOKEN}") as ws:
-            ws.send_json({"type": "session.bind", "title": "Invalid quick command"})
+            ws.send_json({"type": "session.bind", "title": "Unresolved agent variable"})
             session_id = _recv_until(ws, "session.bound")["session_id"]
             ws.send_json(
                 {
                     "type": "message.send",
                     "session_id": session_id,
-                    "client_msg_id": "quick-command-invalid",
+                    "client_msg_id": "quick-command-unresolved",
                     "text": "@[agent_unresolved-agent]",
                 }
             )
-            error = _recv_until(ws, "error")
+            _recv_until(ws, "message.accepted")
+            _recv_until(ws, "message.completed")
 
-    assert error == {
-        "type": "error",
-        "code": "invalid_quick_command",
-        "message": "Agent command \u201cunresolved-agent\u201d contains unsupported variable: {region}.",
-        "client_msg_id": "quick-command-invalid",
-    }
-    assert received_messages == []
+    assert received_messages == ["Delegate unresolved-agent in {region}."]
+
+
+def test_chat_ws_expands_args_after_resolving_quick_commands(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
+    monkeypatch.setenv("USE_ACTIVE_AGENT_PROMPT", "Delegate {name} in {region}.")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    received_messages: list[str] = []
+
+    class _CapturingAgent(_StreamingAgent):
+        def run_conversation(self, user_message: str, **kwargs) -> dict[str, Any]:
+            received_messages.append(user_message)
+            return super().run_conversation(user_message, **kwargs)
+
+    app.state.chat_manager.set_agent_factory(lambda session_id: _CapturingAgent(session_id))
+
+    with TestClient(app) as client:
+        headers = {"Authorization": f"Bearer {AUTH_TOKEN}"}
+        assert client.post(
+            "/api/agents/argument-agent",
+            headers=headers,
+            json={
+                "url": "http://127.0.0.1:9089/a2a",
+                "description": "Uses a message argument.",
+                "headers": {},
+                "status": "active",
+                "extcapabilities": [],
+            },
+        ).status_code == 201
+        assert client.post(
+            "/api/prompt-templates",
+            headers=headers,
+            json={
+                "tag": "Parameterized",
+                "desc": "Uses message arguments.",
+                "prompt": "Investigate {indicator} from {region}; leave {unknown} untouched.",
+            },
+        ).status_code == 201
+
+        with client.websocket_connect(f"/api/chat/ws?token={AUTH_TOKEN}") as ws:
+            ws.send_json({"type": "session.bind", "title": "Message args"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "client_msg_id": "message-args-1",
+                    "text": "@[agent_argument-agent] @[prompt_Parameterized] Priority {priority}.",
+                    "args": {
+                        "region": "ap-southeast-1",
+                        "indicator": "example.com",
+                        "priority": 1,
+                    },
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            _recv_until(ws, "message.completed")
+
+    assert received_messages == [
+        "Delegate argument-agent in ap-southeast-1. "
+        "Investigate example.com from ap-southeast-1; leave {unknown} untouched. Priority 1."
+    ]
+
+
+def test_chat_ws_passes_a2ui_theme_and_date_args_to_instruct_templates(
+    load_backend,
+    monkeypatch,
+    hermes_home,
+) -> None:
+    monkeypatch.setenv("AEGIS_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
+    server = load_backend("aegis.backend.server")
+    app = server.create_app()
+    received_messages: list[str] = []
+
+    class _CapturingAgent(_StreamingAgent):
+        def run_conversation(self, user_message: str, **kwargs) -> dict[str, Any]:
+            received_messages.append(user_message)
+            return super().run_conversation(user_message, **kwargs)
+
+    app.state.chat_manager.set_agent_factory(lambda session_id: _CapturingAgent(session_id))
+
+    theme_color = json.dumps(
+        {
+            "style": "Deep-space contrast for focused night-shift operations.",
+            "background_surface": "#020408 / #05080F",
+            "accent": "#22D3EE",
+            "text_muted": "#F8FAFC / #94A3B8",
+            "border": "#1E293B",
+        },
+        separators=(",", ":"),
+    )
+
+    with TestClient(app) as client:
+        headers = {"Authorization": f"Bearer {AUTH_TOKEN}"}
+        assert client.post(
+            "/api/system-instructs",
+            headers=headers,
+            json={
+                "name": "a2ui",
+                "describe": "Renders an A2UI response.",
+                "instruct": "Use theme {theme_color} at {date}.",
+                "status": "enabled",
+            },
+        ).status_code == 201
+
+        with client.websocket_connect(f"/api/chat/ws?token={AUTH_TOKEN}") as ws:
+            ws.send_json({"type": "session.bind", "title": "A2UI args"})
+            session_id = _recv_until(ws, "session.bound")["session_id"]
+            ws.send_json(
+                {
+                    "type": "message.send",
+                    "session_id": session_id,
+                    "client_msg_id": "a2ui-args-1",
+                    "text": "@[instruct_a2ui]Create the incident overview.",
+                    "args": {
+                        "theme_color": theme_color,
+                        "date": "2026-08-02T22:05:58.000Z",
+                    },
+                }
+            )
+            _recv_until(ws, "message.accepted")
+            _recv_until(ws, "message.completed")
+
+    assert received_messages == [
+        f"Use theme {theme_color} at 2026-08-02T22:05:58.000Z.\n"
+        "Create the incident overview."
+    ]
 
 
 def test_chat_ws_starts_new_main_message_after_a2a_delegate_completion(

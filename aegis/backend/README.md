@@ -19,6 +19,36 @@ Or use the Hermes entrypoint:
 hermes aegis
 ```
 
+### Hermes home
+
+On startup, Aegis binds `HERMES_HOME` to the Hermes home directory of the
+agent/profile that launched it. It also uses that directory as the process
+working directory and sets `HOME` to `<HERMES_HOME>/home`, matching AISOC's
+runtime isolation. This keeps Aegis data, configuration, sessions, skills,
+and A2A registry scoped to the launching agent instead of the shell's current
+directory.
+
+Use a Hermes profile to select that agent home:
+
+```bash
+hermes -p incident-response aegis
+```
+
+For direct Python startup, pass the same profile explicitly:
+
+```bash
+python aegis/backend/main.py --profile incident-response
+```
+
+For a custom agent home, set `HERMES_HOME` before launching:
+
+```bash
+export HERMES_HOME="/path/to/agent-home"
+hermes aegis
+```
+
+The selected home is printed at startup as `Using Hermes home: …`.
+
 Default bind settings:
 
 - Host: `127.0.0.1`
@@ -119,6 +149,19 @@ through the normal `message.completed` event flow:
 Agent creation in Aegis also now uses the `tools.a2a_delegate_tool.A2A_CONTEXT`
 module global directly for the ephemeral system prompt. When the cache is
 empty, Aegis refreshes it with `a2a_list()` and then injects the refreshed XML.
+
+`message.send` optionally accepts an `args` JSON object. Aegis expands shortcut
+tokens first, then substitutes every matching `{key}` in the resulting prompt
+with the corresponding `args[key]` value. Variables without an `args` value are
+left intact, including unresolved variables in Agent shortcuts. For example:
+
+```json
+{
+  "type": "message.send",
+  "text": "@[prompt_incident] Review {indicator}.",
+  "args": {"indicator": "example.com"}
+}
+```
 
 Interactive docs are available at:
 

@@ -1,6 +1,30 @@
 from __future__ import annotations
 
 
+def test_chat_quick_commands_use_the_default_agent_template(
+    client,
+    auth_headers: dict[str, str],
+    monkeypatch,
+) -> None:
+    monkeypatch.delenv("USE_ACTIVE_AGENT_PROMPT", raising=False)
+    assert client.post(
+        "/api/agents/default-template-agent",
+        headers=auth_headers,
+        json={
+            "url": "http://127.0.0.1:9010/a2a",
+            "description": "Uses the default agent template.",
+            "headers": {},
+            "status": "active",
+            "extcapabilities": [],
+        },
+    ).status_code == 201
+
+    response = client.get("/api/chat/quick-commands", headers=auth_headers)
+
+    assert response.status_code == 200
+    assert response.json()["commands"][0]["content"] == "<use_agent>{name}</use_agent>"
+
+
 def test_chat_quick_command_cache_reuses_results_and_invalidates_after_writes(
     client,
     auth_headers: dict[str, str],

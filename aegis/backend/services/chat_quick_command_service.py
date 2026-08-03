@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+import json
 import os
 import re
 import threading
+from typing import Any
 
 from aegis.backend.models import ChatQuickCommandResponse
 from aegis.backend.services.agent_service import AgentService
@@ -16,8 +19,8 @@ _SHORTCUT_TOKEN_PATTERN = re.compile(r"@\[(agent|prompt|instruct)_[^\]]+\]")
 _AGENT_VARIABLE_PATTERN = re.compile(r"\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
 
-class QuickCommandResolutionError(ValueError):
-    """A known shortcut could not be rendered safely for this turn."""
+class MessageArgumentResolutionError(ValueError):
+    """A message supplied malformed template arguments."""
 
 
 class ChatQuickCommandService:
@@ -55,7 +58,14 @@ class ChatQuickCommandService:
         with self._lock:
             self._commands_by_user.clear()
 
-    def resolve_text(self, user_id: str, text: str) -> str:
+    def resolve_text(
+        self,
+        user_id: str,
+        text: str,
+        *,
+        args: Mapping[str, Any] | None = None,
+    ) -> str:
+        resolved_args = self._normalize_args(args)
         commands = self.list_commands(user_id)
         commands_by_token = {
             self._token_for(command): command
@@ -75,10 +85,40 @@ class ChatQuickCommandService:
 
         # ``re.sub`` visits only original input matches, so replacement content
         # is deliberately never scanned again for nested shortcut tokens.
-        return _SHORTCUT_TOKEN_PATTERN.sub(_replace, str(text or ""))
+        resolved_text = _SHORTCUT_TOKEN_PATTERN.sub(_replace, str(text or ""))
+        return _AGENT_VARIABLE_PATTERN.sub(
+            lambda match: resolved_args.get(match.group(1), match.group(0)),
+            resolved_text,
+        )
+
+    @staticmethod
+    def _normalize_args(args: Mapping[str, Any] | None) -> dict[str, str]:
+        if args is None:
+            return {}
+        if not isinstance(args, Mapping):
+            raise MessageArgumentResolutionError("Message args must be a JSON object.")
+
+        normalized: dict[str, str] = {}
+        for key, value in args.items():
+            if not isinstance(key, str):
+                raise MessageArgumentResolutionError("Message args keys must be strings.")
+            if isinstance(value, str):
+                normalized[key] = value
+                continue
+            try:
+                normalized[key] = json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    separators=(",", ":"),
+                )
+            except (TypeError, ValueError) as exc:
+                raise MessageArgumentResolutionError(
+                    f"Message arg {key!r} is not JSON serializable."
+                ) from exc
+        return normalized
 
     def _build_commands(self, user_id: str) -> list[ChatQuickCommandResponse]:
-        agent_template = os.environ.get("USE_ACTIVE_AGENT_PROMPT") or "Use remote agent {name}"
+        agent_template = os.environ.get("USE_ACTIVE_AGENT_PROMPT") or "<use_agent>{name}</use_agent>"
         commands = [
             ChatQuickCommandResponse(
                 type="agent",
@@ -116,18 +156,9 @@ class ChatQuickCommandService:
         return f"@[{command.type}_{command.name}]"
 
     @staticmethod
-    def _render_agent_command(command: ChatQuickCommandResponse) -> str:
-        unsupported_variables = {
-            match.group(0)
-            for match in _AGENT_VARIABLE_PATTERN.finditer(command.content)
-            if match.group(1) not in {"name", "agent_name"}
-        }
-        if unsupported_variables:
-            plural = "s" if len(unsupported_variables) > 1 else ""
-            variables = ", ".join(sorted(unsupported_variables))
-            raise QuickCommandResolutionError(
-                f"Agent command \u201c{command.name}\u201d contains unsupported variable{plural}: {variables}."
-            )
+    def _render_agent_command(
+        command: ChatQuickCommandResponse,
+    ) -> str:
         return _AGENT_VARIABLE_PATTERN.sub(
             lambda match: command.name if match.group(1) in {"name", "agent_name"} else match.group(0),
             command.content,

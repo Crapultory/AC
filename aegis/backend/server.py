@@ -51,6 +51,20 @@ PUBLIC_API_PATHS = frozenset(
 )
 
 
+def prepare_hermes_home() -> None:
+    """Bind Aegis to the Hermes home of the agent that launched it."""
+    try:
+        from hermes_constants import get_hermes_home
+
+        hermes_home = get_hermes_home()
+        print(f"Using Hermes home: {hermes_home}")
+        os.chdir(hermes_home)
+        os.environ["HERMES_HOME"] = str(hermes_home)
+        os.environ["HOME"] = str(hermes_home / "home")
+    except Exception as exc:
+        print(f"Warning: Failed to set Aegis Hermes home: {exc}")
+
+
 def _format_browser_host(host: str) -> str:
     """Return a host string safe to embed in an HTTP URL."""
     if ":" in host and not host.startswith("["):
@@ -237,6 +251,8 @@ def start_server(
     allow_public: bool = False,
 ) -> None:
     """Start the Aegis backend server."""
+    prepare_hermes_home()
+
     if not is_loopback_host(host) and not allow_public:
         raise SystemExit(
             "Refusing non-loopback bind without --insecure. "
