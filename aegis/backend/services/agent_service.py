@@ -20,10 +20,18 @@ class AgentService:
     }
 
     def __init__(self, store: AegisStore | None = None) -> None:
-        self._store = store or get_aegis_store()
+        # The server must still expose health and authentication endpoints when
+        # the optional A2A registry is malformed.  Resolve the registry only
+        # when an Agent operation is actually requested.
+        self._store = store
+
+    def _get_store(self) -> AegisStore:
+        if self._store is None:
+            self._store = get_aegis_store()
+        return self._store
 
     def list_agents(self) -> list[AgentResponse]:
-        payload = self._store.read_locked()
+        payload = self._get_store().read_locked()
         agents = payload["a2a"]
         return [
             self._build_agent_response(agent_id, value)
@@ -37,7 +45,7 @@ class AgentService:
         ]
 
     def get_agent(self, agent_id: str) -> AgentResponse:
-        payload = self._store.read_locked()
+        payload = self._get_store().read_locked()
         agent = payload["a2a"].get(agent_id)
         if agent is None:
             raise HTTPException(status_code=404, detail=f"Agent '{agent_id}' not found.")
@@ -54,7 +62,7 @@ class AgentService:
             agents[agent_id] = body.model_dump(mode="json")
             return self._build_agent_response(agent_id, agents[agent_id])
 
-        return self._store.mutate_locked(_mutate)
+        return self._get_store().mutate_locked(_mutate)
 
     def update_agent(self, agent_id: str, body: AgentUpsertRequest) -> AgentResponse:
         def _mutate(payload: dict[str, Any]) -> AgentResponse:
@@ -64,7 +72,7 @@ class AgentService:
             agents[agent_id] = body.model_dump(mode="json")
             return self._build_agent_response(agent_id, agents[agent_id])
 
-        return self._store.mutate_locked(_mutate)
+        return self._get_store().mutate_locked(_mutate)
 
     def delete_agent(self, agent_id: str) -> None:
         def _mutate(payload: dict[str, Any]) -> None:
@@ -74,7 +82,7 @@ class AgentService:
             del agents[agent_id]
             return None
 
-        self._store.mutate_locked(_mutate)
+        self._get_store().mutate_locked(_mutate)
 
     @staticmethod
     def _build_agent_response(agent_id: str, payload: Mapping[str, Any] | str) -> AgentResponse:

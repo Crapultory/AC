@@ -13,12 +13,14 @@ from aegis.backend.models import (
     PromptTemplateResponse,
 )
 from aegis.backend.services.prompt_template_service import PromptTemplateService
+from aegis.backend.services.chat_quick_command_service import ChatQuickCommandService
 
 
 def build_prompt_templates_router(
     settings: AegisSettings,
     user_service,
     prompt_template_service: PromptTemplateService,
+    quick_command_service: ChatQuickCommandService | None = None,
 ) -> APIRouter:
     router = APIRouter(prefix="/api/prompt-templates", tags=["prompt-templates"])
 
@@ -32,17 +34,28 @@ def build_prompt_templates_router(
 
     @router.post("", response_model=PromptTemplateResponse, status_code=status.HTTP_201_CREATED)
     async def create_template(body: PromptTemplateRequest, request: Request) -> PromptTemplateResponse:
-        return prompt_template_service.create_template(_user_id(request), body)
+        user_id = _user_id(request)
+        response = prompt_template_service.create_template(user_id, body)
+        if quick_command_service is not None:
+            quick_command_service.invalidate_user(user_id)
+        return response
 
     @router.put("/{template_id}", response_model=PromptTemplateResponse)
     async def update_template(
         template_id: str, body: PromptTemplateRequest, request: Request,
     ) -> PromptTemplateResponse:
-        return prompt_template_service.update_template(template_id, _user_id(request), body)
+        user_id = _user_id(request)
+        response = prompt_template_service.update_template(template_id, user_id, body)
+        if quick_command_service is not None:
+            quick_command_service.invalidate_user(user_id)
+        return response
 
     @router.delete("/{template_id}", response_model=PromptTemplateDeleteResponse)
     async def delete_template(template_id: str, request: Request) -> PromptTemplateDeleteResponse:
-        prompt_template_service.delete_template(template_id, _user_id(request))
+        user_id = _user_id(request)
+        prompt_template_service.delete_template(template_id, user_id)
+        if quick_command_service is not None:
+            quick_command_service.invalidate_user(user_id)
         return PromptTemplateDeleteResponse(deleted=True, id=template_id)
 
     return router

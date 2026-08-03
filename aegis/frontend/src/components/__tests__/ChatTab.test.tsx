@@ -1,6 +1,9 @@
+import { useState } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import ChatTab from '../ChatTab';
+import { AegisChatProvider } from '../../lib/chatRuntime';
+import { getDrawerTabsStorageKey, saveCachedDrawerTabs } from '../../lib/chatDrawerTabs';
 
 class MockWebSocket {
   static instances: MockWebSocket[] = [];
@@ -37,6 +40,15 @@ class MockWebSocket {
   }
 }
 
+function getComposer(): HTMLDivElement {
+  return screen.getByRole('combobox', { name: 'Chat message' }) as HTMLDivElement;
+}
+
+function setComposerText(composer: HTMLDivElement, text: string) {
+  composer.textContent = text;
+  fireEvent.input(composer);
+}
+
 describe('ChatTab', () => {
   const OriginalWebSocket = globalThis.WebSocket;
   const clipboardWriteText = vi.fn().mockResolvedValue(undefined);
@@ -64,16 +76,418 @@ describe('ChatTab', () => {
     render(<ChatTab agents={[]} />);
 
     fireEvent.click(screen.getByRole('button', { name: /新建对话/i }));
-    const composer = screen.getByPlaceholderText(/ask aegis anything/i);
-    fireEvent.change(composer, { target: { value: 'keep this draft' } });
+    const composer = getComposer();
+    setComposerText(composer, 'keep this draft');
     expect(screen.getByTestId('session-status-ticker')).toHaveTextContent('AWAITING FIRST TURN');
 
     fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
 
     expect(screen.getByRole('complementary', { name: /workflow for new investigation/i })).toBeInTheDocument();
     expect(within(screen.getByTestId('session-workflow')).getByText('AWAITING FIRST TURN')).toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/ask aegis anything/i)).toHaveValue('keep this draft');
-    expect(screen.getByTestId('chat-workspace')).toHaveClass('w-1/2');
+    expect(getComposer()).toHaveTextContent('keep this draft');
+    expect(screen.getByTestId('chat-workspace')).toHaveStyle({ width: 'calc(50% - 5px)' });
+    expect(screen.getByRole('tab', { name: /session workflow/i })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.queryByRole('tab', { name: /architecture test/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('separator', { name: /resize chat workspace panels/i })).toBeInTheDocument();
+  });
+
+  it('lists modified files after the final reply and refreshes an existing preview when reselected', async () => {
+    const fileResponse = (content: string) => new Response(JSON.stringify({
+      title: 'aegis/frontend/src/alpha.ts',
+      type: 'typescript',
+      content,
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(fileResponse('export const alpha = true;'))
+      .mockResolvedValueOnce(fileResponse('export const alpha = "updated by a later turn";'));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ChatTab agents={[]} />);
+
+    setComposerText(getComposer(), 'Make several edits');
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({ type: 'session.bound', session_id: 'modified-files', title: 'Edits', resumed: false });
+    await waitFor(() => expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+    const sent = socket.sent.map((item) => JSON.parse(item)).find((item) => item.type === 'message.send');
+    socket.emit({
+      type: 'message.accepted',
+      session_id: 'modified-files',
+      turn_id: 'turn-edits',
+      client_msg_id: sent.client_msg_id,
+      source: 'main',
+    });
+    socket.emit({
+      type: 'message.completed',
+      session_id: 'modified-files',
+      turn_id: 'turn-edits',
+      message_id: 'assistant-edits',
+      source: 'main',
+      content: 'Edits complete.',
+      modified_files: [
+        'aegis/frontend/src/alpha.ts',
+        'aegis/frontend/src/beta.ts',
+        'aegis/backend/main.py',
+        'README.md',
+      ],
+    });
+
+    const modifiedFiles = await screen.findByTestId('modified-files');
+    expect(modifiedFiles).toHaveAttribute('aria-label', 'Overview files');
+    expect(within(modifiedFiles).getByText('OVERVIEW FILES')).toBeInTheDocument();
+    expect(modifiedFiles.closest('[data-testid="chat-message"]')).toBeNull();
+    expect(within(modifiedFiles).getByText('aegis/frontend/src/alpha.ts')).toBeInTheDocument();
+    expect(within(modifiedFiles).queryByText('README.md')).not.toBeInTheDocument();
+    fireEvent.click(within(modifiedFiles).getByRole('button', { name: /show 1 more/i }));
+    expect(within(modifiedFiles).getByText('README.md')).toBeInTheDocument();
+
+    fireEvent.click(within(modifiedFiles).getByRole('button', { name: /aegis\/frontend\/src\/alpha\.ts/i }));
+    const previewTab = await screen.findByRole('tab', { name: 'alpha.ts' });
+    expect(previewTab).toHaveAttribute('aria-selected', 'true');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/chat/drawer-html?path=aegis%2Ffrontend%2Fsrc%2Falpha.ts',
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+    expect(await screen.findByText('export const alpha = true;')).toBeInTheDocument();
+    fireEvent.click(within(modifiedFiles).getByRole('button', { name: /aegis\/frontend\/src\/alpha\.ts/i }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('export const alpha = "updated by a later turn";')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: /refresh file preview alpha\.ts/i })).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /close workflow visualization/i }));
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    expect(screen.getByRole('tab', { name: 'alpha.ts' })).toHaveAttribute('aria-selected', 'true');
+    fireEvent.click(screen.getByRole('button', { name: /close workflow visualization/i }));
+    fireEvent.click(screen.getByRole('button', { name: /新建对话/i }));
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    expect(screen.queryByRole('tab', { name: 'alpha.ts' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: /close workflow visualization/i }));
+    fireEvent.click(screen.getByText('Edits'));
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    expect(screen.getByRole('tab', { name: 'alpha.ts' })).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /close file preview alpha\.ts/i }));
+    expect(screen.queryByRole('tab', { name: 'alpha.ts' })).not.toBeInTheDocument();
+  });
+
+  it('automatically opens the last modified HTML file when the main task completes', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      title: 'latest.HTM',
+      type: 'html',
+      content: '<!doctype html><title>Latest preview</title>',
+    }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ChatTab agents={[]} />);
+
+    setComposerText(getComposer(), 'Update HTML previews');
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({ type: 'session.bound', session_id: 'html-auto-preview', title: 'HTML preview', resumed: false });
+    await waitFor(() => expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+    socket.emit({
+      type: 'message.completed',
+      session_id: 'html-auto-preview',
+      turn_id: 'turn-html-preview',
+      message_id: 'assistant-html-preview',
+      source: 'main',
+      content: 'HTML files updated.',
+      modified_files: ['reports/first.html', 'README.md', 'reports/latest.HTM'],
+    });
+
+    expect(await screen.findByRole('tab', { name: 'latest.HTM' })).toHaveAttribute('aria-selected', 'true');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/chat/drawer-html?path=reports%2Flatest.HTM',
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+  });
+
+  it('inserts messages from the active HTML preview at the composer caret and ignores hidden or foreign frames', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      title: 'interactive.html',
+      type: 'html',
+      content: '<!doctype html><title>Interactive preview</title>',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ChatTab agents={[]} />);
+
+    setComposerText(getComposer(), 'Create interactive preview');
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({ type: 'session.bound', session_id: 'interactive-preview', title: 'Interactive preview', resumed: false });
+    await waitFor(() => expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+    socket.emit({
+      type: 'message.completed',
+      session_id: 'interactive-preview',
+      turn_id: 'turn-interactive-preview',
+      message_id: 'assistant-interactive-preview',
+      source: 'main',
+      content: 'Interactive preview is ready.',
+      modified_files: ['reports/interactive.html'],
+    });
+
+    const frame = await screen.findByTestId('drawer-html-frame') as HTMLIFrameElement;
+    expect(frame).toHaveAttribute('sandbox', 'allow-scripts allow-forms');
+    expect(frame).toHaveAttribute('referrerpolicy', 'no-referrer');
+    const composer = getComposer();
+    setComposerText(composer, 'before after');
+    composer.focus();
+    const textNode = composer.firstChild as Text;
+    const range = document.createRange();
+    range.setStart(textNode, 7);
+    range.collapse(true);
+    window.getSelection()?.removeAllRanges();
+    window.getSelection()?.addRange(range);
+    fireEvent.select(composer);
+    fireEvent.keyUp(composer, { key: 'ArrowLeft' });
+    socket.emit({
+      type: 'approval.request',
+      session_id: 'interactive-preview',
+      approval_id: 'agent2ui-busy',
+      command: 'review',
+      description: 'Keep the composer draft while this approval is pending.',
+    });
+    await waitFor(() => expect(composer).toHaveAttribute('contenteditable', 'false'));
+    const composerFocus = vi.spyOn(composer, 'focus');
+    composerFocus.mockClear();
+    frame.focus();
+
+    fireEvent(window, new MessageEvent('message', {
+      data: {
+        channel: 'aegis-agent2ui',
+        version: 1,
+        type: 'composer.insert',
+        text: 'middle ',
+      },
+      source: frame.contentWindow,
+    }));
+    expect(getComposer()).toHaveTextContent('before middle after');
+    expect(composerFocus).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('tab', { name: /session workflow/i }));
+    fireEvent(window, new MessageEvent('message', {
+      data: {
+        channel: 'aegis-agent2ui', version: 1, type: 'composer.insert', text: ' hidden',
+      },
+      source: frame.contentWindow,
+    }));
+    fireEvent(window, new MessageEvent('message', {
+      data: {
+        channel: 'aegis-agent2ui', version: 1, type: 'composer.insert', text: ' foreign',
+      },
+      source: window,
+    }));
+    expect(getComposer()).toHaveTextContent('before middle after');
+  });
+
+  it('does not auto-open HTML previews when the browser setting is disabled', async () => {
+    window.localStorage.setItem('aegis_frontend_settings', JSON.stringify({
+      chatAutoOpenHtmlOnTaskComplete: false,
+    }));
+    const fetchMock = vi.fn();
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ChatTab agents={[]} />);
+
+    setComposerText(getComposer(), 'Update one HTML file');
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({ type: 'session.bound', session_id: 'html-disabled', title: 'Disabled preview', resumed: false });
+    await waitFor(() => expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+    socket.emit({
+      type: 'message.completed',
+      session_id: 'html-disabled',
+      turn_id: 'turn-html-disabled',
+      message_id: 'assistant-html-disabled',
+      source: 'main',
+      content: 'HTML file updated.',
+      modified_files: ['reports/disabled.html'],
+    });
+
+    expect(await screen.findByText('HTML file updated.')).toBeInTheDocument();
+    expect(screen.queryByRole('complementary', { name: /workflow/i })).not.toBeInTheDocument();
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('opens a queued HTML preview after returning to Chat', async () => {
+    function ChatVisibilityHarness() {
+      const [chatVisible, setChatVisible] = useState(true);
+      return (
+        <AegisChatProvider isChatVisible={chatVisible}>
+          <button type="button" onClick={() => setChatVisible((visible) => !visible)}>
+            Toggle Chat
+          </button>
+          {chatVisible ? <ChatTab agents={[]} /> : <p>Outside chat</p>}
+        </AegisChatProvider>
+      );
+    }
+
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({
+      title: 'queued.html',
+      type: 'html',
+      content: '<!doctype html><title>Queued preview</title>',
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ChatVisibilityHarness />);
+
+    setComposerText(getComposer(), 'Update queued file');
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({ type: 'session.bound', session_id: 'queued-html', title: 'Queued preview', resumed: false });
+    await waitFor(() => expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle Chat' }));
+    expect(screen.getByText('Outside chat')).toBeInTheDocument();
+    socket.emit({
+      type: 'message.completed',
+      session_id: 'queued-html',
+      turn_id: 'turn-queued-html',
+      message_id: 'assistant-queued-html',
+      source: 'main',
+      content: 'Queued HTML file updated.',
+      modified_files: ['reports/queued.html'],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Toggle Chat' }));
+    expect(await screen.findByRole('tab', { name: 'queued.html' })).toHaveAttribute('aria-selected', 'true');
+    expect(fetchMock).toHaveBeenCalledWith(
+      '/api/chat/drawer-html?path=reports%2Fqueued.html',
+      expect.objectContaining({ headers: expect.any(Headers) }),
+    );
+  });
+
+  it('restores a user-scoped dynamic drawer tab and reloads its preview after remounting Chat', async () => {
+    const userId = 'drawer-cache-user';
+    window.localStorage.setItem('aegis_current_user', JSON.stringify({
+      uid: userId,
+      username: 'drawer-user',
+      email: 'drawer-user@example.com',
+      status: 'enabled',
+      create_time: '2026-01-01T00:00:00Z',
+      is_admin: false,
+    }));
+    const fetchMock = vi.fn()
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        title: 'cached.html', type: 'text', content: 'First load',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }))
+      .mockResolvedValueOnce(new Response(JSON.stringify({
+        title: 'cached.html', type: 'text', content: 'Reloaded content',
+      }), { status: 200, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+
+    const firstRender = render(<ChatTab agents={[]} />);
+    setComposerText(getComposer(), 'Create the cached preview.');
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({ type: 'session.bound', session_id: 'drawer-cache-session', title: 'Cached drawer session', resumed: false });
+    await waitFor(() => expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+    socket.emit({
+      type: 'message.completed',
+      session_id: 'drawer-cache-session',
+      turn_id: 'drawer-cache-turn',
+      message_id: 'drawer-cache-message',
+      source: 'main',
+      content: 'Cached file generated.',
+      modified_files: ['reports/cached.html'],
+    });
+    expect(await screen.findByRole('tab', { name: 'cached.html' })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    expect(await screen.findByText('First load')).toBeInTheDocument();
+    const cacheKey = getDrawerTabsStorageKey(userId)!;
+    await waitFor(() => expect(window.localStorage.getItem(cacheKey)).toContain('reports/cached.html'));
+    expect(window.localStorage.getItem(cacheKey)).not.toContain('First load');
+    firstRender.unmount();
+
+    render(<ChatTab agents={[]} />);
+    expect(screen.queryByTestId('chat-workflow-drawer')).not.toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    expect(await screen.findByRole('tab', { name: 'cached.html' })).toHaveAttribute('aria-selected', 'true');
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(await screen.findByText('Reloaded content')).toBeInTheDocument();
+  });
+
+  it('clears persisted drawer tabs when deleting a conversation or clearing local chat history', async () => {
+    const userId = 'drawer-cleanup-user';
+    window.localStorage.setItem('aegis_current_user', JSON.stringify({
+      uid: userId,
+      username: 'drawer-cleanup',
+      email: 'drawer-cleanup@example.com',
+      status: 'enabled',
+      create_time: '2026-01-01T00:00:00Z',
+      is_admin: false,
+    }));
+    window.localStorage.setItem('aegis_convs', JSON.stringify([{
+      id: 'drawer-cleanup-session',
+      title: 'Cleanup session',
+      timestamp: '10:00',
+      lastKnownRunState: 'idle',
+      foregroundSource: 'main',
+      foregroundAgentName: '',
+      messages: [],
+    }]));
+    saveCachedDrawerTabs(userId, {
+      'drawer-cleanup-session': {
+        activeTab: 'workflow',
+        tabs: [{ id: 'file:reports%2Fcleanup.html', path: 'reports/cleanup.html', title: 'cleanup.html' }],
+      },
+    }, ['drawer-cleanup-session']);
+    render(<ChatTab agents={[]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /delete conversation cleanup session/i }));
+    await waitFor(() => expect(window.localStorage.getItem(getDrawerTabsStorageKey(userId)!)).toBeNull());
+
+    saveCachedDrawerTabs(userId, {
+      'another-session': {
+        activeTab: 'workflow',
+        tabs: [{ id: 'file:reports%2Fanother.html', path: 'reports/another.html', title: 'another.html' }],
+      },
+    }, ['another-session']);
+    vi.spyOn(window, 'confirm').mockReturnValue(true);
+    fireEvent.click(screen.getByRole('button', { name: /clear local chat cache/i }));
+    expect(window.localStorage.getItem(getDrawerTabsStorageKey(userId)!)).toBeNull();
+  });
+
+  it('resizes the drawer by pointer and remembers the selected width', () => {
+    const { unmount } = render(<ChatTab agents={[]} />);
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+
+    const drawer = screen.getByTestId('chat-workflow-drawer');
+    const root = drawer.parentElement as HTMLDivElement;
+    vi.spyOn(root, 'getBoundingClientRect').mockReturnValue({
+      bottom: 800,
+      height: 800,
+      left: 0,
+      right: 1000,
+      top: 0,
+      width: 1000,
+      x: 0,
+      y: 0,
+      toJSON: () => ({}),
+    });
+    const splitter = screen.getByRole('separator', { name: /resize chat workspace panels/i });
+    fireEvent(splitter, new MouseEvent('pointerdown', { bubbles: true, clientX: 500 }));
+    fireEvent(splitter, new MouseEvent('pointermove', { bubbles: true, clientX: 400 }));
+    fireEvent(splitter, new MouseEvent('pointerup', { bubbles: true, clientX: 400 }));
+
+    expect(drawer).toHaveStyle({ width: 'calc(40% - 5px)' });
+    expect(window.localStorage.getItem('aegis_chat_workflow_drawer_width')).toBe('40');
+    fireEvent.keyDown(splitter, { key: 'ArrowRight' });
+    expect(drawer).toHaveStyle({ width: 'calc(41% - 5px)' });
+    fireEvent.keyDown(splitter, { key: 'Home' });
+    expect(drawer).toHaveStyle({ width: 'calc(36% - 5px)' });
+    unmount();
+
+    render(<ChatTab agents={[]} />);
+    fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
+    expect(screen.getByTestId('chat-workflow-drawer')).toHaveStyle({ width: 'calc(36% - 5px)' });
   });
 
   it('uses the status ticker as the accessible workflow entry point', () => {
@@ -147,6 +561,153 @@ describe('ChatTab', () => {
     expect(within(mainCard).getByRole('table')).toBeInTheDocument();
   });
 
+  it('keeps prompt templates beside the Markdown control and exposes the A2UI preview option', () => {
+    render(<ChatTab agents={[]} />);
+
+    const promptTemplates = screen.getByRole('button', { name: /open prompt templates/i });
+    const markdown = screen.getByRole('button', { name: /disable markdown rendering/i });
+    expect(promptTemplates.parentElement).toBe(markdown.parentElement);
+
+    const a2ui = screen.getByRole('button', { name: /enable a2ui preview/i });
+    expect(a2ui).toHaveAttribute('aria-pressed', 'false');
+    expect(a2ui).toHaveAttribute('title', 'A2UI preview');
+    expect(screen.getByRole('tooltip')).toHaveTextContent(
+      'Adds the A2UI quick-instruction prefix when this message is sent.',
+    );
+
+    fireEvent.click(a2ui);
+    expect(screen.getByRole('button', { name: /disable a2ui preview/i })).toHaveAttribute(
+      'aria-pressed',
+      'true',
+    );
+  });
+
+  it('prefixes A2UI submissions and supplies the current theme and date arguments', async () => {
+    window.localStorage.setItem('aegis_theme', 'daylight-signal');
+    render(<ChatTab agents={[]} />);
+
+    setComposerText(getComposer(), 'Create the incident overview.');
+    fireEvent.click(screen.getByRole('button', { name: /enable a2ui preview/i }));
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({
+      type: 'session.bound',
+      session_id: 'a2ui-theme-session',
+      title: 'A2UI theme',
+      resumed: false,
+    });
+    await waitFor(() => {
+      const payload = socket.sent
+        .map((item) => JSON.parse(item))
+        .find((item) => item.type === 'message.send');
+      expect(payload).toMatchObject({
+        text: '@[instruct_a2ui]\nCreate the incident overview.',
+        args: { date: expect.any(String) },
+      });
+      expect(JSON.parse(payload.args.theme_color)).toEqual({
+        style: 'Bright clarity for daytime investigation and report review.',
+        background_surface: '#F4F7FB / #FFFFFF',
+        accent: '#087EA4',
+        text_muted: '#142235 / #52667B',
+        border: '#C6D2E0',
+      });
+      expect(Number.isNaN(Date.parse(payload.args.date))).toBe(false);
+    });
+  });
+
+  it('supplies the current theme and date arguments for standard submissions', async () => {
+    window.localStorage.setItem('aegis_theme', 'daylight-signal');
+    render(<ChatTab agents={[]} />);
+
+    setComposerText(getComposer(), 'Create the incident overview.');
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({
+      type: 'session.bound',
+      session_id: 'standard-args-session',
+      title: 'Standard arguments',
+      resumed: false,
+    });
+    await waitFor(() => {
+      const payload = socket.sent
+        .map((item) => JSON.parse(item))
+        .find((item) => item.type === 'message.send');
+      expect(payload).toMatchObject({
+        text: 'Create the incident overview.',
+        args: { date: expect.any(String) },
+      });
+      expect(JSON.parse(payload.args.theme_color)).toEqual({
+        style: 'Bright clarity for daytime investigation and report review.',
+        background_surface: '#F4F7FB / #FFFFFF',
+        accent: '#087EA4',
+        text_muted: '#142235 / #52667B',
+        border: '#C6D2E0',
+      });
+      expect(Number.isNaN(Date.parse(payload.args.date))).toBe(false);
+    });
+  });
+
+  it('does not duplicate an A2UI instruction already present in the prompt', async () => {
+    render(<ChatTab agents={[]} />);
+
+    setComposerText(getComposer(), '@[instruct_a2ui]\nCreate the incident overview.');
+    fireEvent.click(screen.getByRole('button', { name: /enable a2ui preview/i }));
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({
+      type: 'session.bound',
+      session_id: 'a2ui-existing-instruction-session',
+      title: 'A2UI existing instruction',
+      resumed: false,
+    });
+    await waitFor(() => {
+      const payload = socket.sent
+        .map((item) => JSON.parse(item))
+        .find((item) => item.type === 'message.send');
+      expect(payload).toMatchObject({
+        text: '@[instruct_a2ui]\nCreate the incident overview.',
+        args: {
+          theme_color: expect.any(String),
+          date: expect.any(String),
+        },
+      });
+    });
+  });
+
+  it('renders user shortcut instructions with the composer token treatment', () => {
+    window.localStorage.setItem('aegis_convs', JSON.stringify([{
+      id: 'shortcut-message-session',
+      title: 'Shortcut message',
+      timestamp: '10:00',
+      lastKnownRunState: 'idle',
+      foregroundSource: 'main',
+      foregroundAgentName: '',
+      messages: [{
+        id: 'shortcut-message',
+        sender: 'user',
+        timestamp: '10:00',
+        source: 'main',
+        text: '@[instruct_a2ui]\nCreate the incident overview.',
+      }],
+    }]));
+    render(<ChatTab agents={[]} />);
+
+    const userCard = screen.getByTestId('chat-message');
+    const token = within(userCard).getByText('@[instruct_a2ui]');
+    expect(token.tagName).toBe('U');
+    expect(token.parentElement).toHaveClass('aegis-shortcut-token');
+    expect(token.parentElement?.tagName).toBe('STRONG');
+    expect(within(userCard).getByTestId('message-text').textContent).toBe(
+      '@[instruct_a2ui]\nCreate the incident overview.',
+    );
+  });
+
   it('centres the current status before starting the marquee', () => {
     vi.useFakeTimers();
     try {
@@ -194,8 +755,8 @@ describe('ChatTab', () => {
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
     render(<ChatTab agents={[]} />);
 
-    const composer = screen.getByPlaceholderText(/ask aegis anything/i);
-    fireEvent.change(composer, { target: { value: 'Existing draft' } });
+    const composer = getComposer();
+    setComposerText(composer, 'Existing draft');
     fireEvent.click(screen.getByRole('button', { name: /open prompt templates/i }));
 
     expect(await screen.findByRole('complementary', { name: /prompt templates/i })).toBeInTheDocument();
@@ -203,8 +764,154 @@ describe('ChatTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /alert triage/i }));
 
     expect(screen.queryByRole('complementary', { name: /prompt templates/i })).not.toBeInTheDocument();
-    expect(screen.getByPlaceholderText(/ask aegis anything/i)).toHaveValue('Existing draft Assess this alert.');
+    expect(getComposer()).toHaveTextContent('Existing draft Assess this alert.');
     expect(MockWebSocket.instances).toHaveLength(0);
+  });
+
+  it('navigates @ commands by keyboard, keeps typing after a token, and sends raw text', async () => {
+    const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/chat/quick-commands') {
+        return new Response(JSON.stringify({
+          commands: [
+            {
+              type: 'agent',
+              name: 'incident-responder',
+              desc: 'Investigates active incidents.',
+              content: 'Use remote agent {agent_name} as {name}.',
+            },
+            {
+              type: 'prompt',
+              name: 'triage',
+              desc: 'Classifies incident severity.',
+              content: 'Classify the incident.',
+            },
+          ],
+        }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      throw new Error(`Unhandled request: ${url}`);
+    });
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ChatTab agents={[]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /新建/i }));
+    const composer = getComposer();
+    fireEvent.focus(composer);
+    setComposerText(composer, '@');
+
+    const commandList = await screen.findByRole('listbox', { name: /available quick commands/i });
+    const agentCommand = await within(commandList).findByRole('option', { name: /incident-responder/i });
+    const promptCommand = await within(commandList).findByRole('option', { name: /triage/i });
+    expect(agentCommand).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(composer, { key: 'ArrowDown' });
+    expect(promptCommand).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(composer, { key: 'ArrowUp' });
+    expect(agentCommand).toHaveAttribute('aria-selected', 'true');
+    fireEvent.keyDown(composer, { key: 'Enter' });
+    expect(composer.textContent).toBe('@[agent_incident-responder] ');
+    const shortcutToken = document.querySelector('.aegis-shortcut-token');
+    expect(shortcutToken).toHaveTextContent('@[agent_incident-responder]');
+    expect(shortcutToken?.tagName).toBe('STRONG');
+    expect(shortcutToken?.querySelector('u')).toHaveTextContent('@[agent_incident-responder]');
+    setComposerText(composer, '@[agent_incident-responder] investigate now');
+    expect(composer).toHaveTextContent('@[agent_incident-responder] investigate now');
+
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({ type: 'session.bound', session_id: 'quick-command-session', title: 'Quick command', resumed: false });
+
+    await waitFor(() => expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+    const payload = socket.sent.map((item) => JSON.parse(item)).find((item) => item.type === 'message.send');
+    expect(payload).toMatchObject({ text: '@[agent_incident-responder] investigate now' });
+  });
+
+  it('restores the raw shortcut draft when the server rejects its template', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      commands: [{
+        type: 'agent',
+        name: 'unresolved-agent',
+        desc: 'Uses an unsupported variable.',
+        content: 'Delegate {region}.',
+      }],
+    }), { status: 200, headers: { 'Content-Type': 'application/json' } })));
+    render(<ChatTab agents={[]} />);
+
+    fireEvent.click(screen.getByRole('button', { name: /新建/i }));
+    const composer = getComposer();
+    setComposerText(composer, '@');
+    const command = await screen.findByRole('option', { name: /unresolved-agent/i });
+    fireEvent.mouseDown(command);
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({ type: 'session.bound', session_id: 'invalid-quick-command', title: 'Invalid quick command', resumed: false });
+    await waitFor(() => expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+    const payload = socket.sent.map((item) => JSON.parse(item)).find((item) => item.type === 'message.send');
+    socket.emit({
+      type: 'error',
+      code: 'invalid_quick_command',
+      client_msg_id: payload.client_msg_id,
+      message: 'Agent command has unsupported variable: {region}.',
+    });
+
+    expect(await screen.findByText(/unsupported variable/i)).toBeInTheDocument();
+    await waitFor(() => {
+      expect(composer).toHaveTextContent('@[agent_unresolved-agent]');
+    });
+    expect(screen.queryAllByTestId('chat-message')).toHaveLength(0);
+  });
+
+  it('keeps transport errors with their session and clears them after the next accepted task', async () => {
+    window.localStorage.setItem('aegis_convs', JSON.stringify([
+      {
+        id: 'session-a', sessionId: 'server-a', title: 'Session A', messages: [], timestamp: '10:00',
+        lastKnownRunState: 'idle', foregroundSource: 'main', foregroundAgentName: '',
+      },
+      {
+        id: 'session-b', sessionId: 'server-b', title: 'Session B', messages: [], timestamp: '10:01',
+        lastKnownRunState: 'idle', foregroundSource: 'main', foregroundAgentName: '',
+      },
+    ]));
+    render(<ChatTab agents={[]} />);
+
+    setComposerText(getComposer(), 'First task for A');
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socketA = MockWebSocket.instances[0];
+    socketA.emit({ type: 'session.bound', session_id: 'server-a', title: 'Session A', resumed: false });
+    await waitFor(() => expect(socketA.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+
+    fireEvent.click(screen.getByText('Session B'));
+    setComposerText(getComposer(), 'Task for B');
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(2));
+    const socketB = MockWebSocket.instances[1];
+    socketB.emit({ type: 'session.bound', session_id: 'server-b', title: 'Session B', resumed: false });
+    await waitFor(() => expect(socketB.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+
+    socketA.emit({ type: 'error', session_id: 'server-a', message: 'Session A failed.' });
+    await waitFor(() => expect(screen.queryByText('Session A failed.')).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByText('Session A'));
+    expect(await screen.findByText('Session A failed.')).toBeInTheDocument();
+
+    setComposerText(getComposer(), 'Retry task for A');
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(socketA.sent.filter((item) => JSON.parse(item).type === 'message.send')).toHaveLength(2));
+    const retry = socketA.sent
+      .map((item) => JSON.parse(item))
+      .filter((item) => item.type === 'message.send')[1];
+    socketA.emit({
+      type: 'message.accepted',
+      session_id: 'server-a',
+      turn_id: 'retry-turn-a',
+      client_msg_id: retry.client_msg_id,
+      source: 'main',
+    });
+
+    await waitFor(() => expect(screen.queryByText('Session A failed.')).not.toBeInTheDocument());
   });
 
   it('browses cached A2A agents in a dialog without sending a chat message', async () => {
@@ -243,20 +950,20 @@ describe('ChatTab', () => {
     expect(screen.queryByRole('dialog', { name: /a2a agents/i })).not.toBeInTheDocument();
   });
 
-  it('exits workflow fullscreen before Escape closes the workflow drawer', () => {
+  it('exits workspace fullscreen before Escape closes the workflow drawer', () => {
     render(<ChatTab agents={[]} />);
 
     fireEvent.click(screen.getByRole('button', { name: /open workflow visualization/i }));
-    fireEvent.click(screen.getByRole('button', { name: /enter workflow fullscreen/i }));
+    fireEvent.click(screen.getByRole('button', { name: /enter workspace fullscreen/i }));
 
-    expect(screen.getByTestId('session-workflow')).toHaveClass('w-full');
+    expect(screen.getByTestId('chat-workflow-drawer')).toHaveStyle({ width: '100%' });
     expect(screen.queryByTestId('chat-workspace')).not.toBeInTheDocument();
 
     fireEvent.keyDown(document, { key: 'Escape' });
 
-    expect(screen.getByTestId('session-workflow')).toHaveClass('w-1/2');
+    expect(screen.getByTestId('chat-workflow-drawer')).toHaveStyle({ width: 'calc(50% - 5px)' });
     expect(screen.getByTestId('chat-workspace')).toBeInTheDocument();
-    expect(screen.getByRole('button', { name: /enter workflow fullscreen/i })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /enter workspace fullscreen/i })).toBeInTheDocument();
 
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByTestId('session-workflow')).not.toBeInTheDocument();
@@ -274,14 +981,12 @@ describe('ChatTab', () => {
     fireEvent.click(screen.getByRole('button', { name: /expand session sidebar/i }));
     expect(screen.getByText('CENTRAL ARCHIVE')).toBeInTheDocument();
 
-    const initialComposer = screen.getByPlaceholderText(/ask aegis anything/i);
-    expect(initialComposer.tagName).toBe('INPUT');
+    const initialComposer = getComposer();
+    expect(initialComposer.tagName).toBe('DIV');
     fireEvent.click(screen.getByRole('button', { name: /expand composer/i }));
-    expect(screen.getByPlaceholderText(/ask aegis anything/i).tagName).toBe('TEXTAREA');
+    expect(getComposer().tagName).toBe('DIV');
 
-    fireEvent.change(screen.getByPlaceholderText(/ask aegis anything/i), {
-      target: { value: 'hello over websocket' },
-    });
+    setComposerText(getComposer(), 'hello over websocket');
     fireEvent.click(screen.getByRole('button', { name: /发送/i }));
 
     await waitFor(() => {
@@ -522,7 +1227,7 @@ describe('ChatTab', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /collapse composer/i }));
-    expect(screen.getByPlaceholderText(/ask aegis anything/i).tagName).toBe('INPUT');
+    expect(getComposer().tagName).toBe('DIV');
 
     const messageCards = screen.getAllByTestId('chat-message');
     const userMessage = messageCards.find((card) => card.getAttribute('data-sender') === 'user');
@@ -624,9 +1329,7 @@ describe('ChatTab', () => {
   it('keeps delegate delta text when its stream completes and renders final-only delegate replies', async () => {
     render(<ChatTab agents={[]} />);
 
-    fireEvent.change(screen.getByPlaceholderText(/ask aegis anything/i), {
-      target: { value: 'delegate please' },
-    });
+    setComposerText(getComposer(), 'delegate please');
     fireEvent.click(screen.getByRole('button', { name: /发送/i }));
 
     await waitFor(() => {
@@ -705,9 +1408,7 @@ describe('ChatTab', () => {
     render(<ChatTab agents={[]} />);
 
     const submit = (text: string) => {
-      fireEvent.change(screen.getByPlaceholderText(/ask aegis anything/i), {
-        target: { value: text },
-      });
+      setComposerText(getComposer(), text);
       fireEvent.click(screen.getByRole('button', { name: /发送/i }));
     };
 
@@ -892,9 +1593,7 @@ describe('ChatTab', () => {
     render(<ChatTab agents={[]} />);
 
     fireEvent.click(screen.getAllByRole('button', { name: /新建/i })[0]);
-    fireEvent.change(screen.getByPlaceholderText(/ask aegis anything/i), {
-      target: { value: 'start clarify flow' },
-    });
+    setComposerText(getComposer(), 'start clarify flow');
     fireEvent.click(screen.getByRole('button', { name: /发送/i }));
 
     await waitFor(() => {
@@ -950,8 +1649,8 @@ describe('ChatTab', () => {
     expect(await screen.findByRole('button', { name: /other/i })).toBeInTheDocument();
     fireEvent.click(screen.getByRole('button', { name: /other/i }));
 
-    const composer = screen.getByPlaceholderText(/answer clarify prompt/i);
-    fireEvent.change(composer, { target: { value: 'Need all Linux endpoints.' } });
+    const composer = getComposer();
+    setComposerText(composer, 'Need all Linux endpoints.');
     fireEvent.click(screen.getByRole('button', { name: /发送/i }));
 
     await waitFor(() => {
@@ -969,5 +1668,59 @@ describe('ChatTab', () => {
         return payload.type === 'message.send' && payload.text === 'Need all Linux endpoints.';
       }),
     ).toBe(false);
+  });
+
+  it('uploads an image attachment and sends its validated metadata with an attachment-only turn', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      attachment: {
+        id: 'att-image-1', kind: 'image', media_type: 'image/png',
+        cache_path: '/tmp/cache/images/img_1.png', display_name: 'clipboard.png', size: 12,
+      },
+    }), { status: 201, headers: { 'Content-Type': 'application/json' } })));
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: vi.fn(() => 'blob:clipboard-image'),
+      revokeObjectURL: vi.fn(),
+    });
+    render(<ChatTab agents={[]} />);
+
+    const file = new File(['png-bytes'], 'clipboard.png', { type: 'image/png' });
+    fireEvent.change(screen.getByLabelText(/upload chat attachments/i), { target: { files: [file] } });
+    expect(await screen.findByText('clipboard.png')).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByLabelText(/uploading/i)).not.toBeInTheDocument());
+
+    fireEvent.click(screen.getByRole('button', { name: /发送/i }));
+    await waitFor(() => expect(MockWebSocket.instances).toHaveLength(1));
+    const socket = MockWebSocket.instances[0];
+    socket.emit({ type: 'session.bound', session_id: 'attachment-session', title: 'Attachment analysis', resumed: false });
+
+    await waitFor(() => expect(socket.sent.some((item) => JSON.parse(item).type === 'message.send')).toBe(true));
+    const payload = socket.sent.map((item) => JSON.parse(item)).find((item) => item.type === 'message.send');
+    expect(payload).toMatchObject({ text: '', attachments: [{ id: 'att-image-1', kind: 'image' }] });
+    expect(screen.getByTestId('message-attachments')).toHaveTextContent('clipboard.png');
+  });
+
+  it('uploads image files pasted into the composer without treating them as text', async () => {
+    const fetchMock = vi.fn().mockResolvedValue(new Response(JSON.stringify({
+      attachment: {
+        id: 'att-paste-1', kind: 'image', media_type: 'image/png',
+        cache_path: '/tmp/cache/images/img_paste.png', display_name: 'pasted.png', size: 12,
+      },
+    }), { status: 201, headers: { 'Content-Type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    vi.stubGlobal('URL', {
+      ...URL,
+      createObjectURL: vi.fn(() => 'blob:pasted-image'),
+      revokeObjectURL: vi.fn(),
+    });
+    render(<ChatTab agents={[]} />);
+
+    const pasted = new File(['png-bytes'], 'pasted.png', { type: 'image/png' });
+    fireEvent.paste(getComposer(), {
+      clipboardData: { files: [pasted] },
+    });
+
+    expect(await screen.findByText('pasted.png')).toBeInTheDocument();
+    expect(fetchMock).toHaveBeenCalledWith('/api/chat/attachments', expect.objectContaining({ method: 'POST' }));
   });
 });

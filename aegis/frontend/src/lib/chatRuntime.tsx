@@ -6,8 +6,9 @@ import React, {
   useRef,
   useState,
 } from 'react';
-import { ChainStep, Conversation, DelegateToolCall, Message } from '../types';
+import { ChainStep, ChatAttachment, ChatAttachmentSummary, Conversation, DelegateToolCall, Message } from '../types';
 import { getStoredToken } from './auth';
+import { getFrontendSettings } from './frontendSettings';
 import { applyWorkflowSocketEvent } from './sessionWorkflow';
 
 export type ChatSocketEvent = {
@@ -29,6 +30,7 @@ export type ChatSocketEvent = {
   tool_call_id?: string;
   args_preview?: string;
   result_preview?: string;
+  modified_files?: string[];
   child_session_id?: string;
   reason?: string;
   state?: string;
@@ -42,8 +44,27 @@ export type ChatSocketEvent = {
   message?: string;
 };
 
+export interface RejectedChatInput {
+  clientMsgId: string;
+  text: string;
+}
+
+export interface PendingHtmlPreview {
+  conversationId: string;
+  messageId: string;
+  path: string;
+}
+
+export type ChatMessageArgs = Record<string, unknown>;
+
 type PendingBoundAction =
-  | { type: 'message.send'; text: string; clientMsgId: string }
+  | {
+      type: 'message.send';
+      text: string;
+      clientMsgId: string;
+      attachments: ChatAttachment[];
+      args?: ChatMessageArgs;
+    }
   | { type: 'approval.respond'; choice: 'once' | 'session' | 'always' | 'deny' }
   | { type: 'clarify.respond'; answer: string }
   | { type: 'session.resume' };
@@ -59,17 +80,22 @@ type ChatRuntimeContextValue = {
   activeConvId: string;
   activeConversation?: Conversation;
   transportError: string;
+  rejectedInput?: RejectedChatInput;
+  pendingHtmlPreviews: Record<string, PendingHtmlPreview>;
   chatAttentionCount: number;
   setActiveConversation: (conversationId: string) => void;
   createConversation: () => void;
   clearHistory: () => boolean;
   deleteConversation: (conversationId: string) => void;
-  submitInput: (text: string) => void;
+  submitInput: (text: string, attachments?: ChatAttachment[], args?: ChatMessageArgs) => void;
   respondApproval: (choice: 'once' | 'session' | 'always' | 'deny') => void;
   respondClarify: (answer: string) => void;
   markClarifyAwaitingText: () => void;
   resumeActiveConversation: () => void;
   setTransportError: (message: string) => void;
+  clearRejectedInput: () => void;
+  consumePendingHtmlPreview: (conversationId: string, messageId: string) => void;
+  clearPendingHtmlPreviews: () => void;
 };
 
 const STORAGE_KEY = 'aegis_convs';
@@ -325,6 +351,15 @@ function isUnreadWorthyEvent(eventType: string): boolean {
   );
 }
 
+function findLastHtmlModifiedFile(paths: string[] | undefined): string | undefined {
+  if (!Array.isArray(paths)) {
+    return undefined;
+  }
+  return [...paths]
+    .reverse()
+    .find((path) => typeof path === 'string' && /\.html?$/i.test(path.trim()));
+}
+
 export function AegisChatProvider({
   children,
   isChatVisible,
@@ -334,7 +369,9 @@ export function AegisChatProvider({
 }) {
   const [conversations, setConversations] = useState<Conversation[]>(() => loadCachedConversations());
   const [activeConvId, setActiveConvId] = useState<string>(() => loadCachedConversations()[0]?.id || '');
-  const [transportError, setTransportError] = useState('');
+  const [transportErrors, setTransportErrors] = useState<Record<string, string>>({});
+  const [rejectedInput, setRejectedInput] = useState<RejectedChatInput>();
+  const [pendingHtmlPreviews, setPendingHtmlPreviews] = useState<Record<string, PendingHtmlPreview>>({});
   const conversationsRef = useRef<Conversation[]>(conversations);
   const activeConvIdRef = useRef(activeConvId);
   const isChatVisibleRef = useRef(isChatVisible);
@@ -345,6 +382,7 @@ export function AegisChatProvider({
     () => conversations.find((conversation) => conversation.id === activeConvId),
     [activeConvId, conversations],
   );
+  const transportError = transportErrors[activeConvId] || '';
 
   const chatAttentionCount = useMemo(
     () =>
@@ -405,6 +443,29 @@ export function AegisChatProvider({
     });
   }
 
+  function setConversationTransportError(conversationId: string, message: string) {
+    if (!conversationId) {
+      return;
+    }
+    setTransportErrors((current) => {
+      if (!message) {
+        if (!(conversationId in current)) {
+          return current;
+        }
+        const { [conversationId]: _cleared, ...remaining } = current;
+        return remaining;
+      }
+      if (current[conversationId] === message) {
+        return current;
+      }
+      return { ...current, [conversationId]: message };
+    });
+  }
+
+  function setTransportError(message: string) {
+    setConversationTransportError(activeConvIdRef.current, message);
+  }
+
   function closeSocketForConversation(conversationId: string) {
     const entry = socketsRef.current[conversationId];
     if (!entry) {
@@ -431,7 +492,7 @@ export function AegisChatProvider({
     const entry = socketsRef.current[localConversationId];
     const socket = entry?.socket;
     if (!socket || socket.readyState !== getOpenReadyState()) {
-      setTransportError('Chat transport is not connected.');
+      setConversationTransportError(localConversationId, 'Chat transport is not connected.');
       return;
     }
     if (action.type === 'message.send') {
@@ -441,6 +502,8 @@ export function AegisChatProvider({
           session_id: sessionId,
           text: action.text,
           client_msg_id: action.clientMsgId,
+          attachments: action.attachments,
+          args: action.args,
         }),
       );
       return;
@@ -482,8 +545,62 @@ export function AegisChatProvider({
   function handleSocketEvent(localConversationId: string, payload: ChatSocketEvent) {
     const payloadSessionId = payload.session_id;
     if (payload.type === 'error') {
-      setTransportError(payload.message || 'Chat transport error.');
+      const rejectedClientMsgId = payload.client_msg_id;
+      if (rejectedClientMsgId) {
+        const rejectedMessage = conversationsRef.current
+          .find((conversation) =>
+            conversation.id === localConversationId ||
+            (!!payloadSessionId && conversation.sessionId === payloadSessionId),
+          )
+          ?.messages.find((message) => message.clientMsgId === rejectedClientMsgId);
+        if (rejectedMessage) {
+          updateConversations((current) =>
+            current.map((conversation) => {
+              const matched =
+                conversation.id === localConversationId ||
+                (!!payloadSessionId && conversation.sessionId === payloadSessionId);
+              if (!matched) return conversation;
+              return {
+                ...conversation,
+                messages: conversation.messages.filter(
+                  (message) => message.clientMsgId !== rejectedClientMsgId,
+                ),
+              };
+            }),
+          );
+          setRejectedInput({
+            clientMsgId: rejectedClientMsgId,
+            text: rejectedMessage.text,
+          });
+        }
+      }
+      setConversationTransportError(localConversationId, payload.message || 'Chat transport error.');
       return;
+    }
+
+    if (payload.type === 'message.accepted') {
+      setConversationTransportError(localConversationId, '');
+    }
+
+    const completedSource = payload.source || 'main';
+    const autoPreviewPath =
+      payload.type === 'message.completed' &&
+      completedSource === 'main' &&
+      getFrontendSettings().chatAutoOpenHtmlOnTaskComplete
+        ? findLastHtmlModifiedFile(payload.modified_files)
+        : undefined;
+    if (autoPreviewPath) {
+      const messageId =
+        payload.message_id ||
+        `${completedSource}:${payload.turn_id || 'unknown'}:${payload.srcagent || 'main'}`;
+      setPendingHtmlPreviews((current) => ({
+        ...current,
+        [localConversationId]: {
+          conversationId: localConversationId,
+          messageId,
+          path: autoPreviewPath,
+        },
+      }));
     }
 
     updateConversations((current) =>
@@ -568,6 +685,10 @@ export function AegisChatProvider({
             srcagent: payload.srcagent,
             turnId: payload.turn_id,
             pending: payload.type === 'message.delta',
+            modifiedFiles:
+              payload.type === 'message.completed' && Array.isArray(payload.modified_files)
+                ? payload.modified_files
+                : existingMessage?.modifiedFiles,
           };
 
           if (existingIndex >= 0) {
@@ -660,7 +781,7 @@ export function AegisChatProvider({
   ): boolean {
     const token = getStoredToken();
     if (!token) {
-      setTransportError('Missing access token for chat transport.');
+      setConversationTransportError(targetConversation.id, 'Missing access token for chat transport.');
       return false;
     }
 
@@ -693,7 +814,7 @@ export function AegisChatProvider({
     setConversationTransportState(targetConversation.id, 'connecting');
 
     socket.onopen = () => {
-      setTransportError('');
+      setConversationTransportError(targetConversation.id, '');
       setConversationTransportState(targetConversation.id, 'connected');
       socket.send(
         JSON.stringify({
@@ -722,7 +843,10 @@ export function AegisChatProvider({
     };
 
     socket.onerror = () => {
-      setTransportError('Chat transport degraded. Reconnect or open a new conversation.');
+      setConversationTransportError(
+        targetConversation.id,
+        'Chat transport degraded. Reconnect or open a new conversation.',
+      );
       setConversationTransportState(targetConversation.id, 'error');
     };
 
@@ -756,7 +880,6 @@ export function AegisChatProvider({
     updateConversations((current) => [created, ...current]);
     setActiveConvId(created.id);
     activeConvIdRef.current = created.id;
-    setTransportError('');
   }
 
   function clearHistory(): boolean {
@@ -770,13 +893,20 @@ export function AegisChatProvider({
     conversationsRef.current = [];
     setActiveConvId('');
     activeConvIdRef.current = '';
-    setTransportError('');
+    setTransportErrors({});
+    setPendingHtmlPreviews({});
     return true;
   }
 
   function deleteConversation(conversationId: string) {
     closeSocketForConversation(conversationId);
     delete pendingBoundActionsRef.current[conversationId];
+    setConversationTransportError(conversationId, '');
+    setPendingHtmlPreviews((current) => {
+      if (!current[conversationId]) return current;
+      const { [conversationId]: _removed, ...remaining } = current;
+      return remaining;
+    });
     const updated = conversationsRef.current.filter((conversation) => conversation.id !== conversationId);
     setConversations(updated);
     conversationsRef.current = updated;
@@ -793,11 +923,31 @@ export function AegisChatProvider({
     markConversationRead(conversationId);
   }
 
-  function submitInput(text: string) {
+  function consumePendingHtmlPreview(conversationId: string, messageId: string) {
+    setPendingHtmlPreviews((current) => {
+      const pending = current[conversationId];
+      if (!pending || pending.messageId !== messageId) {
+        return current;
+      }
+      const { [conversationId]: _removed, ...remaining } = current;
+      return remaining;
+    });
+  }
+
+  function clearPendingHtmlPreviews() {
+    setPendingHtmlPreviews({});
+  }
+
+  function submitInput(
+    text: string,
+    attachments: ChatAttachment[] = [],
+    args?: ChatMessageArgs,
+  ) {
     const trimmedText = text.trim();
-    if (!trimmedText) {
+    if (!trimmedText && attachments.length === 0) {
       return;
     }
+    const sentText = text.endsWith('\n') ? `${text.trimEnd()}\n` : trimmedText;
     const conversation =
       conversationsRef.current.find((item) => item.id === activeConvIdRef.current) ||
       ensureConversation();
@@ -808,16 +958,17 @@ export function AegisChatProvider({
       !isClarifyReply && conversation.messages.length === 0
         ? trimmedText.length > 24
           ? `${trimmedText.slice(0, 24)}...`
-          : trimmedText
+          : trimmedText || (attachments.length ? 'Attachment analysis' : conversation.title)
         : conversation.title;
     const clientMsgId = createMessageId('client');
     const userMessage: Message = {
       id: createMessageId('user'),
       sender: 'user',
       kind: 'chat',
-      text: trimmedText,
+      text: sentText,
       timestamp: formatClock(),
       clientMsgId,
+      attachments: attachments.map(({ cache_path: _cachePath, ...summary }): ChatAttachmentSummary => summary),
     };
     const targetConversation = {
       ...conversation,
@@ -848,8 +999,10 @@ export function AegisChatProvider({
           }
         : {
             type: 'message.send' as const,
-            text: trimmedText,
+            text: sentText,
             clientMsgId,
+            attachments,
+            args,
           }),
     });
   }
@@ -865,6 +1018,10 @@ export function AegisChatProvider({
       type: 'approval.respond',
       choice,
     });
+  }
+
+  function clearRejectedInput() {
+    setRejectedInput(undefined);
   }
 
   function respondClarify(answer: string) {
@@ -953,6 +1110,8 @@ export function AegisChatProvider({
       activeConvId,
       activeConversation,
       transportError,
+      rejectedInput,
+      pendingHtmlPreviews,
       chatAttentionCount,
       setActiveConversation,
       createConversation,
@@ -964,6 +1123,9 @@ export function AegisChatProvider({
       markClarifyAwaitingText,
       resumeActiveConversation,
       setTransportError,
+      clearRejectedInput,
+      consumePendingHtmlPreview,
+      clearPendingHtmlPreviews,
     }),
     [
       activeConvId,
@@ -971,6 +1133,8 @@ export function AegisChatProvider({
       chatAttentionCount,
       conversations,
       transportError,
+      rejectedInput,
+      pendingHtmlPreviews,
     ],
   );
 

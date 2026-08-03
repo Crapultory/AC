@@ -70,6 +70,15 @@ function seedStoredAuth(user: AuthenticatedUser = adminUser) {
   window.localStorage.setItem('aegis_current_user', JSON.stringify(user));
 }
 
+function getChatComposer(): HTMLDivElement {
+  return screen.getByRole('combobox', { name: 'Chat message' }) as HTMLDivElement;
+}
+
+function setChatComposerText(composer: HTMLDivElement, text: string) {
+  composer.textContent = text;
+  fireEvent.input(composer);
+}
+
 describe('Aegis App integration', () => {
   const originalFetch = global.fetch;
   const originalWebSocket = globalThis.WebSocket;
@@ -641,9 +650,7 @@ describe('Aegis App integration', () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole('button', { name: /aegis chat/i }));
-    fireEvent.change(await screen.findByPlaceholderText(/ask aegis anything/i), {
-      target: { value: 'session-one' },
-    });
+    setChatComposerText(await screen.findByRole('combobox', { name: 'Chat message' }) as HTMLDivElement, 'session-one');
     fireEvent.click(screen.getByRole('button', { name: /发送/i }));
 
     await waitFor(() => {
@@ -665,9 +672,7 @@ describe('Aegis App integration', () => {
     });
 
     fireEvent.click(screen.getByRole('button', { name: /新建/i }));
-    fireEvent.change(screen.getByPlaceholderText(/ask aegis anything/i), {
-      target: { value: 'session-two' },
-    });
+    setChatComposerText(getChatComposer(), 'session-two');
     fireEvent.click(screen.getByRole('button', { name: /发送/i }));
 
     await waitFor(() => {
@@ -732,9 +737,7 @@ describe('Aegis App integration', () => {
     render(<App />);
 
     fireEvent.click(await screen.findByRole('button', { name: /aegis chat/i }));
-    fireEvent.change(await screen.findByPlaceholderText(/ask aegis anything/i), {
-      target: { value: 'background-session' },
-    });
+    setChatComposerText(await screen.findByRole('combobox', { name: 'Chat message' }) as HTMLDivElement, 'background-session');
     fireEvent.click(screen.getByRole('button', { name: /发送/i }));
 
     await waitFor(() => {

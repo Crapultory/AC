@@ -120,6 +120,39 @@ def test_start_server_formats_ipv6_browser_url(monkeypatch: pytest.MonkeyPatch) 
     assert opened["url"] == "http://[::1]:9130/login"
 
 
+def test_start_server_uses_the_launching_agents_hermes_home(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path,
+) -> None:
+    backend_server = importlib.import_module("aegis.backend.server")
+    agent_home = tmp_path / "agent-home"
+    agent_home.mkdir()
+    (agent_home / "home").mkdir()
+    launcher_dir = tmp_path / "launcher"
+    launcher_dir.mkdir()
+    monkeypatch.chdir(launcher_dir)
+    monkeypatch.setenv("HERMES_HOME", str(agent_home))
+    monkeypatch.setattr(
+        backend_server,
+        "create_app",
+        lambda settings: SimpleNamespace(
+            state=SimpleNamespace(admin_setup_required=False)
+        ),
+    )
+    monkeypatch.setattr(
+        backend_server,
+        "load_aegis_settings",
+        lambda **kwargs: backend_server.AegisSettings(**kwargs, jwt_secret="token"),
+    )
+    monkeypatch.setattr(backend_server.uvicorn, "run", lambda *_args, **_kwargs: None)
+
+    backend_server.start_server(open_browser=False)
+
+    assert os.environ["HERMES_HOME"] == str(agent_home)
+    assert os.environ["HOME"] == str(agent_home / "home")
+    assert os.getcwd() == str(agent_home)
+
+
 def test_root_serves_index_html(tmp_path) -> None:
     backend_server = importlib.import_module("aegis.backend.server")
     config = importlib.import_module("aegis.backend.config")
