@@ -173,16 +173,6 @@ class TestFeishuMessageNormalization(unittest.TestCase):
 
 
 class TestFeishuAdapterMessaging(unittest.TestCase):
-    @unittest.skipUnless(_HAS_LARK_OAPI, "lark-oapi not installed")
-    def test_websocket_sdk_accepts_channel_ua_tag(self):
-        """The shipped SDK must support the Channel signaling argument."""
-        import inspect
-
-        from lark_oapi.ws import Client as FeishuWSClient
-
-        signature = inspect.signature(FeishuWSClient)
-        self.assertIn("extra_ua_tags", signature.parameters)
-
     @patch.dict(os.environ, {
         "FEISHU_APP_ID": "cli_app",
         "FEISHU_APP_SECRET": "secret_app",
@@ -482,6 +472,39 @@ class TestFeishuAdapterMessaging(unittest.TestCase):
                       "FeishuWSClient must receive extra_ua_tags for group @mention delivery")
         self.assertEqual(call_kwargs["extra_ua_tags"], ["channel"],
                          "extra_ua_tags must be ['channel'] to enable group event routing")
+
+    def test_build_websocket_client_omits_ua_tag_for_legacy_sdk(self):
+        """Older lark-oapi clients must still connect without the new keyword."""
+        from gateway.config import PlatformConfig
+        from plugins.platforms.feishu.adapter import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+        calls = []
+
+        class _LegacyWSClient:
+            def __init__(self, app_id, app_secret, log_level, event_handler, domain):
+                calls.append({
+                    "app_id": app_id,
+                    "app_secret": app_secret,
+                    "log_level": log_level,
+                    "event_handler": event_handler,
+                    "domain": domain,
+                })
+
+        with (
+            patch("plugins.platforms.feishu.adapter.FeishuWSClient", _LegacyWSClient),
+            patch("plugins.platforms.feishu.adapter.lark", SimpleNamespace(LogLevel=SimpleNamespace(INFO="INFO"))),
+        ):
+            client = adapter._build_websocket_client(domain="https://open.feishu.cn", event_handler="handler")
+
+        self.assertIsInstance(client, _LegacyWSClient)
+        self.assertEqual(calls, [{
+            "app_id": adapter._app_id,
+            "app_secret": adapter._app_secret,
+            "log_level": "INFO",
+            "event_handler": "handler",
+            "domain": "https://open.feishu.cn",
+        }])
 
     @patch.dict(os.environ, {}, clear=True)
     def test_edit_message_updates_existing_feishu_message(self):
@@ -3622,6 +3645,29 @@ class TestSenderNameResolution(unittest.TestCase):
 
         self.assertEqual(result, "Bob")
         self.assertIn("ou_bob", adapter._sender_name_cache)
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_sender_profile_prefers_open_id_and_caches_all_identity_aliases(self):
+        from gateway.config import PlatformConfig
+        from plugins.platforms.feishu.adapter import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+        adapter._resolve_sender_name_from_api = AsyncMock(return_value="Ada")
+        sender_id = SimpleNamespace(
+            open_id="ou_ada",
+            user_id="legacy_user_id",
+            union_id="on_ada",
+        )
+
+        profile = asyncio.run(adapter._resolve_sender_profile(sender_id))
+
+        self.assertEqual(profile, {
+            "user_id": "legacy_user_id",
+            "user_name": "Ada",
+            "user_id_alt": "on_ada",
+        })
+        adapter._resolve_sender_name_from_api.assert_awaited_once_with("ou_ada", is_bot=False)
+        assert {"ou_ada", "legacy_user_id", "on_ada"} <= set(adapter._sender_name_cache)
 
     @patch.dict(os.environ, {}, clear=True)
     def test_expired_cache_triggers_new_api_call(self):

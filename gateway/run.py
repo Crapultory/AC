@@ -10386,14 +10386,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             thread_sessions_per_user=_thread_sessions_per_user,
         )
         _source_header = None
-        # Build a structured source header for every Slack message, including
-        # DMs, so the A2A executor can recover the sender and channel identity.
+        # Build a structured source header for Slack and Feishu messages,
+        # including DMs, so the A2A executor can recover sender and channel
+        # identity without altering command parsing upstream.
         # It is applied after all other inbound context has been prepended,
         # keeping it on the first line for the executor's parser.
-        if source.platform and getattr(source.platform, "value", None) == "slack" and source.user_id:
+        _source_platform = getattr(source.platform, "value", None)
+        if _source_platform in {"slack", "feishu"} and source.user_id:
             import json as _json
 
-            _source_data: dict = {"platform": "slack"}
+            _source_data: dict = {"platform": _source_platform}
             if source.chat_id:
                 _source_data["channel"] = source.chat_id
             _source_data["uid"] = source.user_id
