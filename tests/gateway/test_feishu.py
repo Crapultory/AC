@@ -1785,7 +1785,7 @@ class TestAdapterBehavior(unittest.TestCase):
         adapter._dispatch_inbound_event.assert_awaited_once()
         event = adapter._dispatch_inbound_event.await_args.args[0]
         self.assertEqual(event.message_type, MessageType.TEXT)
-        self.assertEqual(event.source.user_id, "u_user")  # tenant-scoped user_id preferred over app-scoped open_id
+        self.assertEqual(event.source.user_id, "ou_user")  # source envelope UID matches the name lookup open_id
         self.assertEqual(event.source.user_name, "张三")
         self.assertEqual(event.source.user_id_alt, "on_union")
         self.assertEqual(event.source.chat_name, "Feishu DM")
@@ -3647,7 +3647,7 @@ class TestSenderNameResolution(unittest.TestCase):
         self.assertIn("ou_bob", adapter._sender_name_cache)
 
     @patch.dict(os.environ, {}, clear=True)
-    def test_sender_profile_prefers_open_id_and_caches_all_identity_aliases(self):
+    def test_sender_profile_uses_open_id_for_source_and_name_lookup(self):
         from gateway.config import PlatformConfig
         from plugins.platforms.feishu.adapter import FeishuAdapter
 
@@ -3662,7 +3662,7 @@ class TestSenderNameResolution(unittest.TestCase):
         profile = asyncio.run(adapter._resolve_sender_profile(sender_id))
 
         self.assertEqual(profile, {
-            "user_id": "legacy_user_id",
+            "user_id": "ou_ada",
             "user_name": "Ada",
             "user_id_alt": "on_ada",
         })
