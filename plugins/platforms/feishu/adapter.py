@@ -42,9 +42,7 @@ de-facto unique user identifier since there is only one app context.
 
 Session-key participant isolation prefers ``union_id`` (via user_id_alt)
 over ``open_id`` (via user_id) so that sessions stay stable if the same
-user is seen through different apps in the future.  ``user_id`` therefore
-carries ``open_id`` for agent-visible source envelopes and falls back to the
-tenant-scoped ID only when an event lacks ``open_id``.
+user is seen through different apps in the future.
 """
 
 from __future__ import annotations
@@ -4696,8 +4694,8 @@ class FeishuAdapter(BasePlatformAdapter):
         """Map Feishu's three-tier user IDs onto Hermes' SessionSource fields.
 
         Preference order for the primary ``user_id`` field:
-          1. open_id  (app-scoped, always available and used for name lookup)
-          2. user_id  (tenant-scoped fallback when open_id is unavailable)
+          1. user_id  (tenant-scoped, most stable — requires permission scope)
+          2. open_id  (app-scoped, always available — different per bot app)
 
         ``user_id_alt`` carries the union_id (developer-scoped, stable across
         all apps by the same developer).  Session-key generation prefers
@@ -4707,9 +4705,8 @@ class FeishuAdapter(BasePlatformAdapter):
         open_id = getattr(sender_id, "open_id", None) or None
         user_id = getattr(sender_id, "user_id", None) or None
         union_id = getattr(sender_id, "union_id", None) or None
-        # The gateway renders this field as ``<source>.uid``.  Keep it aligned
-        # with the app-scoped identifier used to resolve the sender's name.
-        primary_id = open_id or user_id
+        # Prefer tenant-scoped user_id; fall back to app-scoped open_id.
+        primary_id = user_id or open_id
         # The message event's ``user_id`` is not consistently a Contact v3
         # lookup key.  Prefer the app-scoped open_id emitted by the event,
         # then union_id; only use user_id as a last resort.  This mirrors the
