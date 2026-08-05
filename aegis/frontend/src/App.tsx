@@ -319,7 +319,6 @@ function AuthenticatedAppShell({
             <OverviewTab
               agents={overviewAgents}
               currentUtcTime={currentUtcTime}
-              isAdmin={isAdmin}
               stats={overviewStats}
               statsError={overviewStatsError}
               topology={topology}
