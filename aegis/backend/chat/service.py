@@ -23,8 +23,8 @@ from aegis.backend.chat.models import (
 )
 from aegis.backend.chat.attachments import ChatAttachment, ChatAttachmentStore, prepare_turn_message
 from aegis.backend.chat.runtime import AegisChatInputAdapter, AegisChatOutputAdapter
-from aisoc.backend.agent_runtime import default_agent_factory
-from aisoc.backend.agent_runtime import load_conversation_history
+from workagent.backend.agent_runtime import default_agent_factory
+from workagent.backend.agent_runtime import load_conversation_history
 from gateway.session_context import clear_session_vars, set_session_vars
 from agent.tool_dispatch_helpers import _extract_landed_file_mutation_paths
 from tools.approval import (

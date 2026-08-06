@@ -12305,7 +12305,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
     {
         "acp", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
         "computer-use",
-        "config", "console", "cron", "curator", "dashboard", "serve", "aegis", "aisoc", "debug", "doctor",
+        "config", "console", "cron", "curator", "dashboard", "serve", "aegis", "aisoc", "workagent", "debug", "doctor",
         "dump", "fallback", "gateway", "hooks", "import", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
         "journey", "memory-graph", "learning",
@@ -12808,6 +12808,13 @@ def cmd_aisoc(args):
     from aisoc.backend.main import cmd_aisoc as backend_cmd_aisoc
 
     return backend_cmd_aisoc(args)
+
+
+def cmd_workagent(args):
+    """Delegate WorkAgent startup and module dispatch to its backend entrypoint."""
+    from workagent.backend.main import cmd_workagent as backend_cmd_workagent
+
+    return backend_cmd_workagent(args)
 
 
 def cmd_aegis(args):
@@ -14656,6 +14663,16 @@ def main():
 
     configure_aisoc_parser(aisoc_parser)
     aisoc_parser.set_defaults(func=cmd_aisoc)
+
+    workagent_parser = subparsers.add_parser(
+        "workagent",
+        help="Start the WorkAgent web console",
+        description="Launch the WorkAgent console for reusable workflow operations and runtime controls",
+    )
+    from workagent.backend.main import configure_workagent_parser
+
+    configure_workagent_parser(workagent_parser)
+    workagent_parser.set_defaults(func=cmd_workagent)
 
 
     # =========================================================================
