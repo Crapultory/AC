@@ -765,6 +765,7 @@ def test_remote_loop_reuses_session_and_routes_foreground_input(monkeypatch, is_
     assert sessions[0].turns[0][2] == "seed-session"
     assert sessions[0].turns[1][2] == "ctx-remote"
     assert "<source>" in sessions[0].turns[0][0]
+    assert '"conn":"a2a"' in sessions[0].turns[0][0]
     assert "extra context" in sessions[0].turns[0][0]
     assert sessions[0].turns[1][0].endswith("follow up")
     assert sink.events == [
