@@ -148,7 +148,12 @@ async def test_incomplete_codex_turn_stays_out_of_slack_transcript(monkeypatch, 
         for call in runner.session_store.append_to_transcript.call_args_list
     ]
     assert transcript_roles == ["session_meta", "user"]
-    assert runner.session_store.append_to_transcript.call_args_list[1].args[1]["content"] == "hello"
+    # Slack/Feishu inbound text now carries a structured <source> header
+    # (added for A2A executor sender/channel identity recovery — see
+    # test_shared_group_sender_prefix.py) ahead of the raw message body.
+    assert runner.session_store.append_to_transcript.call_args_list[1].args[1]["content"] == (
+        '<source>{"platform":"slack","channel":"C123","uid":"U123","uname":""}</source>\n\nhello'
+    )
     assert adapter.processing_hooks == [
         ("start", "m-1"),
         ("complete", "m-1", ProcessingOutcome.SUCCESS),

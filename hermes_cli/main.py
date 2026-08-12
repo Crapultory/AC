@@ -10674,7 +10674,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
     {
         "acp", "approvals", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
         "computer-use",
-        "config", "console", "cron", "curator", "dashboard", "serve", "debug", "doctor",
+        "config", "console", "cron", "curator", "dashboard", "serve", "aegis", "aisoc", "workagent", "debug", "doctor",
         "dump", "egress", "fallback", "gateway", "hooks", "import", "import-agent", "insights",
         "gui", "desktop", "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate", "moa",
         "journey", "memory-graph", "learning",
@@ -11347,6 +11347,27 @@ def _advertise_agent_env() -> None:
     """
     os.environ.setdefault("AI_AGENT", "hermes-agent")
     os.environ.setdefault("HERMES_AGENT", "true")
+
+
+def cmd_aisoc(args):
+    """Delegate AISOC startup and module dispatch to its backend entrypoint."""
+    from aisoc.backend.main import cmd_aisoc as backend_cmd_aisoc
+
+    return backend_cmd_aisoc(args)
+
+
+def cmd_workagent(args):
+    """Delegate WorkAgent startup and module dispatch to its backend entrypoint."""
+    from workagent.backend.main import cmd_workagent as backend_cmd_workagent
+
+    return backend_cmd_workagent(args)
+
+
+def cmd_aegis(args):
+    """Delegate Aegis startup to its backend entrypoint."""
+    from aegis.backend.main import cmd_aegis as backend_cmd_aegis
+
+    return backend_cmd_aegis(args)
 
 
 def main():
@@ -12644,6 +12665,39 @@ def main():
         cmd_dashboard=cmd_dashboard,
         cmd_dashboard_register=cmd_dashboard_register,
     )
+
+    # =========================================================================
+    # Aegis and AISOC product commands
+    # =========================================================================
+    aegis_parser = subparsers.add_parser(
+        "aegis",
+        help="Start the Aegis web console",
+        description="Launch the Aegis console for agent orchestration and routing policy controls",
+    )
+    from aegis.backend.main import configure_aegis_parser
+
+    configure_aegis_parser(aegis_parser)
+    aegis_parser.set_defaults(func=cmd_aegis)
+
+    aisoc_parser = subparsers.add_parser(
+        "aisoc",
+        help="Start the AISOC web console",
+        description="Launch the AISOC console for chat operations and runtime controls",
+    )
+    from aisoc.backend.main import configure_aisoc_parser
+
+    configure_aisoc_parser(aisoc_parser)
+    aisoc_parser.set_defaults(func=cmd_aisoc)
+
+    workagent_parser = subparsers.add_parser(
+        "workagent",
+        help="Start the WorkAgent web console",
+        description="Launch the WorkAgent console for reusable workflow operations and runtime controls",
+    )
+    from workagent.backend.main import configure_workagent_parser
+
+    configure_workagent_parser(workagent_parser)
+    workagent_parser.set_defaults(func=cmd_workagent)
 
 
     # =========================================================================

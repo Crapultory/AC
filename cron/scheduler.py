@@ -2349,12 +2349,42 @@ def _windows_cron_python_invocation(python_exe: str) -> tuple[str, dict[str, str
     return str(interpreter), env_overlay
 
 
+def _job_user_env_values(identify: Optional[dict[str, str]] = None) -> dict[str, str]:
+    """Return the per-user env overlay for a cron job script subprocess."""
+    if identify:
+        try:
+            from cron.jobs import parse_job_identify
+            from tools.user_env_store import load_user_env
+
+            parsed = parse_job_identify(identify)
+            if parsed is None:
+                return {}
+            loaded = load_user_env(
+                parsed.get("platform"),
+                parsed.get("user_id"),
+                parsed.get("user_name"),
+            )
+            return dict(loaded.env)
+        except Exception as exc:
+            logger.warning("Could not load cron job user env values: %s", exc)
+            return {}
+
+    try:
+        from tools.user_env_runtime import get_current_user_env_values
+
+        return dict(get_current_user_env_values())
+    except Exception as exc:
+        logger.warning("Could not read current user env values: %s", exc)
+        return {}
+
+
 def _run_job_script(
     script_path: str,
     workdir: Optional[str] = None,
+    *,
+    identify: Optional[dict[str, str]] = None,
 ) -> tuple[bool, str]:
     """Execute a cron job's data-collection script and capture its output.
-
     Scripts must reside within HERMES_HOME/scripts/.  Both relative and
     absolute paths are resolved and validated against this directory to
     prevent arbitrary script execution via path traversal or absolute
@@ -2461,7 +2491,7 @@ def _run_job_script(
                 "encoding": "utf-8",
                 "errors": "replace",
             }
-        env = build_subprocess_env()
+        env = build_subprocess_env(extra=_job_user_env_values(identify))
         env.update(env_overlay)
         # Use the job's workdir as the subprocess cwd when configured,
         # otherwise default to the scripts-dir parent (back-compat).
@@ -2507,7 +2537,11 @@ def _run_job_script(
 
 
 def _run_job_script_with_claim_heartbeat(
-    job: dict, script_path: str, workdir: Optional[str] = None,
+    job: dict,
+    script_path: str,
+    workdir: Optional[str] = None,
+    *,
+    identify: Optional[dict[str, str]] = None,
 ) -> tuple[bool, str]:
     """Run a cron script while keeping its owned one-shot claim fresh.
 
@@ -2520,6 +2554,10 @@ def _run_job_script_with_claim_heartbeat(
     The claim owner is captured from the dispatched job and never re-read from
     storage.  ``heartbeat_run_claim`` compares that stable owner before every
     refresh, so a stale runner cannot extend a replacement owner's claim.
+
+    ``identify`` is forwarded to ``_run_job_script`` unchanged so per-user env
+    overlays (see ``_job_user_env_values``) apply the same whether or not the
+    claim heartbeat thread is running.
     """
     schedule = job.get("schedule")
     claim = job.get("run_claim")
@@ -2529,7 +2567,7 @@ def _run_job_script_with_claim_heartbeat(
         and schedule.get("kind") == "once"
         and owner
     ):
-        return _run_job_script(script_path, workdir=workdir)
+        return _run_job_script(script_path, workdir=workdir, identify=identify)
 
     job_id = str(job.get("id") or "")
     stop = threading.Event()
@@ -2560,10 +2598,10 @@ def _run_job_script_with_claim_heartbeat(
             job_id,
             exc_info=True,
         )
-        return _run_job_script(script_path, workdir=workdir)
+        return _run_job_script(script_path, workdir=workdir, identify=identify)
 
     try:
-        return _run_job_script(script_path, workdir=workdir)
+        return _run_job_script(script_path, workdir=workdir, identify=identify)
     finally:
         stop.set()
         # Event.wait() wakes immediately.  Keep completion bounded if the
@@ -2634,7 +2672,14 @@ def _build_job_prompt(
         if prerun_script is not None:
             success, script_output = prerun_script
         else:
-            success, script_output = _run_job_script(script_path)
+            script_identify = job.get("identify")
+            if script_identify:
+                success, script_output = _run_job_script(
+                    script_path,
+                    identify=script_identify,
+                )
+            else:
+                success, script_output = _run_job_script(script_path)
         if success:
             if script_output:
                 prompt = (
@@ -3191,6 +3236,11 @@ def run_job(
     """
     job_id = job["id"]
     job_name = str(job.get("name") or job.get("prompt") or job_id or "cron job")
+    try:
+        from cron.jobs import parse_job_identify
+        job_identify = parse_job_identify(job.get("identify"))
+    except ValueError as exc:
+        raise RuntimeError(f"Cron job '{job_id}' has malformed identify: {exc}") from exc
 
     # ---------------------------------------------------------------
     # no_agent short-circuit — the script IS the job, no LLM involvement.
@@ -3247,7 +3297,7 @@ def run_job(
 
         try:
             ok, output = _run_job_script_with_claim_heartbeat(
-                job, script_path, workdir=_job_workdir,
+                job, script_path, workdir=_job_workdir, identify=job_identify,
             )
         except Exception as exc:
             logger.exception(
@@ -3449,7 +3499,9 @@ def run_job(
     prerun_script = None
     script_path = job.get("script")
     if script_path:
-        prerun_script = _run_job_script_with_claim_heartbeat(job, script_path)
+        prerun_script = _run_job_script_with_claim_heartbeat(
+            job, script_path, identify=job_identify,
+        )
         _ran_ok, _script_output = prerun_script
         if _ran_ok and not _parse_wake_gate(_script_output):
             logger.info(
@@ -4108,10 +4160,14 @@ def run_job(
             load_soul_identity=True,
             skip_memory=True,  # Cron system prompts would corrupt user representations
             skip_background_review=True,  # Cron has no human-in-the-loop need for skill/memory review forks (~30K tok/event)
-            platform="cron",
+            platform=(job_identify or {}).get("platform") or "cron",
+            user_id=(job_identify or {}).get("user_id"),
+            user_name=(job_identify or {}).get("user_name"),
             session_id=_cron_session_id,
             session_db=_session_db,
         )
+        if job_identify:
+            agent._user_env_platform = job_identify.get("platform") or "cron"
         
         # Run the agent with an *inactivity*-based timeout: the job can run
         # for hours if it's actively calling tools / receiving stream tokens,

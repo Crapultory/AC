@@ -42,6 +42,7 @@ def _make_mock_parent(depth=0):
     parent.api_mode = "chat_completions"
     parent.model = "anthropic/claude-sonnet-4"
     parent.platform = "cli"
+    parent._user_env_platform = None
     parent.providers_allowed = None
     parent.providers_ignored = None
     parent.providers_order = None
@@ -317,25 +318,73 @@ class TestDelegateTask(unittest.TestCase):
             self.assertEqual(kwargs["model"], "hermes-4-405b")
             self.assertEqual(kwargs["api_mode"], "chat_completions")
 
+    def test_child_inherits_parent_print_fn(self):
+        parent = _make_mock_parent(depth=0)
+        sink = MagicMock()
+        parent._print_fn = sink
+
         with patch("run_agent.AIAgent") as MockAgent:
             mock_child = MagicMock()
             MockAgent.return_value = mock_child
-            parent.api_mode = "chat_completions"
-            parent.model = "hermes-4-405b"
 
             _build_child_agent(
                 task_index=0,
-                goal="Move onto Messages",
+                goal="Keep stdout clean",
                 context=None,
                 toolsets=None,
-                model="anthropic/claude-opus-4.8",
+                model=None,
                 max_iterations=10,
                 parent_agent=parent,
                 task_count=1,
             )
 
-            _, kwargs = MockAgent.call_args
-            self.assertEqual(kwargs["api_mode"], "anthropic_messages")
+        self.assertIs(mock_child._print_fn, sink)
+
+    def test_child_preserves_originating_user_platform(self):
+        parent = _make_mock_parent(depth=0)
+        parent.platform = "subagent"
+        parent._user_env_platform = "aegis"
+
+        with patch("run_agent.AIAgent") as MockAgent:
+            mock_child = MagicMock()
+            MockAgent.return_value = mock_child
+
+            _build_child_agent(
+                task_index=0,
+                goal="Preserve authorization identity",
+                context=None,
+                toolsets=None,
+                model=None,
+                max_iterations=10,
+                parent_agent=parent,
+                task_count=1,
+            )
+
+        self.assertEqual(mock_child._user_env_platform, "aegis")
+
+    def test_child_uses_thinking_callback_when_progress_callback_available(self):
+        parent = _make_mock_parent(depth=0)
+        parent.tool_progress_callback = MagicMock()
+
+        with patch("run_agent.AIAgent") as MockAgent:
+            mock_child = MagicMock()
+            MockAgent.return_value = mock_child
+
+            _build_child_agent(
+                task_index=0,
+                goal="Avoid raw child spinners",
+                context=None,
+                toolsets=None,
+                model=None,
+                max_iterations=10,
+                parent_agent=parent,
+                task_count=1,
+            )
+
+        self.assertTrue(callable(mock_child.thinking_callback))
+        mock_child.thinking_callback("deliberating...")
+        parent.tool_progress_callback.assert_not_called()
+
 
 class TestToolNamePreservation(unittest.TestCase):
     """Verify _last_resolved_tool_names is restored after subagent runs."""

@@ -128,6 +128,97 @@ class TestFeishuAdapterMessaging(unittest.TestCase):
         signature = inspect.signature(FeishuWSClient)
         self.assertIn("extra_ua_tags", signature.parameters)
 
+    @patch.dict(os.environ, {
+        "FEISHU_APP_ID": "cli_app",
+        "FEISHU_APP_SECRET": "secret_app",
+        "FEISHU_CONNECTION_MODE": "webhook",
+        "FEISHU_WEBHOOK_HOST": "127.0.0.1",
+        "FEISHU_WEBHOOK_PORT": "9001",
+        "FEISHU_WEBHOOK_PATH": "/hook",
+        "FEISHU_VERIFICATION_TOKEN": "vtok",
+    }, clear=True)
+    def test_connect_webhook_mode_starts_local_server(self):
+        from gateway.config import PlatformConfig
+        from plugins.platforms.feishu.adapter import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+        runner = AsyncMock()
+        site = AsyncMock()
+        web_module = SimpleNamespace(
+            Application=lambda **_kwargs: SimpleNamespace(router=SimpleNamespace(add_post=lambda *_args, **_kwargs: None)),
+            AppRunner=lambda _app: runner,
+            TCPSite=lambda _runner, host, port: SimpleNamespace(start=site.start, host=host, port=port),
+        )
+
+        with (
+            patch("plugins.platforms.feishu.adapter.FEISHU_AVAILABLE", True),
+            patch("plugins.platforms.feishu.adapter.FEISHU_WEBHOOK_AVAILABLE", True),
+            patch("plugins.platforms.feishu.adapter.EventDispatcherHandler") as mock_handler_class,
+            patch("plugins.platforms.feishu.adapter.acquire_scoped_lock", return_value=(True, None)),
+            patch("plugins.platforms.feishu.adapter.release_scoped_lock"),
+            patch.object(adapter, "_hydrate_bot_identity", new=AsyncMock()),
+            patch.object(adapter, "_build_lark_client", return_value=SimpleNamespace()),
+            patch("plugins.platforms.feishu.adapter.web", web_module),
+        ):
+            _mock_event_dispatcher_builder(mock_handler_class)
+            connected = asyncio.run(adapter.connect())
+
+        self.assertTrue(connected)
+        runner.setup.assert_awaited_once()
+        site.start.assert_awaited_once()
+
+    @patch.dict(os.environ, {
+        "FEISHU_APP_ID": "cli_app",
+        "FEISHU_APP_SECRET": "secret_app",
+    }, clear=True)
+    def test_connect_acquires_scoped_lock_and_disconnect_releases_it(self):
+        from gateway.config import PlatformConfig
+        from plugins.platforms.feishu.adapter import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+        ws_client = SimpleNamespace()
+
+        with (
+            patch("plugins.platforms.feishu.adapter.FEISHU_AVAILABLE", True),
+            patch("plugins.platforms.feishu.adapter.FEISHU_WEBSOCKET_AVAILABLE", True),
+            patch("plugins.platforms.feishu.adapter.lark", SimpleNamespace(LogLevel=SimpleNamespace(INFO="INFO", WARNING="WARNING"))),
+            patch("plugins.platforms.feishu.adapter.EventDispatcherHandler") as mock_handler_class,
+            patch("plugins.platforms.feishu.adapter.FeishuWSClient", return_value=ws_client),
+            patch("plugins.platforms.feishu.adapter._run_official_feishu_ws_client"),
+            patch("plugins.platforms.feishu.adapter.acquire_scoped_lock", return_value=(True, None)) as acquire_lock,
+            patch("plugins.platforms.feishu.adapter.release_scoped_lock") as release_lock,
+            patch.object(adapter, "_hydrate_bot_identity", new=AsyncMock()),
+            patch.object(adapter, "_build_lark_client", return_value=SimpleNamespace()),
+        ):
+            _mock_event_dispatcher_builder(mock_handler_class)
+
+            loop = asyncio.new_event_loop()
+            future = loop.create_future()
+            future.set_result(None)
+
+            class _Loop:
+                def run_in_executor(self, *_args, **_kwargs):
+                    return future
+
+                def is_closed(self):
+                    return False
+
+            try:
+                with patch("plugins.platforms.feishu.adapter.asyncio.get_running_loop", return_value=_Loop()):
+                    connected = asyncio.run(adapter.connect())
+                    asyncio.run(adapter.disconnect())
+            finally:
+                loop.close()
+
+        self.assertTrue(connected)
+        self.assertIsNone(adapter._event_handler)
+        acquire_lock.assert_called_once_with(
+            "feishu-app-id",
+            "cli_app",
+            metadata={"platform": "feishu"},
+        )
+        release_lock.assert_called_once_with("feishu-app-id", "cli_app")
+
 
     def test_disconnect_sends_websocket_close_frame(self):
         """Regression test for #10202: disconnect() must call the WSS
@@ -241,6 +332,80 @@ class TestFeishuAdapterMessaging(unittest.TestCase):
         self.assertEqual(call_kwargs["extra_ua_tags"], ["channel"],
                          "extra_ua_tags must be ['channel'] to enable group event routing")
 
+    def test_build_websocket_client_omits_ua_tag_for_legacy_sdk(self):
+        """Older lark-oapi clients must still connect without the new keyword."""
+        from gateway.config import PlatformConfig
+        from plugins.platforms.feishu.adapter import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+        calls = []
+
+        class _LegacyWSClient:
+            def __init__(self, app_id, app_secret, log_level, event_handler, domain):
+                calls.append({
+                    "app_id": app_id,
+                    "app_secret": app_secret,
+                    "log_level": log_level,
+                    "event_handler": event_handler,
+                    "domain": domain,
+                })
+
+        with (
+            patch("plugins.platforms.feishu.adapter.FeishuWSClient", _LegacyWSClient),
+            patch("plugins.platforms.feishu.adapter.lark", SimpleNamespace(LogLevel=SimpleNamespace(INFO="INFO"))),
+        ):
+            client = adapter._build_websocket_client(domain="https://open.feishu.cn", event_handler="handler")
+
+        self.assertIsInstance(client, _LegacyWSClient)
+        self.assertEqual(calls, [{
+            "app_id": adapter._app_id,
+            "app_secret": adapter._app_secret,
+            "log_level": "INFO",
+            "event_handler": "handler",
+            "domain": "https://open.feishu.cn",
+        }])
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_edit_message_updates_existing_feishu_message(self):
+        from gateway.config import PlatformConfig
+        from plugins.platforms.feishu.adapter import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+        captured = {}
+
+        class _MessageAPI:
+            def update(self, request):
+                captured["request"] = request
+                return SimpleNamespace(success=lambda: True)
+
+        adapter._client = SimpleNamespace(
+            im=SimpleNamespace(
+                v1=SimpleNamespace(
+                    message=_MessageAPI(),
+                )
+            )
+        )
+
+        async def _direct(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with patch("plugins.platforms.feishu.adapter.asyncio.to_thread", side_effect=_direct):
+            result = asyncio.run(
+                adapter.edit_message(
+                    chat_id="oc_chat",
+                    message_id="om_progress",
+                    content="📖 read_file: \"/tmp/image.png\"",
+                )
+            )
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.message_id, "om_progress")
+        self.assertEqual(captured["request"].message_id, "om_progress")
+        self.assertEqual(captured["request"].request_body.msg_type, "text")
+        self.assertEqual(
+            captured["request"].request_body.content,
+            json.dumps({"text": "📖 read_file: \"/tmp/image.png\""}, ensure_ascii=False),
+        )
 
     @patch.dict(os.environ, {}, clear=True)
     def test_edit_message_falls_back_to_text_when_post_update_is_rejected(self):
@@ -1722,6 +1887,79 @@ class TestSenderNameResolution(unittest.TestCase):
 
         self.assertEqual(result, "Bob")
         self.assertIn("ou_bob", adapter._sender_name_cache)
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_sender_profile_prefers_open_id_and_caches_all_identity_aliases(self):
+        from gateway.config import PlatformConfig
+        from plugins.platforms.feishu.adapter import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+        adapter._resolve_sender_name_from_api = AsyncMock(return_value="Ada")
+        sender_id = SimpleNamespace(
+            open_id="ou_ada",
+            user_id="legacy_user_id",
+            union_id="on_ada",
+        )
+
+        profile = asyncio.run(adapter._resolve_sender_profile(sender_id))
+
+        self.assertEqual(profile, {
+            "user_id": "legacy_user_id",
+            "user_name": "Ada",
+            "user_id_alt": "on_ada",
+        })
+        adapter._resolve_sender_name_from_api.assert_awaited_once_with("ou_ada", is_bot=False)
+        assert {"ou_ada", "legacy_user_id", "on_ada"} <= set(adapter._sender_name_cache)
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_expired_cache_triggers_new_api_call(self):
+        from gateway.config import PlatformConfig
+        from plugins.platforms.feishu.adapter import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+        # Expired cache entry.
+        adapter._sender_name_cache["ou_expired"] = ("OldName", time.time() - 1)
+
+        async def _direct(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        user_obj = SimpleNamespace(name="NewName", display_name=None, nickname=None, en_name=None)
+
+        class _ContactAPI:
+            def get(self, request):
+                return SimpleNamespace(success=lambda: True, data=SimpleNamespace(user=user_obj))
+
+        adapter._client = SimpleNamespace(
+            contact=SimpleNamespace(v3=SimpleNamespace(user=_ContactAPI()))
+        )
+
+        with patch("plugins.platforms.feishu.adapter.asyncio.to_thread", side_effect=_direct):
+            result = asyncio.run(adapter._resolve_sender_name_from_api("ou_expired"))
+
+        self.assertEqual(result, "NewName")
+
+    @patch.dict(os.environ, {}, clear=True)
+    def test_api_failure_returns_none_without_raising(self):
+        from gateway.config import PlatformConfig
+        from plugins.platforms.feishu.adapter import FeishuAdapter
+
+        adapter = FeishuAdapter(PlatformConfig())
+
+        class _BrokenContactAPI:
+            def get(self, _request):
+                raise RuntimeError("API down")
+
+        adapter._client = SimpleNamespace(
+            contact=SimpleNamespace(v3=SimpleNamespace(user=_BrokenContactAPI()))
+        )
+
+        async def _direct(func, *args, **kwargs):
+            return func(*args, **kwargs)
+
+        with patch("plugins.platforms.feishu.adapter.asyncio.to_thread", side_effect=_direct):
+            result = asyncio.run(adapter._resolve_sender_name_from_api("ou_broken"))
+
+        self.assertIsNone(result)
 
 
 @unittest.skipUnless(_HAS_LARK_OAPI, "lark-oapi not installed")
