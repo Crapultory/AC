@@ -220,6 +220,10 @@ wake = [
   "ai-edge-litert==2.1.6; platform_system == 'Darwin'",
 ]
 honcho = ["honcho-ai==2.2.0"]
+# a2a: A2A protocol adapter (aisoc/workagent/aegis agent-to-agent surface).
+# New in aegis_v0.2 — separate extra so the fastapi-pinned SDK stays lazy
+# for installs that don't run an A2A-exposed agent.
+a2a = ["a2a-sdk[fastapi]==1.1.0"]
 # Cloud memory providers — opt-in, lazy-installed via tools/lazy_deps.py
 # (memory.supermemory / memory.mem0) at first use. Exact pins MUST match the
 # LAZY_DEPS pins (enforced by tests/test_project_metadata.py). Deliberately
@@ -391,6 +395,13 @@ exclude-newer-package = { vercel = false, nemo-relay = false, huggingface_hub = 
 [tool.setuptools]
 # Top-level single-file modules (not packages). Without this, uv2nix's
 # sealed venv is missing hermes_constants, run_agent, etc.
+#
+# hermes_self_restart: new in aegis_v0.2, shared by aegis/aisoc/workagent's
+# `hermes system restart` routes (aegis/backend/routes/system.py,
+# aisoc/backend/routes/system.py, workagent/backend/routes/system.py) and
+# asserted directly by tests/test_self_restart.py
+# (test_shared_restart_module_is_in_the_installed_distribution). Must ship
+# as a top-level py-module like the others below.
 py-modules = [
   "run_agent",
   "model_tools",
@@ -408,12 +419,25 @@ py-modules = [
   "hermes_state_search",
   "hermes_time",
   "hermes_logging",
+  "hermes_self_restart",
   "utils",
   "mcp_serve",
 ]
 
+# NOTE on locales/optional-mcps/plugin manifests/web_dist/tui_dist: as of
+# "rip out brew + pip/PyPI wheel support" (#68217), wheel/sdist builds are no
+# longer a supported distribution path (see setup.py's build guard) and these
+# bare-data-dir assets are shipped via Nix store symlinks + wrapper env vars
+# instead (nix/hermes-agent.nix: bundledLocales, bundledOptionalMcps,
+# bundledPlugins, hermesWeb -> HERMES_BUNDLED_LOCALES/HERMES_OPTIONAL_MCPS/
+# HERMES_BUNDLED_PLUGINS/HERMES_WEB_DIST). A [tool.setuptools.data-files] /
+# expanded [tool.setuptools.package-data] table (as aegis_v0.2 still carried,
+# branched before #68217) would only matter for a wheel build, which
+# setup.py now refuses to produce outside HERMES_NIX_BUILD=1 — so it is
+# intentionally NOT restored here.
+
 [tool.setuptools.packages.find]
-include = ["agent", "agent.*", "tools", "tools.*", "hermes_cli", "hermes_cli.*", "gateway", "gateway.*", "tui_gateway", "tui_gateway.*", "cron", "cron.*", "acp_adapter", "plugins", "plugins.*", "providers", "providers.*"]
+include = ["agent", "agent.*", "tools", "tools.*", "hermes_cli", "hermes_cli.*", "gateway", "gateway.*", "tui_gateway", "tui_gateway.*", "cron", "cron.*", "acp_adapter", "plugins", "plugins.*", "providers", "providers.*", "aisoc", "aisoc.*", "workagent", "workagent.*", "aegis", "aegis.*"]
 
 [tool.setuptools.package-data]
 hermes_cli = ["observability/schemas/*.json"]

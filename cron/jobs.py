@@ -374,8 +374,9 @@ def _jobs_lock():
 # Fields on a cron job that must never change after creation. ``id`` is used
 # as a filesystem path component under ``OUTPUT_DIR``; allowing it to be
 # updated lets an unsafe value (``../escape``, absolute path, nested) leak
-# into output writes/deletes.
-_IMMUTABLE_JOB_FIELDS = frozenset({"id"})
+# into output writes/deletes. ``profile`` and ``profile_name`` are routing
+# metadata owned by the profile adapter, not persisted job-edit fields.
+_IMMUTABLE_JOB_FIELDS = frozenset({"id", "profile", "profile_name"})
 
 
 def _job_output_dir(job_id: str) -> Path:
@@ -475,6 +476,10 @@ def _normalize_job_record(job: Dict[str, Any]) -> Dict[str, Any]:
     # half-paused record (enabled=true + state/paused_at) cannot render as
     # "paused" while the fleet is still live. See effective_job_state().
     normalized["state"] = effective_job_state(normalized)
+    try:
+        normalized["identify"] = parse_job_identify(normalized.get("identify"))
+    except ValueError:
+        normalized["_identify_error"] = "malformed identify"
 
     return normalized
 
@@ -518,6 +523,51 @@ def effective_job_state(job: Dict[str, Any]) -> str:
     if stored == "paused" or job.get("paused_at"):
         return "scheduled"
     return stored or "scheduled"
+
+
+def build_job_identify(platform: Any, user_id: Any, user_name: Any = "") -> Optional[Dict[str, str]]:
+    user_id_text = str(user_id or "").strip()
+    if not user_id_text:
+        return None
+    return {
+        "platform": str(platform or "").strip(),
+        "user_id": user_id_text,
+        "user_name": str(user_name or "").strip(),
+    }
+
+
+def parse_job_identify(value: Any) -> Optional[Dict[str, str]]:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("Cron job identify must be an object with platform, user_id, and user_name")
+    platform = value.get("platform")
+    user_id = value.get("user_id")
+    user_name = value.get("user_name", "")
+    if not isinstance(platform, str) or not isinstance(user_id, str) or not isinstance(user_name, str):
+        raise ValueError("Cron job identify fields platform, user_id, and user_name must be strings")
+    if not user_id.strip():
+        raise ValueError("Cron job identify.user_id is required")
+    return {
+        "platform": platform.strip(),
+        "user_id": user_id.strip(),
+        "user_name": user_name.strip(),
+    }
+
+
+def is_job_visible_to_identity(job: Dict[str, Any], identity: Any = None) -> bool:
+    try:
+        identify = parse_job_identify(job.get("identify"))
+    except ValueError:
+        return False
+    if identify is None:
+        return True
+    if identity is None:
+        return False
+    return (
+        identify.get("platform") == str(getattr(identity, "platform", "") or "").strip()
+        and identify.get("user_id") == str(getattr(identity, "user_id", "") or "").strip()
+    )
 
 
 def _secure_dir(path: Path):
@@ -1586,6 +1636,7 @@ def create_job(
     attach_to_session: Optional[bool] = None,
     monitor_script: Optional[str] = None,
     monitor_url: Optional[str] = None,
+    identify: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Create a new cron job.
@@ -1679,6 +1730,7 @@ def create_job(
     normalized_monitor_script = normalized_monitor_script or None
     normalized_monitor_url = str(monitor_url).strip() if isinstance(monitor_url, str) else None
     normalized_monitor_url = normalized_monitor_url or None
+    normalized_identify = parse_job_identify(identify)
 
     # Monitor-mode validation: exactly one source, and monitor mode only
     # makes sense when there IS an agent to suppress/wake.
@@ -1777,6 +1829,7 @@ def create_job(
         "origin": origin,  # Tracks where job was created for "origin" delivery
         "enabled_toolsets": normalized_toolsets,
         "workdir": normalized_workdir,
+        "identify": normalized_identify,
     }
     # Only persist attach_to_session when explicitly set, so existing jobs and
     # the common case stay byte-identical (absent key => fall back to the
@@ -1857,14 +1910,15 @@ def list_jobs(include_disabled: bool = False) -> List[Dict[str, Any]]:
 
 def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]:
     """Update a job by ID, refreshing derived schedule fields when needed."""
-    # Block mutation of immutable fields. ``id`` in particular is a filesystem
-    # path component under OUTPUT_DIR — letting an update change it leaks
-    # path-escape values into output writes/deletes.
-    bad_fields = _IMMUTABLE_JOB_FIELDS.intersection(updates or {})
-    if bad_fields:
-        raise ValueError(
-            f"Cron job field(s) cannot be updated: {', '.join(sorted(bad_fields))}"
-        )
+    # Ignore immutable fields rather than rejecting the whole update.  API
+    # callers commonly send an annotated job object back as an update, which
+    # includes profile metadata.  ``id`` in particular remains a filesystem
+    # path component under OUTPUT_DIR and must never be allowed to change.
+    updates = {
+        key: value
+        for key, value in (updates or {}).items()
+        if key not in _IMMUTABLE_JOB_FIELDS
+    }
 
     with _jobs_lock():
         jobs = load_jobs()

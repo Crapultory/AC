@@ -160,6 +160,7 @@ def _get_scoped_secret(name, default=None):
 
 
 logger = logging.getLogger(__name__)
+DEFAULT_DELEGATE_STREAM_EDIT_INTERVAL = 3.0
 
 # ---------------------------------------------------------------------------
 # Regex patterns
@@ -453,6 +454,149 @@ class FeishuBatchState:
     events: Dict[str, MessageEvent] = field(default_factory=dict)
     tasks: Dict[str, asyncio.Task] = field(default_factory=dict)
     counts: Dict[str, int] = field(default_factory=dict)
+
+
+@dataclass
+class _FeishuDelegateRoute:
+    key: str
+    chat_id: str
+    thread_id: Optional[str]
+    user_id: Optional[str]
+    chat_type: Optional[str]
+    input_adapter: Any
+
+
+@dataclass
+class _FeishuDelegateStreamState:
+    accumulated_text: str = ""
+    pending_text: str = ""
+    message_id: Optional[str] = None
+    last_rendered_text: str = ""
+    lock: Optional[asyncio.Lock] = None
+    last_flush_ts: float = 0.0
+    flush_task: Optional[asyncio.Task] = None
+
+
+class _FeishuDelegateInputAdapter:
+    """Bridge async Feishu events to the synchronous A2A foreground loop."""
+
+    def __init__(self, adapter: "FeishuAdapter", route: _FeishuDelegateRoute):
+        self._adapter = adapter
+        self._route = route
+        self._condition = threading.Condition()
+        self._lines: List[str] = []
+        self._closed = False
+        self._last_read_timed_out = False
+
+    def enter_foreground(self) -> bool:
+        self._adapter._register_delegate_route(self._route)
+        return True
+
+    def exit_foreground(self) -> None:
+        self._adapter._unregister_delegate_route(self._route)
+
+    def push_line(self, text: str) -> bool:
+        with self._condition:
+            if self._closed:
+                return False
+            self._lines.append(str(text or ""))
+            self._condition.notify_all()
+            return True
+
+    def read_line(self, timeout=None):
+        with self._condition:
+            self._last_read_timed_out = False
+            deadline = None if timeout is None else time.monotonic() + max(0.0, float(timeout))
+            while not self._lines and not self._closed:
+                if deadline is None:
+                    self._condition.wait()
+                    continue
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    self._last_read_timed_out = True
+                    return None
+                self._condition.wait(timeout=remaining)
+            if self._lines:
+                return self._lines.pop(0)
+            return None
+
+    def close(self) -> None:
+        with self._condition:
+            self._closed = True
+            self._condition.notify_all()
+        self.exit_foreground()
+
+    def last_read_timed_out(self) -> bool:
+        with self._condition:
+            return self._last_read_timed_out
+
+
+class _FeishuDelegateOutputAdapter:
+    """Render A2A delegate events back into the originating Feishu surface."""
+
+    def __init__(
+        self,
+        adapter: "FeishuAdapter",
+        *,
+        chat_id: str,
+        thread_id: Optional[str],
+        user_id: Optional[str] = None,
+        chat_type: Optional[str] = None,
+    ):
+        self._adapter = adapter
+        self._chat_id = chat_id
+        self._thread_id = thread_id
+        self._user_id = user_id
+        self._chat_type = chat_type
+
+    def emit(self, source, event_type, content, session_id=None) -> None:
+        self._adapter._schedule_delegate_output(
+            self._emit_async(
+                str(source or ""), str(event_type or ""), str(content or ""), session_id=session_id
+            )
+        )
+
+    def _route_key(self) -> str:
+        return self._adapter._delegate_route_key(
+            chat_id=self._chat_id,
+            thread_id=self._thread_id,
+            user_id=self._user_id,
+            chat_type=self._chat_type,
+        )
+
+    @staticmethod
+    def _format_tool_call(content: str) -> str:
+        tool_name, _sep, raw_args = str(content or "").strip().partition(" ")
+        tool_name = tool_name.strip() or "tool"
+        preview = " ".join(raw_args.strip().split())
+        if len(preview) > 80:
+            preview = preview[:77] + "..."
+        return f"`tool` {tool_name}: {preview}" if preview else f"`tool` {tool_name}"
+
+    async def _emit_async(self, source: str, event_type: str, content: str, *, session_id=None) -> None:
+        del session_id
+        metadata = {"thread_id": self._thread_id} if self._thread_id else None
+        if source == "delegate" and event_type == "ai_delta":
+            if content:
+                await self._adapter.handle_delegate_ai_delta(
+                    route_key=self._route_key(), chat_id=self._chat_id, content=content, metadata=metadata
+                )
+            return
+        if source == "delegate" and event_type == "ai":
+            await self._adapter.handle_delegate_stream_segment_break(
+                route_key=self._route_key(), chat_id=self._chat_id, metadata=metadata
+            )
+            return
+        if source == "delegate" and event_type == "tool_call":
+            await self._adapter.handle_delegate_stream_segment_break(
+                route_key=self._route_key(), chat_id=self._chat_id, metadata=metadata
+            )
+            await self._adapter.send(self._chat_id, self._format_tool_call(content), metadata=metadata)
+            return
+        prefix = {"status": "_delegate_", "error": "`delegate error`"}.get(
+            event_type, f"`{event_type}`"
+        )
+        await self._adapter.send(self._chat_id, f"{prefix}: {content}", metadata=metadata)
 
 
 # ---------------------------------------------------------------------------
@@ -1556,6 +1700,14 @@ class FeishuAdapter(BasePlatformAdapter):
         # Update prompt button state (prompt_id → {session_key, message_id, chat_id})
         self._update_prompt_state: Dict[int, Dict[str, str]] = {}
         self._update_prompt_counter = itertools.count(1)
+        # Clarify card state is adapter-local: card payloads carry only the
+        # clarify id and option index, never the original choice text.
+        self._clarify_choices: Dict[str, Dict[str, Any]] = {}
+        # Foreground A2A routes and stream state are process-local by design.
+        self._delegate_routes: Dict[str, _FeishuDelegateRoute] = {}
+        self._delegate_routes_lock = threading.RLock()
+        self._delegate_stream_states: Dict[str, _FeishuDelegateStreamState] = {}
+        self._delegate_loop: Optional[asyncio.AbstractEventLoop] = None
         # Feishu reaction deletion requires the opaque reaction_id returned
         # by create, so we cache it per message_id.
         self._pending_processing_reactions: "OrderedDict[str, str]" = OrderedDict()
@@ -1726,6 +1878,290 @@ class FeishuAdapter(BasePlatformAdapter):
             .build()
         )
 
+    # =========================================================================
+    # A2A delegate foreground runtime
+    # =========================================================================
+
+    def _delegate_route_key(
+        self, *, chat_id: str, thread_id: Optional[str], user_id: Optional[str], chat_type: Optional[str]
+    ) -> str:
+        """Use the normal Hermes session identity for foreground route isolation."""
+        try:
+            from gateway.session import build_session_key
+
+            return build_session_key(
+                self.build_source(
+                    chat_id=chat_id,
+                    chat_type=chat_type or "dm",
+                    user_id=user_id,
+                    thread_id=thread_id,
+                ),
+                # A foreground loop owns a blocking input queue.  Unlike the
+                # regular group-thread transcript (which may be intentionally
+                # shared), it must never let another participant feed that
+                # queue.  Keep both group and threaded routes per-user.
+                group_sessions_per_user=True,
+                thread_sessions_per_user=True,
+            )
+        except Exception:
+            return json.dumps(
+                {"platform": "feishu", "chat_id": chat_id, "thread_id": thread_id,
+                 "user_id": user_id, "chat_type": chat_type},
+                sort_keys=True,
+            )
+
+    def _register_delegate_route(self, route: _FeishuDelegateRoute) -> None:
+        with self._delegate_routes_lock:
+            self._delegate_routes[route.key] = route
+
+    def _unregister_delegate_route(self, route: _FeishuDelegateRoute) -> None:
+        with self._delegate_routes_lock:
+            if self._delegate_routes.get(route.key) is route:
+                self._delegate_routes.pop(route.key, None)
+        self._clear_delegate_stream_state(route.key)
+
+    def _get_delegate_route(
+        self, *, chat_id: str, thread_id: Optional[str], user_id: Optional[str], chat_type: Optional[str]
+    ) -> Optional[_FeishuDelegateRoute]:
+        key = self._delegate_route_key(
+            chat_id=chat_id, thread_id=thread_id, user_id=user_id, chat_type=chat_type
+        )
+        with self._delegate_routes_lock:
+            return self._delegate_routes.get(key)
+
+    def _schedule_delegate_output(self, coro) -> None:
+        loop = self._delegate_loop or self._loop
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if running_loop is loop:
+            running_loop.create_task(coro)
+        elif loop is not None and loop.is_running():
+            asyncio.run_coroutine_threadsafe(coro, loop)
+        else:
+            logger.warning("[Feishu] Dropping delegate output because adapter loop is unavailable")
+            coro.close()
+
+    def _get_delegate_stream_state(self, route_key: str) -> _FeishuDelegateStreamState:
+        with self._delegate_routes_lock:
+            state = self._delegate_stream_states.get(route_key)
+            if state is None:
+                state = _FeishuDelegateStreamState()
+                self._delegate_stream_states[route_key] = state
+        if state.lock is None:
+            state.lock = asyncio.Lock()
+        return state
+
+    @staticmethod
+    def _reset_delegate_stream_segment_locked(state: _FeishuDelegateStreamState) -> None:
+        if state.flush_task is not None and not state.flush_task.done():
+            state.flush_task.cancel()
+        state.accumulated_text = ""
+        state.pending_text = ""
+        state.message_id = None
+        state.last_rendered_text = ""
+        state.last_flush_ts = 0.0
+        state.flush_task = None
+
+    def _clear_delegate_stream_state(self, route_key: str) -> None:
+        with self._delegate_routes_lock:
+            state = self._delegate_stream_states.pop(route_key, None)
+        if state is not None and state.flush_task is not None and not state.flush_task.done():
+            state.flush_task.cancel()
+
+    def _close_delegate_routes(self) -> None:
+        """Wake blocked foreground readers and discard all adapter-local state."""
+        with self._delegate_routes_lock:
+            routes = list(self._delegate_routes.values())
+            self._delegate_routes.clear()
+            states = list(self._delegate_stream_states.values())
+            self._delegate_stream_states.clear()
+        for route in routes:
+            close = getattr(route.input_adapter, "close", None)
+            if callable(close):
+                close()
+        for state in states:
+            if state.flush_task is not None and not state.flush_task.done():
+                state.flush_task.cancel()
+
+    def _delegate_stream_edit_interval(self) -> float:
+        try:
+            return max(0.0, float(getattr(
+                self, "_delegate_stream_edit_interval", DEFAULT_DELEGATE_STREAM_EDIT_INTERVAL
+            )))
+        except (TypeError, ValueError):
+            return DEFAULT_DELEGATE_STREAM_EDIT_INTERVAL
+
+    def _split_delegate_stream_content(self, text: str) -> List[str]:
+        return self.truncate_message(str(text or ""), max(1, self.MAX_MESSAGE_LENGTH - 64)) if text else []
+
+    async def _flush_delegate_stream_after_delay(
+        self, *, route_key: str, chat_id: str, metadata: Optional[Dict[str, Any]], delay: float
+    ) -> None:
+        try:
+            await asyncio.sleep(max(0.0, delay))
+            state = self._delegate_stream_states.get(route_key)
+            if state is None or state.lock is None:
+                return
+            async with state.lock:
+                if state.flush_task is not asyncio.current_task():
+                    return
+                state.flush_task = None
+                await self._flush_delegate_stream_locked(
+                    state=state, chat_id=chat_id, metadata=metadata, route_key=route_key, force=True
+                )
+        except asyncio.CancelledError:
+            return
+
+    async def _flush_delegate_stream_locked(
+        self,
+        *,
+        state: _FeishuDelegateStreamState,
+        chat_id: str,
+        metadata: Optional[Dict[str, Any]],
+        route_key: Optional[str] = None,
+        force: bool = False,
+    ) -> None:
+        if not state.pending_text and state.message_id:
+            return
+        if state.message_id and state.pending_text and not force:
+            interval = self._delegate_stream_edit_interval()
+            elapsed = time.monotonic() - state.last_flush_ts
+            if elapsed < interval:
+                if route_key and (state.flush_task is None or state.flush_task.done()):
+                    state.flush_task = asyncio.create_task(self._flush_delegate_stream_after_delay(
+                        route_key=route_key, chat_id=chat_id, metadata=metadata, delay=interval - elapsed,
+                    ))
+                return
+        if state.flush_task is not None and not state.flush_task.done():
+            state.flush_task.cancel()
+            state.flush_task = None
+        groups = self._split_delegate_stream_content(state.accumulated_text)
+        if not groups:
+            return
+        if not state.message_id:
+            for group in groups:
+                result = await self.send(chat_id, group, metadata=metadata)
+                if not result.success:
+                    return
+                if result.message_id:
+                    state.message_id = str(result.message_id)
+        elif len(groups) == 1:
+            current = groups[0]
+            if current != state.last_rendered_text:
+                result = await self.edit_message(chat_id, state.message_id, current)
+                if not result.success:
+                    result = await self.send(chat_id, state.pending_text, metadata=metadata)
+                    if not result.success:
+                        return
+                    if result.message_id:
+                        state.message_id = str(result.message_id)
+        else:
+            result = await self.edit_message(chat_id, state.message_id, groups[0])
+            if not result.success:
+                result = await self.send(chat_id, groups[0], metadata=metadata)
+                if not result.success:
+                    return
+                if result.message_id:
+                    state.message_id = str(result.message_id)
+            for group in groups[1:]:
+                result = await self.send(chat_id, group, metadata=metadata)
+                if not result.success:
+                    return
+                if result.message_id:
+                    state.message_id = str(result.message_id)
+        state.accumulated_text = groups[-1]
+        state.last_rendered_text = groups[-1]
+        state.pending_text = ""
+        state.last_flush_ts = time.monotonic()
+
+    async def handle_delegate_ai_delta(
+        self, *, route_key: str, chat_id: str, content: str, metadata: Optional[Dict[str, Any]]
+    ) -> None:
+        state = self._get_delegate_stream_state(route_key)
+        assert state.lock is not None
+        async with state.lock:
+            state.accumulated_text += str(content or "")
+            state.pending_text += str(content or "")
+            await self._flush_delegate_stream_locked(
+                state=state, chat_id=chat_id, metadata=metadata, route_key=route_key
+            )
+
+    async def handle_delegate_stream_segment_break(
+        self, *, route_key: str, chat_id: str, metadata: Optional[Dict[str, Any]]
+    ) -> None:
+        state = self._delegate_stream_states.get(route_key)
+        if state is None or state.lock is None:
+            return
+        async with state.lock:
+            await self._flush_delegate_stream_locked(
+                state=state, chat_id=chat_id, metadata=metadata, route_key=route_key, force=True
+            )
+            self._reset_delegate_stream_segment_locked(state)
+
+    def build_delegate_foreground_runtime(
+        self,
+        *,
+        channel_id: str,
+        thread_ts: Optional[str],
+        user_id: Optional[str] = None,
+        chat_type: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        try:
+            self._delegate_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            pass
+        route_key = self._delegate_route_key(
+            chat_id=channel_id, thread_id=thread_ts, user_id=user_id, chat_type=chat_type
+        )
+
+        def _input_factory():
+            route = _FeishuDelegateRoute(
+                key=route_key, chat_id=channel_id, thread_id=thread_ts, user_id=user_id,
+                chat_type=chat_type, input_adapter=None,
+            )
+            input_adapter = _FeishuDelegateInputAdapter(self, route)
+            route.input_adapter = input_adapter
+            return input_adapter
+
+        return {
+            "output": _FeishuDelegateOutputAdapter(
+                self, chat_id=channel_id, thread_id=thread_ts, user_id=user_id, chat_type=chat_type
+            ),
+            "input_factory": _input_factory,
+            "metadata": {"thread_id": thread_ts} if thread_ts else None,
+        }
+
+    async def _maybe_route_delegate_foreground_message(
+        self,
+        *,
+        text: str,
+        chat_id: str,
+        thread_id: Optional[str],
+        user_id: Optional[str],
+        chat_type: Optional[str],
+    ) -> bool:
+        # Some lightweight embedders construct an adapter shell only for
+        # normal message parsing and bypass ``__init__``.  Without foreground
+        # runtime state there cannot be a route to claim, so preserve the
+        # historical pass-through behaviour.
+        if not hasattr(self, "_delegate_routes_lock"):
+            return False
+        route = self._get_delegate_route(
+            chat_id=chat_id, thread_id=thread_id, user_id=user_id, chat_type=chat_type
+        )
+        if route is None or not callable(getattr(route.input_adapter, "push_line", None)):
+            return False
+        await self.handle_delegate_stream_segment_break(
+            route_key=route.key, chat_id=chat_id,
+            metadata={"thread_id": thread_id} if thread_id else None,
+        )
+        if route.input_adapter.push_line(text):
+            return True
+        self._unregister_delegate_route(route)
+        return False
+
     def _get_sdk_executor(self) -> concurrent.futures.ThreadPoolExecutor:
         """Return the adapter-owned executor for blocking Feishu SDK calls.
 
@@ -1827,6 +2263,7 @@ class FeishuAdapter(BasePlatformAdapter):
     async def disconnect(self) -> None:
         """Disconnect from Feishu/Lark."""
         self._running = False
+        self._close_delegate_routes()
         await self._cancel_pending_tasks(self._pending_text_batch_tasks)
         await self._cancel_pending_tasks(self._pending_media_batch_tasks)
         self._reset_batch_buffers()
@@ -2053,6 +2490,98 @@ class FeishuAdapter(BasePlatformAdapter):
     _EA_REASON_LABEL = "**Reason:** "
     _EA_SMART_DENY_LINE = "\n\n**Smart DENY:** owner override applies to this one operation only."
     _EA_CMD_BUDGET = 3000
+
+    async def send_clarify(
+        self,
+        chat_id: str,
+        question: str,
+        choices: Optional[list],
+        clarify_id: str,
+        session_key: str,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> SendResult:
+        """Render multi-choice clarify prompts as Feishu interactive cards."""
+        if not choices:
+            return await super().send_clarify(
+                chat_id=chat_id,
+                question=question,
+                choices=choices,
+                clarify_id=clarify_id,
+                session_key=session_key,
+                metadata=metadata,
+            )
+        if not self._client:
+            return SendResult(success=False, error="Not connected")
+
+        normalized_choices = [str(choice) for choice in choices]
+        question_text = str(question or "Please choose an option.")
+
+        def _button(label: str, index: int | str, button_type: str = "default") -> Dict[str, Any]:
+            return {
+                "tag": "button",
+                "text": {"tag": "plain_text", "content": label[:200]},
+                "type": button_type,
+                "value": {
+                    "hermes_clarify_action": "select" if index != "other" else "other",
+                    "clarify_id": str(clarify_id),
+                    "index": index,
+                },
+            }
+
+        card = {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"content": "❓ Clarification needed", "tag": "plain_text"},
+                "template": "blue",
+            },
+            "elements": [
+                {"tag": "markdown", "content": question_text[:3000]},
+                {
+                    "tag": "action",
+                    "actions": [
+                        _button(choice.strip() or f"Option {index + 1}", index, "primary" if index == 0 else "default")
+                        for index, choice in enumerate(normalized_choices)
+                    ] + [_button("Other (type answer)", "other")],
+                },
+            ],
+        }
+        try:
+            response = await self._feishu_send_with_retry(
+                chat_id=chat_id,
+                msg_type="interactive",
+                payload=json.dumps(card, ensure_ascii=False),
+                reply_to=None,
+                metadata=metadata,
+            )
+            result = self._finalize_send_result(response, "send_clarify failed")
+            if result.success:
+                self._clarify_choices[str(clarify_id)] = {
+                    "choices": normalized_choices,
+                    "chat_id": chat_id,
+                    "session_key": session_key,
+                }
+            return result
+        except Exception as exc:
+            logger.warning("[Feishu] send_clarify failed: %s", exc, exc_info=True)
+            return SendResult(success=False, error=str(exc))
+
+    @staticmethod
+    def _build_resolved_clarify_card(*, choice: Optional[str], user_name: str) -> Dict[str, Any]:
+        waiting_for_text = choice is None
+        title = "✏️ Waiting for typed answer" if waiting_for_text else "✅ Clarification selected"
+        content = (
+            f"Waiting for a typed answer from **{user_name}**"
+            if waiting_for_text
+            else f"Selected **{choice}** by **{user_name}**"
+        )
+        return {
+            "config": {"wide_screen_mode": True},
+            "header": {
+                "title": {"content": title, "tag": "plain_text"},
+                "template": "blue" if waiting_for_text else "green",
+            },
+            "elements": [{"tag": "markdown", "content": content}],
+        }
 
     async def send_exec_approval(
         self, chat_id: str, command: str, session_key: str,
@@ -2734,11 +3263,25 @@ class FeishuAdapter(BasePlatformAdapter):
             action_value.get("hermes_update_prompt_action")
             if isinstance(action_value, dict) else None
         )
+        clarify_action = (
+            action_value.get("hermes_clarify_action")
+            if isinstance(action_value, dict) else None
+        )
 
         if hermes_action:
             return self._handle_approval_card_action(event=event, action_value=action_value, loop=loop)
         if update_prompt_action:
             return self._handle_update_prompt_card_action(
+                event=event,
+                action_value=action_value,
+                loop=loop,
+            )
+        if clarify_action:
+            token = str(getattr(event, "token", "") or "")
+            if token and self._is_card_action_duplicate(token):
+                logger.debug("[Feishu] Dropping duplicate clarify card action token: %s", token)
+                return self._empty_card_action_response()
+            return self._handle_clarify_card_action(
                 event=event,
                 action_value=action_value,
                 loop=loop,
@@ -2777,6 +3320,91 @@ class FeishuAdapter(BasePlatformAdapter):
         if not allowed_ids:
             return True
         return "*" in allowed_ids or normalized in allowed_ids
+
+    def _empty_card_action_response(self) -> Any:
+        return P2CardActionTriggerResponse() if P2CardActionTriggerResponse else None
+
+    def _handle_clarify_card_action(self, *, event: Any, action_value: Dict[str, Any], loop: Any) -> Any:
+        """Validate and resolve a Feishu clarify card without routing a new turn."""
+        clarify_id = str(action_value.get("clarify_id", "") or "")
+        state = self._clarify_choices.get(clarify_id)
+        if not clarify_id or state is None:
+            logger.debug("[Feishu] Unknown or resolved clarify action: %s", clarify_id or "<missing>")
+            return self._empty_card_action_response()
+
+        callback_chat_id = str(getattr(getattr(event, "context", None), "open_chat_id", "") or "")
+        if callback_chat_id and callback_chat_id != str(state.get("chat_id", "") or ""):
+            logger.warning("[Feishu] Clarify callback chat mismatch for %s", clarify_id)
+            return self._empty_card_action_response()
+        operator = getattr(event, "operator", None)
+        open_id = str(getattr(operator, "open_id", "") or "")
+        sender_id = SimpleNamespace(
+            open_id=open_id,
+            user_id=str(getattr(operator, "user_id", "") or ""),
+        )
+        if (
+            not self._allow_group_message(sender_id, str(state.get("chat_id", "") or ""), is_bot=False)
+            or not self._is_interactive_operator_authorized(open_id)
+        ):
+            logger.warning("[Feishu] Unauthorized clarify click by %s", open_id or "<unknown>")
+            return self._empty_card_action_response()
+
+        user_name = self._get_cached_sender_name(open_id) or open_id
+        index = action_value.get("index")
+        if index == "other":
+            try:
+                from tools.clarify_gateway import mark_awaiting_text
+
+                if not mark_awaiting_text(clarify_id):
+                    return self._empty_card_action_response()
+            except Exception:
+                logger.exception("[Feishu] Failed to mark clarify %s for typed input", clarify_id)
+                return self._empty_card_action_response()
+            self._clarify_choices.pop(clarify_id, None)
+            return self._build_card_action_response(
+                self._build_resolved_clarify_card(choice=None, user_name=user_name)
+            )
+
+        try:
+            choice_text = list(state.get("choices") or [])[int(index)]
+        except (IndexError, TypeError, ValueError):
+            logger.warning("[Feishu] Invalid clarify choice index for %s: %r", clarify_id, index)
+            return self._empty_card_action_response()
+        # Retire the adapter-local state before returning the updated card.
+        # Card callbacks can arrive again before the scheduled resolver gets a
+        # chance to run; keeping it until then would allow two distinct tokens
+        # to resolve the same clarify request.
+        self._clarify_choices.pop(clarify_id, None)
+        if not self._submit_on_loop(
+            loop,
+            self._resolve_feishu_clarify(clarify_id=clarify_id, response=str(choice_text)),
+        ):
+            self._clarify_choices[clarify_id] = state
+            return self._empty_card_action_response()
+        return self._build_card_action_response(
+            self._build_resolved_clarify_card(choice=str(choice_text), user_name=user_name)
+        )
+
+    @staticmethod
+    def _build_card_action_response(card_data: Dict[str, Any]) -> Any:
+        if P2CardActionTriggerResponse is None:
+            return None
+        response = P2CardActionTriggerResponse()
+        if CallBackCard is not None:
+            card = CallBackCard()
+            card.type = "raw"
+            card.data = card_data
+            response.card = card
+        return response
+
+    async def _resolve_feishu_clarify(self, *, clarify_id: str, response: str) -> None:
+        """Resolve a selected choice after its adapter-local state is retired."""
+        try:
+            from tools.clarify_gateway import resolve_gateway_clarify
+
+            resolve_gateway_clarify(clarify_id, response)
+        except Exception:
+            logger.exception("[Feishu] Failed to resolve clarify %s", clarify_id)
 
     def _handle_approval_card_action(self, *, event: Any, action_value: Dict[str, Any], loop: Any) -> Any:
         """Schedule approval resolution and build the synchronous callback response."""
@@ -3386,6 +4014,34 @@ class FeishuAdapter(BasePlatformAdapter):
             user_id_alt=sender_profile["user_id_alt"],
             is_bot=is_bot,
         )
+        # Foreground A2A loops own their route before normal dispatch, text
+        # batching, or per-chat serialization can turn a follow-up into a new
+        # main-agent turn.  `text` has already had a leading bot mention
+        # removed, so exact loop-exit commands remain recognisable.
+        delegate_command_text = str(text or "").strip()
+        delegate_routed_text = (
+            delegate_command_text
+            if delegate_command_text in {"/main", "/exit"}
+            else text
+        )
+        if await self._maybe_route_delegate_foreground_message(
+            text=delegate_routed_text,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            # ``build_source`` normally returns SessionSource, but a few
+            # embedders and lightweight test adapters provide only the
+            # fields needed for MessageEvent dispatch.  Route against the
+            # already-resolved identities when those optional attributes are
+            # absent rather than turning an ordinary inbound message into an
+            # adapter error.
+            user_id=getattr(source, "user_id", sender_profile["user_id"]),
+            chat_type=getattr(
+                source,
+                "chat_type",
+                self._resolve_source_chat_type(chat_info=chat_info, event_chat_type=chat_type),
+            ),
+        ):
+            return
         normalized = MessageEvent(
             text=text,
             message_type=inbound_type,
@@ -4167,16 +4823,38 @@ class FeishuAdapter(BasePlatformAdapter):
         union_id = getattr(sender_id, "union_id", None) or None
         # Prefer tenant-scoped user_id; fall back to app-scoped open_id.
         primary_id = user_id or open_id
-        # bot/v3/bots/basic_batch only accepts open_id.
-        name_lookup_id = open_id if is_bot else (primary_id or union_id)
+        # The message event's ``user_id`` is not consistently a Contact v3
+        # lookup key.  Prefer the app-scoped open_id emitted by the event,
+        # then union_id; only use user_id as a last resort.  This mirrors the
+        # Contact v3 identifier contract and works for both Feishu and Lark.
+        # bot/v3/bots/basic_batch only accepts open_id as well.
+        name_lookup_id = open_id or union_id or user_id
         display_name = await self._resolve_sender_name_from_api(
             name_lookup_id, is_bot=is_bot,
         )
+        if display_name:
+            self._cache_sender_name(
+                display_name,
+                open_id,
+                user_id,
+                union_id,
+            )
         return {
             "user_id": primary_id,
             "user_name": display_name,
             "user_id_alt": union_id,
         }
+
+    def _cache_sender_name(self, name: str, *sender_ids: Optional[str]) -> None:
+        """Cache one resolved display name under every event-provided ID alias."""
+        normalized_name = str(name or "").strip()
+        if not normalized_name:
+            return
+        expire_at = time.time() + _FEISHU_SENDER_NAME_TTL_SECONDS
+        for sender_id in sender_ids:
+            normalized_id = str(sender_id or "").strip()
+            if normalized_id:
+                self._sender_name_cache[normalized_id] = (normalized_name, expire_at)
 
     def _get_cached_sender_name(self, sender_id: Optional[str]) -> Optional[str]:
         """Return a cached sender name only while its TTL is still valid."""
@@ -4240,7 +4918,7 @@ class FeishuAdapter(BasePlatformAdapter):
             if name and isinstance(name, str):
                 name = name.strip()
                 if name:
-                    self._sender_name_cache[trimmed] = (name, now + _FEISHU_SENDER_NAME_TTL_SECONDS)
+                    self._cache_sender_name(name, trimmed)
                     return name
         except Exception:
             logger.debug("[Feishu] Failed to resolve sender name for %s", sender_id, exc_info=True)
@@ -4938,18 +5616,9 @@ class FeishuAdapter(BasePlatformAdapter):
         if loop is None or loop.is_closed():
             raise RuntimeError("adapter loop is not ready")
         await self._hydrate_bot_identity()
-        self._ws_client = FeishuWSClient(
-            app_id=self._app_id,
-            app_secret=self._app_secret,
-            log_level=lark.LogLevel.INFO,
-            event_handler=self._event_handler,
+        self._ws_client = self._build_websocket_client(
             domain=domain,
-            # Channel SDK signaling tag: without this UA tag the Feishu
-            # server does not push group @mention events over the WebSocket
-            # transport.  The tag tells the server to use the Channel protocol
-            # which enables group-message routing in addition to P2P DM.
-            # See https://github.com/NousResearch/hermes-agent/issues/50656
-            extra_ua_tags=["channel"],
+            event_handler=self._event_handler,
         )
         self._ws_future = loop.run_in_executor(
             None,
@@ -4957,6 +5626,37 @@ class FeishuAdapter(BasePlatformAdapter):
             self._ws_client,
             self,
         )
+
+    def _build_websocket_client(self, *, domain: str, event_handler: Any) -> Any:
+        """Create a WebSocket client across supported lark-oapi versions.
+
+        ``extra_ua_tags`` enables Channel delivery on current SDKs.  Older
+        installations reject that keyword before constructing the client, so
+        retain a connection-capable fallback and make the missing group-event
+        capability explicit in the log rather than failing the whole adapter.
+        """
+        kwargs = {
+            "app_id": self._app_id,
+            "app_secret": self._app_secret,
+            "log_level": lark.LogLevel.INFO,
+            "event_handler": event_handler,
+            "domain": domain,
+        }
+        try:
+            # Channel SDK signaling tag: without this UA tag the Feishu
+            # server does not push group @mention events over the WebSocket
+            # transport.  The tag tells the server to use the Channel protocol
+            # which enables group-message routing in addition to P2P DM.
+            # See https://github.com/NousResearch/hermes-agent/issues/50656
+            return FeishuWSClient(**kwargs, extra_ua_tags=["channel"])
+        except TypeError as exc:
+            if "extra_ua_tags" not in str(exc) or "unexpected keyword" not in str(exc):
+                raise
+            logger.warning(
+                "[Feishu] lark-oapi does not support extra_ua_tags; connecting without "
+                "Channel group-event signaling. Upgrade to lark-oapi==1.6.8 for group @mentions."
+            )
+            return FeishuWSClient(**kwargs)
 
     async def _connect_webhook(self) -> None:
         if not FEISHU_WEBHOOK_AVAILABLE:

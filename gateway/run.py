@@ -5026,6 +5026,12 @@ class TurnRunner:
                     self._runner._enforce_agent_cache_cap()
             logger.debug("Created new agent for session %s (sig=%s)", ctx.session_key, _sig)
 
+        self._runner._bind_delegate_foreground_runtime_for_turn(
+            agent,
+            ctx.source,
+            event_message_id=ctx.event_message_id,
+        )
+
         # Per-message state — callbacks and reasoning config change every
         # turn and must not be baked into the cached agent constructor.
         # Gate on needs_progress_queue (tool_progress OR thinking_progress)
@@ -16422,6 +16428,8 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             group_sessions_per_user=_group_sessions_per_user,
             thread_sessions_per_user=_thread_sessions_per_user,
         )
+        _source_header = None
+        _source_platform = getattr(source.platform, "value", None)
         if _is_shared_multi_user and source.user_name:
             # source.user_name is the platform display name — attacker-
             # influenceable on any platform that lets participants set their
@@ -16431,17 +16439,49 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # (mirrors the same field's treatment in
             # build_session_context_prompt via _format_untrusted_prompt_value).
             _safe_user_name = neutralize_untrusted_inline_text(source.user_name)
+        else:
+            _safe_user_name = None
+        if _is_shared_multi_user and source.user_name:
             # On Slack, expose the current author's verifiable user ID next to
             # the display name (#17916): "mention me again" requests need a
             # trusted `<@U...>` target for the CURRENT speaker — display names
             # are ambiguous and historical mentions may point at someone else.
             # The user_id comes from the Slack event envelope (not
             # user-editable text), so it does not need neutralization.
+            #
+            # This takes priority over the structured <source> header below:
+            # a shared multi-user session (e.g. a Slack thread with
+            # thread_sessions_per_user=False) needs the mention prefix on
+            # every message so participants can be told apart, whereas the
+            # <source> header is meant for the (typically per-user or DM)
+            # case where the A2A executor needs to recover sender identity
+            # without a chatty inline prefix polluting the conversation.
             if source.platform == Platform.SLACK and source.user_id:
                 _safe_user_name = (
                     f"{_safe_user_name} | Slack user <@{source.user_id}>"
                 )
             message_text = f"[{_safe_user_name}] {message_text}"
+        elif _source_platform in {"slack", "feishu"} and source.user_id:
+            # Build a structured source header for Slack and Feishu messages,
+            # including DMs, so the A2A executor can recover sender and channel
+            # identity without altering command parsing upstream.
+            # It is applied after all other inbound context has been prepended,
+            # keeping it on the first line for the executor's parser.
+            import json as _json
+
+            _source_data: dict = {"platform": _source_platform}
+            if source.chat_id:
+                _source_data["channel"] = source.chat_id
+            _source_data["uid"] = source.user_id
+            # Always include uname (even as "") rather than gating on
+            # truthiness — the executor's parser expects the key to be
+            # present so it doesn't need to special-case a missing name.
+            _source_data["uname"] = (
+                _safe_user_name
+                if _safe_user_name is not None
+                else neutralize_untrusted_inline_text(source.user_name or "")
+            )
+            _source_header = f"<source>{_json.dumps(_source_data, ensure_ascii=False, separators=(',', ':'))}</source>"
 
         # Prepend channel context from history backfill (if any).  This
         # happens after sender-prefix so the prefix only applies to the
@@ -16784,6 +16824,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             except Exception as exc:
                 logger.warning("@ context reference expansion failed: %s", exc)
                 logger.debug("@ context reference expansion failure detail", exc_info=True)
+
+        if _source_header:
+            message_text = f"{_source_header}\n\n{message_text}"
 
         return message_text
 
@@ -25148,6 +25191,57 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             "session_id": session_id,
             "response_previewed": _stream_consumer is not None and bool(full_response),
         }
+
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _clear_delegate_foreground_runtime_bindings(agent: Any) -> None:
+        try:
+            agent._delegate_ext_output_adapter = None
+            agent._delegate_ext_input_factory = None
+        except Exception:
+            pass
+
+    def _bind_delegate_foreground_runtime_for_turn(
+        self,
+        agent: Any,
+        source: SessionSource,
+        *,
+        event_message_id: Optional[str] = None,
+    ) -> None:
+        self._clear_delegate_foreground_runtime_bindings(agent)
+        adapter = getattr(self, "adapters", {}).get(source.platform)
+        if adapter is None:
+            adapter = getattr(self, "adapters", {}).get(str(source.platform))
+        builder = getattr(adapter, "build_delegate_foreground_runtime", None)
+        if not callable(builder):
+            return
+
+        thread_ts = source.thread_id
+        platform_value = getattr(source.platform, "value", source.platform)
+        if (
+            not thread_ts
+            and str(platform_value).lower() == "slack"
+            and str(source.chat_type or "").lower() == "dm"
+        ):
+            extra = getattr(getattr(adapter, "config", None), "extra", {}) or {}
+            if extra.get("dm_top_level_threads_as_sessions", True):
+                thread_ts = event_message_id
+
+        try:
+            runtime = builder(
+                channel_id=source.chat_id,
+                thread_ts=thread_ts,
+                user_id=getattr(source, "user_id", None),
+                chat_type=getattr(source, "chat_type", None),
+            )
+        except Exception:
+            logger.debug("Could not build delegate foreground runtime", exc_info=True)
+            return
+        if not isinstance(runtime, dict):
+            return
+        agent._delegate_ext_output_adapter = runtime.get("output")
+        agent._delegate_ext_input_factory = runtime.get("input_factory")
 
     # ------------------------------------------------------------------
 

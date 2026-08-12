@@ -76,6 +76,13 @@ In the Feishu developer console, go to **Permission Management** and add the fol
 | `im:message.reactions:readonly` | Receive emoji reaction events |
 | `admin:app.info:readonly` | Auto-detect bot identity for @mention gating |
 | `contact:user.id:readonly` | Resolve user IDs for allowlist matching |
+| `contact:contact.base:readonly` | Query a sender through Contact v3 |
+| `contact:user.base:readonly` | Return the sender's name for source metadata |
+
+The app's Contact data visibility must also include the message sender. Hermes
+uses the event's `open_id` with Contact v3, then emits the resulting display
+name as `uname` in Feishu source metadata. If lookup is unavailable, the
+metadata keeps `uname` as an empty string rather than omitting the field.
 
 ### Configure Events
 

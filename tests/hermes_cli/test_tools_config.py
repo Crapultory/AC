@@ -78,6 +78,69 @@ def test_partially_valid_platform_toolsets_no_runtime_warning(caplog):
 
 
 
+def test_configurable_toolsets_include_context_engine_userenv_and_a2a():
+    keys = {ts_key for ts_key, _, _ in CONFIGURABLE_TOOLSETS}
+
+    assert {"context_engine", "userenv", "a2a"} <= keys
+    assert {"userenv", "a2a"} <= _DEFAULT_OFF_TOOLSETS
+
+
+@pytest.mark.parametrize("toolset", ["userenv", "a2a"])
+def test_get_platform_tools_accepts_explicit_userenv_and_a2a_selection(toolset):
+    enabled = _get_platform_tools(
+        {"platform_toolsets": {"cli": [toolset]}},
+        "cli",
+        include_default_mcp_servers=False,
+    )
+
+    assert toolset in enabled
+
+
+def test_get_platform_tools_active_context_engine_is_enabled_for_explicit_config():
+    config = {
+        "context": {"engine": "lcm"},
+        "platform_toolsets": {"cli": ["web", "terminal"]},
+    }
+
+    enabled = _get_platform_tools(config, "cli", include_default_mcp_servers=False)
+
+    assert "context_engine" in enabled
+    assert "web" in enabled
+    assert "terminal" in enabled
+
+
+def test_get_platform_tools_context_engine_not_added_for_default_compressor():
+    config = {
+        "context": {"engine": "compressor"},
+        "platform_toolsets": {"cli": ["web", "terminal"]},
+    }
+
+    enabled = _get_platform_tools(config, "cli", include_default_mcp_servers=False)
+
+    assert "context_engine" not in enabled
+
+
+def test_get_platform_tools_context_engine_respects_explicit_empty_selection():
+    config = {
+        "context": {"engine": "lcm"},
+        "platform_toolsets": {"cli": []},
+    }
+
+    enabled = _get_platform_tools(config, "cli", include_default_mcp_servers=False)
+
+    assert "context_engine" not in enabled
+
+
+def test_get_platform_tools_default_whatsapp_includes_web():
+    enabled = _get_platform_tools({}, "whatsapp")
+
+    assert "web" in enabled
+
+
+def test_get_platform_tools_homeassistant_platform_keeps_homeassistant_toolset():
+    enabled = _get_platform_tools({}, "homeassistant")
+
+    assert "homeassistant" in enabled
 
 
 def test_get_platform_tools_homeassistant_toolset_enabled_for_cron_when_hass_token_set(monkeypatch):

@@ -301,6 +301,18 @@ TOOLSETS = {
         "includes": []
     },
 
+    "userenv": {
+        "description": "Manage the calling user's persisted runtime environment variables",
+        "tools": ["userenv"],
+        "includes": []
+    },
+
+    "a2a": {
+        "description": "Opt-in A2A delegation and Aegis agent discovery tools",
+        "tools": ["a2a_list", "a2a_delegate"],
+        "includes": []
+    },
+
     # "honcho" toolset removed — Honcho is now a memory provider plugin.
     # Tools are injected via MemoryManager, not the toolset system.
 
