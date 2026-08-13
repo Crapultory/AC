@@ -15,6 +15,8 @@ import shutil
 import subprocess
 import sys
 
+from hermes_constants import find_node_executable
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 AISOC_FRONTEND_DIR = REPO_ROOT / "aisoc" / "frontend"
@@ -184,7 +186,7 @@ def _build_web_ui(web_dir: Path = AISOC_FRONTEND_DIR, dist_dir: Path = AISOC_DIS
     if not _web_ui_build_needed(web_dir, dist_dir):
         return
 
-    npm = shutil.which("npm")
+    npm = find_node_executable("npm")
     if not npm:
         raise SystemExit(
             "AISOC web UI is not built and npm is not available. "

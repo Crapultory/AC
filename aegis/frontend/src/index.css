@@ -996,14 +996,19 @@ body {
 
 .aegis-modified-files__header {
   display: flex;
+  width: 100%;
   align-items: center;
   gap: 0.35rem;
   padding: 0.45rem 0.6rem;
+  border: 0;
+  background: transparent;
   color: var(--aegis-focus);
+  cursor: pointer;
   font-family: var(--font-mono);
   font-size: 0.625rem;
   font-weight: 700;
   letter-spacing: 0.12em;
+  text-align: left;
 }
 
 .aegis-modified-files__count {
@@ -1016,8 +1021,7 @@ body {
   border-top: 1px solid color-mix(in srgb, var(--aegis-border) 70%, transparent);
 }
 
-.aegis-modified-files__item,
-.aegis-modified-files__toggle {
+.aegis-modified-files__item {
   border: 0;
   background: transparent;
   color: var(--aegis-text-muted);
@@ -1039,10 +1043,10 @@ body {
   border-top: 1px solid color-mix(in srgb, var(--aegis-border) 56%, transparent);
 }
 
+.aegis-modified-files__header:hover,
+.aegis-modified-files__header:focus-visible,
 .aegis-modified-files__item:hover,
-.aegis-modified-files__item:focus-visible,
-.aegis-modified-files__toggle:hover,
-.aegis-modified-files__toggle:focus-visible {
+.aegis-modified-files__item:focus-visible {
   color: var(--aegis-text);
   background: color-mix(in srgb, var(--aegis-accent) 12%, transparent);
 }
@@ -1053,12 +1057,9 @@ body {
   white-space: nowrap;
 }
 
-.aegis-modified-files__toggle {
-  width: 100%;
-  padding: 0.45rem 0.6rem;
-  border-top: 1px solid color-mix(in srgb, var(--aegis-border) 70%, transparent);
-  color: var(--aegis-focus);
-  letter-spacing: 0.08em;
+.aegis-modified-files__header:focus-visible {
+  outline: 2px solid var(--aegis-focus);
+  outline-offset: -2px;
 }
 
 .aegis-status-indicator {

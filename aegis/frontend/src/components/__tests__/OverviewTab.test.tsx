@@ -30,7 +30,6 @@ describe('OverviewTab delegation metrics', () => {
       <OverviewTab
         agents={[]}
         currentUtcTime="2026-07-22 00:00:00"
-        isAdmin={false}
         setTab={vi.fn()}
         stats={stats}
         statsError=""
@@ -61,7 +60,6 @@ describe('OverviewTab delegation metrics', () => {
       <OverviewTab
         agents={[]}
         currentUtcTime="2026-07-22 00:00:00"
-        isAdmin={false}
         setTab={vi.fn()}
         stats={{
           ...stats,

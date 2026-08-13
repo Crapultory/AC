@@ -53,6 +53,9 @@ Intent: Provide `a2a_list` and remote-only `a2a_delegate` behind the opt-in `a2a
 Feature: Remote A2A foreground loop.
 Intent: Keep a single remote A2A session alive across foreground Slack input, reuse context/task state, seed default remote context ids with a timestamp plus a two-digit random suffix to reduce concurrent delegate collisions, stream delegate status, AI deltas, final output, tool calls, and follow-up input events, and return explicit loop exit reasons for `/main`, input closure, timeout, errors, and interruption without injecting synthetic user messages into the main conversation.
 
+Feature: Remote A2A source identity envelope.
+Intent: Prefix every remote A2A turn with a compact source envelope rebuilt from the parent Agent's platform, user ID, and display name, place optional context only on the initial turn, and keep this remote identity contract separate from the gateway's Slack channel envelope so channel data is never assumed to be forwarded implicitly.
+
 ## File: `toolsets.py`
 
 Feature: Toolset catalog.
@@ -111,13 +114,30 @@ Intent: Render multi-choice gateway clarify prompts as Slack buttons, resolve au
 Feature: Slack delegate delta edit throttling.
 Intent: Limit edits to the same Slack delegate output message to at most once every three seconds, while preserving immediate first sends and forced flushes at segment boundaries to reduce queued Slack updates.
 
+## File: `plugins/platforms/feishu/adapter.py`
+
+Feature: Feishu delegate foreground I/O.
+Intent: Provide isolated per-runtime blocking input adapters and adapter-loop output routing for `a2a_delegate(is_loop=true)`, keyed by Feishu chat, topic, and user dimensions so cached agents, different users, and different topics never share a foreground queue.
+
+Feature: Feishu delegate stream state.
+Intent: Send the first AI delta immediately, throttle edits of the same Feishu message to at most once every three seconds, force-flush at final/tool/user-input segment boundaries, split oversized output, fall back to appended messages after edit failure, and cancel delayed flushes when a route exits or the adapter stops.
+
+Feature: Feishu foreground routing and clarify cards.
+Intent: Route active-loop text and exact mention-stripped `/main` or `/exit` controls before normal message, media, and chat-guard dispatch; render multi-choice clarify prompts as Feishu interactive cards whose payloads retain only IDs/indexes, then resolve only authorized same-chat callbacks through the shared clarify primitives while preserving typed-answer fallback.
+
+Feature: Feishu WebSocket SDK compatibility.
+Intent: Preserve Channel signaling with `extra_ua_tags=["channel"]` on current lark-oapi versions while allowing legacy clients that reject that keyword to establish a connection with an explicit group-mention delivery upgrade warning instead of failing adapter startup.
+
+Feature: Feishu source display-name resolution.
+Intent: Resolve sender names through Contact v3 using event `open_id` before less reliable ID forms, cache a successful name across all event identity aliases, and keep the Feishu source-envelope `uname` key present with an empty value when lookup is unavailable.
+
 ## File: `gateway/run.py`
 
 Feature: Delegate runtime binding per gateway turn.
 Intent: Bind adapter-provided delegate output and input factories onto both fresh and cached agents each turn, preventing Slack thread/user runtime state from leaking across cached sessions.
 
-Feature: Slack source identity envelope for agent-bound messages.
-Intent: Prefix Slack DM and shared-channel messages with compact structured source metadata only after gateway command handling has selected an agent-bound turn and after all other inbound context has been assembled, so downstream A2A execution can recover the Slack channel and user identity from the first line without breaking Slack slash-command parsing or changing other platform attribution.
+Feature: Slack / Feishu source identity envelope for agent-bound messages.
+Intent: Prefix Slack and Feishu DM/channel/group messages that become agent-bound turns with compact structured metadata after gateway command handling and all inbound-context assembly, mapping Feishu `chat_id` to the shared `channel` field and keeping the user ID and optional display name on the first line without affecting command parsing or other-platform attribution. This main-Agent envelope is intentionally distinct from the remote A2A envelope, which carries only parent platform/user identity and does not automatically receive the channel.
 
 
 ## File: `tools/user_env_store.py`

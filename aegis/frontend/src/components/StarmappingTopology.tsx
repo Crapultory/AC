@@ -305,15 +305,15 @@ export default function StarmappingTopology({ topology, error }: StarmappingTopo
   };
 
   if (!topology) {
-    return <div className="aegis-starmap flex min-h-[520px] flex-1 items-center justify-center px-8 text-center"><div><p className="text-xs font-mono tracking-[0.2em] text-cyan-400">STARMAPPING UNAVAILABLE</p><p className="mt-3 max-w-sm text-xs leading-relaxed text-slate-500">{error || 'The three-layer topology is loading from the Aegis API.'}</p></div></div>;
+    return <div className="aegis-starmap flex min-h-0 flex-1 items-center justify-center px-8 text-center"><div><p className="text-xs font-mono tracking-[0.2em] text-cyan-400">STARMAPPING UNAVAILABLE</p><p className="mt-3 max-w-sm text-xs leading-relaxed text-slate-500">{error || 'The three-layer topology is loading from the Aegis API.'}</p></div></div>;
   }
 
   return (
-    <div ref={containerRef} className={`aegis-starmap relative overflow-hidden ${isFullscreen ? 'h-screen w-screen' : 'min-h-[560px]'}`}>
+    <div ref={containerRef} className={`aegis-starmap relative min-h-0 flex-1 overflow-hidden ${isFullscreen ? 'h-screen w-screen' : ''}`}>
       <StarmappingStarfieldCanvas isFullscreen={isFullscreen} />
       <div className="aegis-starmap__veil absolute inset-0" />
       <div className="aegis-starmap__atmosphere absolute inset-0" />
-      <svg className={`relative h-full w-full ${isFullscreen ? 'min-h-full' : 'min-h-[560px]'}`} viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Aegis three-layer orchestration topology">
+      <svg className="relative h-full min-h-0 w-full" viewBox={`0 0 ${CANVAS.width} ${CANVAS.height}`} preserveAspectRatio="xMidYMid meet" role="img" aria-label="Aegis three-layer orchestration topology">
         <defs>
           <radialGradient id="star-map-core" cx="50%" cy="50%" r="50%"><stop offset="0%" stopColor="var(--aegis-starmap-accent)" stopOpacity="0.4" /><stop offset="100%" stopColor="var(--aegis-starmap-bg)" stopOpacity="0" /></radialGradient>
           <filter id="star-map-glow" x="-100%" y="-100%" width="300%" height="300%"><feGaussianBlur stdDeviation="4" result="blur" /><feMerge><feMergeNode in="blur" /><feMergeNode in="SourceGraphic" /></feMerge></filter>

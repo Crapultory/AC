@@ -154,7 +154,7 @@ def test_a2a_list_supports_compact_json_and_bare_xml_outputs(monkeypatch, tmp_pa
     )
     monkeypatch.setattr(a2a_delegate_tool, "A2A_CONTEXT", "")
 
-    compact = json.loads(a2a_delegate_tool.a2a_list())
+    compact = json.loads(a2a_delegate_tool.a2a_list(otype="json"))
     assert compact["success"] is True
     assert "context" not in compact
     agents = {agent["name"]: agent for agent in compact["agents"]}
@@ -188,7 +188,9 @@ def test_a2a_list_supports_compact_json_and_bare_xml_outputs(monkeypatch, tmp_pa
         }
     ]
 
-    xml = a2a_delegate_tool.a2a_list(otype="xml")
+    # XML is the default output so agents receive the compact Aegis context
+    # unless a caller explicitly asks for the JSON inspection format.
+    xml = a2a_delegate_tool.a2a_list()
     assert xml.startswith("<aegis_context>\n  <agents>\n")
     assert xml.endswith("</aegis_context>")
     assert "<agent name=\"responder\"" in xml
@@ -763,6 +765,7 @@ def test_remote_loop_reuses_session_and_routes_foreground_input(monkeypatch, is_
     assert sessions[0].turns[0][2] == "seed-session"
     assert sessions[0].turns[1][2] == "ctx-remote"
     assert "<source>" in sessions[0].turns[0][0]
+    assert '"conn":"a2a"' in sessions[0].turns[0][0]
     assert "extra context" in sessions[0].turns[0][0]
     assert sessions[0].turns[1][0].endswith("follow up")
     assert sink.events == [
