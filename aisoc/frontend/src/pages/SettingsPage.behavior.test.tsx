@@ -15,10 +15,6 @@ vi.mock("../lib/api", () => ({
   fetchJSON: vi.fn(),
 }));
 
-vi.mock("../components/FloatingChat", () => ({
-  FloatingChat: () => null,
-}));
-
 const RUNTIME_STATUS = {
   status: "ok",
   model: "test-model",

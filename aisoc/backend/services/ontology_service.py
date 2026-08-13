@@ -254,49 +254,10 @@ class OntologyService:
             return bundle["observed"]
         raise OntologyError(f"Unknown ontology artifact: {name}")
 
-    # NOTE: legacy REST citation endpoint deleted. The Ontology Chat page now
-    # goes through /api/chat/ws + tui_gateway session (direction C), so evidence
-    # citations are surfaced by the aisoc-ontology skill's own scripts, not by
-    # a fixed keyword-match template here. If a future non-LLM caller needs
+    # NOTE: legacy REST citation endpoint deleted. Ontology consulting now runs
+    # through the unified chat module (instruct_ontology quick command → agent →
+    # aisoc-ontology skill scripts). If a future non-LLM caller needs keyword
     # citations, resurrect ``build_chat_answer`` from git history.
-    @staticmethod
-    def _deprecated_build_chat_answer(query: str) -> dict[str, Any]:
-        bundle = OntologyService.get_latest_bundle()
-        mapped_nodes = bundle["mapped"].get("mapped_nodes", [])
-        scorecard = bundle["scorecard"]
-        query_l = query.lower()
-        targets = []
-        for node in mapped_nodes:
-            text = f"{node.get('id','')} {node.get('name_zh','')} {node.get('name_en','')} {node.get('domain','')}".lower()
-            if any(token in text for token in query_l.split() if token):
-                targets.append(node)
-        if not targets:
-            targets = sorted(mapped_nodes, key=lambda x: (x.get("status") != "missing", -float(x.get("importance_weight", 0))))[:3]
-        citations = []
-        summaries = []
-        for node in targets[:3]:
-            evidence = node.get("evidence", [])
-            ev = evidence[0] if evidence else {
-                "source_path": "N/A",
-                "confidence": "low",
-                "snippet": "No direct evidence captured"
-            }
-            citations.append(
-                {
-                    "node_id": node["id"],
-                    "status": node["status"],
-                    "evidence_path": ev["source_path"],
-                    "confidence": ev.get("confidence", "low"),
-                    "reason": ev.get("snippet", ""),
-                }
-            )
-            summaries.append(f"{node['name_zh']}({node['id']}) 当前状态为 {node['status']}，满足度 {node['fulfillment_ratio']}")
-        answer = (
-            f"当前 AISOC Ontology 完整度为 {scorecard.get('completeness_score')}/100。"
-            + "；".join(summaries)
-            + "。回答基于最近一次扫描快照与证据路径。"
-        )
-        return {"answer": answer, "citations": citations}
 
     @staticmethod
     def build_roadmap() -> dict[str, Any]:

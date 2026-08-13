@@ -254,6 +254,8 @@ def default_agent_factory(
     ephemeral_system_prompt: str | None = None,
     user_id: str | None = None,
     user_name: str | None = None,
+    skip_memory: bool = False,
+    disabled_toolsets: list[str] | None = None,
     config_module=hermes_config,
     runtime_provider_module=runtime_provider,
     session_db_cls=SessionDB,
@@ -281,6 +283,10 @@ def default_agent_factory(
         agent_kwargs["user_id"] = str(user_id)
     if user_name:
         agent_kwargs["user_name"] = str(user_name)
+    if skip_memory:
+        agent_kwargs["skip_memory"] = True
+    if disabled_toolsets:
+        agent_kwargs["disabled_toolsets"] = list(disabled_toolsets)
     log_prefix = "A2A" if "a2a" in platform else "AISOC"
     active_logger.info(
         "%s profile injection from %s: %s",

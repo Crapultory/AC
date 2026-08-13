@@ -175,7 +175,7 @@ export function GraphCanvas({
             'background-color': 'data(color)', 'background-opacity': 0.92, shape: 'data(shape)' as any,
             label: 'data(label)', color: '#E4EEFF', 'font-family': 'Inter, sans-serif', 'font-size': 10,
             'font-weight': 500, 'text-wrap': 'wrap', 'text-max-width': '92px', 'text-valign': 'bottom',
-            'text-margin-y': 4, 'text-outline-color': '#04060C', 'text-outline-width': 3, 'min-zoomed-font-size': 7,
+            'text-margin-y': 4, 'text-outline-color': '#030406', 'text-outline-width': 3, 'min-zoomed-font-size': 7,
             width: (e: any) => `${Math.min(42, Math.max(19, Number(e.data('weight')) * 7))}`,
             height: (e: any) => `${Math.min(42, Math.max(19, Number(e.data('weight')) * 7))}`,
             'border-width': 2, 'border-color': 'data(color)', 'border-opacity': 0.5,
@@ -220,15 +220,15 @@ export function GraphCanvas({
             'shadow-opacity': (e: any) => (e.data('raw')?.object_type === 'data_source' ? 0.28 : 0),
           } as any,
         },
-        { selector: 'node:selected', style: { 'border-width': 6, 'border-opacity': 1, 'border-color': '#7FE9FF' } },
+        { selector: 'node:selected', style: { 'border-width': 6, 'border-opacity': 1, 'border-color': '#7dd3fc' } },
         { selector: 'node.hl', style: { 'border-width': 4, 'border-opacity': 1 } },
-        { selector: 'node.pinned', style: { 'border-width': 4, 'border-opacity': 1, 'border-color': '#7FE9FF' } },
-        { selector: 'edge.pinned', style: { opacity: 1, width: 3, 'line-color': '#7FE9FF', 'target-arrow-color': '#7FE9FF' } as any },
+        { selector: 'node.pinned', style: { 'border-width': 4, 'border-opacity': 1, 'border-color': '#7dd3fc' } },
+        { selector: 'edge.pinned', style: { opacity: 1, width: 3, 'line-color': '#7dd3fc', 'target-arrow-color': '#7dd3fc' } as any },
         { selector: 'node.dim', style: { opacity: 0.12 } },
         { selector: 'edge.dim', style: { opacity: 0.06 } },
         {
           selector: 'edge',
-          style: { width: 1, 'line-color': '#243449', 'curve-style': 'bezier', 'target-arrow-shape': 'none', opacity: 0.28,
+          style: { width: 1, 'line-color': '#141b28', 'curve-style': 'bezier', 'target-arrow-shape': 'none', opacity: 0.28,
             'transition-property': 'opacity, line-color, width', 'transition-duration': 200 } as any,
         },
         // 层级/域内结构（contains/requires）— 柔和实线，稳定常显（不做自动半隐）
@@ -246,7 +246,7 @@ export function GraphCanvas({
             width: 1.8, 'line-color': '#6E93C8', 'line-style': 'solid',
             'target-arrow-shape': 'triangle', 'target-arrow-color': '#6E93C8', 'arrow-scale': 0.85, opacity: 0.7,
             label: showEdgeLabels ? 'data(label)' : '', 'font-size': 10, 'font-family': 'Inter, sans-serif', color: '#C3D6F2',
-            'text-background-color': '#060A12', 'text-background-opacity': 0.85, 'text-background-padding': '3px', 'text-rotation': 'autorotate',
+            'text-background-color': '#040609', 'text-background-opacity': 0.85, 'text-background-padding': '3px', 'text-rotation': 'autorotate',
           } as any,
         },
         // 跨域 semantic — 虚线，流动，青色（默认淡，hover 点亮，避免总览杂乱）
@@ -256,15 +256,15 @@ export function GraphCanvas({
             width: 1.8, 'line-color': '#6FD3FF', 'line-style': 'dashed', 'line-dash-pattern': [8, 6],
             'target-arrow-shape': 'triangle', 'target-arrow-color': '#6FD3FF', 'arrow-scale': 0.85, opacity: 0.2, color: '#AEDBFF',
             label: showEdgeLabels ? 'data(label)' : '', 'font-size': 10, 'font-family': 'Inter, sans-serif',
-            'text-background-color': '#060A12', 'text-background-opacity': 0.85, 'text-background-padding': '3px', 'text-rotation': 'autorotate',
+            'text-background-color': '#040609', 'text-background-opacity': 0.85, 'text-background-padding': '3px', 'text-rotation': 'autorotate',
           } as any,
         },
         {
           selector: 'edge.hl',
           style: {
-            'line-color': '#7FE9FF', 'target-arrow-color': '#7FE9FF', 'target-arrow-shape': 'triangle', width: 3, opacity: 1,
+            'line-color': '#7dd3fc', 'target-arrow-color': '#7dd3fc', 'target-arrow-shape': 'triangle', width: 3, opacity: 1,
             'line-style': 'dashed', 'line-dash-pattern': [6, 4], label: 'data(label)', 'font-size': 11, 'font-weight': 600, color: '#EAF2FF',
-            'text-background-color': '#060A12', 'text-background-opacity': 0.9, 'text-background-padding': '3px', 'text-rotation': 'autorotate', 'z-index': 999,
+            'text-background-color': '#040609', 'text-background-opacity': 0.9, 'text-background-padding': '3px', 'text-rotation': 'autorotate', 'z-index': 999,
           } as any,
         },
       ],
@@ -346,7 +346,7 @@ export function GraphCanvas({
         style={{
           borderColor: 'var(--stroke-soft)',
           background:
-            'radial-gradient(620px 420px at 28% 14%, rgba(56,225,255,0.07), transparent 55%), radial-gradient(620px 420px at 76% 82%, rgba(167,139,250,0.07), transparent 55%), #05070E',
+            'radial-gradient(620px 420px at 28% 14%, rgba(56, 189, 248, 0.07), transparent 55%), radial-gradient(620px 420px at 76% 82%, rgba(167, 139, 250, 0.07), transparent 55%), #030407',
         }}
       />
       {!ready && (

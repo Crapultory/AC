@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
+import { useNavigate } from 'react-router-dom';
 import { useQueryClient } from '@tanstack/react-query';
-import { Radar, AlertTriangle, CheckCircle2, MinusCircle, PlusCircle, ArrowUpRight, Search } from 'lucide-react';
+import { Radar, AlertTriangle, CheckCircle2, MessageSquare, MinusCircle, PlusCircle, ArrowUpRight, Search } from 'lucide-react';
 import { ontologyApi, type OntologyScanResponse } from '../api/ontology';
 import { useOntologyArtifact, useOntologyOverview, useOntologyRoadmap } from '../hooks/useOntology';
 import { GraphCanvas } from '../components/GraphCanvas';
@@ -21,6 +22,7 @@ const JOB_STAGE_LABELS: Record<string, string> = {
 };
 
 export function DifferentiationOverviewPage() {
+  const routerNavigate = useNavigate();
   const qc = useQueryClient();
   const overviewQuery = useOntologyOverview();
   const overview = overviewQuery.data;
@@ -241,10 +243,10 @@ export function DifferentiationOverviewPage() {
             <span className="font-mono text-[color:var(--ink-lo)]"> mapped / gap / scorecard</span>
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-            <span className="chip" style={{ background: 'rgba(56,225,255,0.10)', color: '#7FE9FF', borderColor: 'rgba(56,225,255,0.30)' }}>
+            <span className="chip" style={{ background: 'rgba(56, 189, 248, 0.10)', color: '#7dd3fc', borderColor: 'rgba(56, 189, 248, 0.30)' }}>
               Schema · {overview?.standard_graph_schema || 'N/A'}
             </span>
-            <span className="chip" style={{ background: 'rgba(124,243,200,0.08)', color: '#A8F5DA', borderColor: 'rgba(124,243,200,0.24)' }}>
+            <span className="chip" style={{ background: 'rgba(110, 231, 183, 0.08)', color: '#A8F5DA', borderColor: 'rgba(110, 231, 183, 0.24)' }}>
               Source · {overview?.standard_graph_path?.split('/').pop() || 'N/A'}
             </span>
             {overview?.standard_graph_counts && (
@@ -255,10 +257,16 @@ export function DifferentiationOverviewPage() {
           </div>
         </div>
         <div className="flex flex-col items-end gap-2 min-w-[320px]">
-          <button className="btn-primary" disabled={scanBusy} onClick={runScan}>
-            <Radar className={`h-4 w-4 ${scanBusy ? 'animate-spin' : ''}`} />
-            {scanBusy ? '差异分析执行中…' : 'Run Environment Scan'}
-          </button>
+          <div className="flex items-center gap-2">
+            <button className="btn-ghost" onClick={() => routerNavigate('/chat?quick=instruct_ontology')}>
+              <MessageSquare className="h-4 w-4" />
+              咨询 AI
+            </button>
+            <button className="btn-primary" disabled={scanBusy} onClick={runScan}>
+              <Radar className={`h-4 w-4 ${scanBusy ? 'animate-spin' : ''}`} />
+              {scanBusy ? '差异分析执行中…' : 'Run Environment Scan'}
+            </button>
+          </div>
           {/* always show explicit scan feedback so the click is never silent */}
           {scanBusy ? (
             <div className="w-full glass px-3 py-2 text-left">
@@ -266,7 +274,7 @@ export function DifferentiationOverviewPage() {
                 <span>正在执行环境扫描与差异分析…</span>
                 <span>{scanState?.batch_label || (scanState?.stage ? (JOB_STAGE_LABELS[scanState.stage] || scanState.stage) : SCAN_STAGES[Math.max(stage, 0)])}</span>
               </div>
-              <ProgressBar ratio={scanState?.progress ?? ((Math.max(stage, 0) + 1) / SCAN_STAGES.length)} color="#38E1FF" />
+              <ProgressBar ratio={scanState?.progress ?? ((Math.max(stage, 0) + 1) / SCAN_STAGES.length)} color="#38bdf8" />
               <div className="mt-1 flex items-center justify-between gap-2 text-[11px] text-[color:var(--ink-lo)] font-mono">
                 <span>{scanState?.job_id || 'job: pending'}</span>
                 <span>{Math.round((scanState?.progress ?? ((Math.max(stage, 0) + 1) / SCAN_STAGES.length)) * 100)}%</span>
@@ -284,7 +292,7 @@ export function DifferentiationOverviewPage() {
               <div className="text-sm text-[color:var(--ink-hi)] font-mono mt-0.5">{scanState?.scan_id} · score {scanState?.score}</div>
             </div>
           ) : scanError ? (
-            <div className="w-full glass px-3 py-2 text-left border border-[rgba(255,92,122,0.35)]">
+            <div className="w-full glass px-3 py-2 text-left border border-[rgba(255, 92, 122, 0.35)]">
               <div className="text-xs text-[#FF8CA0]">扫描失败</div>
               <div className="text-xs text-[color:var(--ink-mid)] mt-0.5">{scanError}</div>
             </div>
@@ -294,8 +302,8 @@ export function DifferentiationOverviewPage() {
             <div className="flex items-center gap-1.5">
               {SCAN_STAGES.map((s, i) => (
                 <div key={s} className="flex items-center gap-1.5">
-                  <span className="text-[10px]" style={{ color: i <= stage ? '#7FE9FF' : 'var(--ink-lo)' }}>{s}</span>
-                  {i < SCAN_STAGES.length - 1 && <span className="h-px w-3" style={{ background: i < stage ? '#7FE9FF' : 'var(--stroke-soft)' }} />}
+                  <span className="text-[10px]" style={{ color: i <= stage ? '#7dd3fc' : 'var(--ink-lo)' }}>{s}</span>
+                  {i < SCAN_STAGES.length - 1 && <span className="h-px w-3" style={{ background: i < stage ? '#7dd3fc' : 'var(--stroke-soft)' }} />}
                 </div>
               ))}
             </div>
@@ -321,11 +329,11 @@ export function DifferentiationOverviewPage() {
           </div>
         </div>
         {overview?.recent_scans?.length ? (
-          <div className="mt-4 rounded-xl border px-3 py-3" style={{ borderColor: 'var(--stroke-soft)', background: 'rgba(255,255,255,0.02)' }}>
+          <div className="mt-4 rounded-xl border px-3 py-3" style={{ borderColor: 'var(--stroke-soft)', background: 'rgba(255, 255, 255, 0.02)' }}>
             <div className="eyebrow mb-2">Recent Scan History</div>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2">
               {overview.recent_scans.slice(0, 5).map((s) => (
-                <div key={s.scan_id} className="rounded-lg border px-3 py-2" style={{ borderColor: 'rgba(255,255,255,0.08)', background: 'rgba(8,12,20,0.45)' }}>
+                <div key={s.scan_id} className="rounded-lg border px-3 py-2" style={{ borderColor: 'rgba(255, 255, 255, 0.08)', background: 'rgba(6, 7, 10, 0.45)' }}>
                   <div className="text-[11px] text-[color:var(--ink-lo)] font-mono truncate">{s.scan_id}</div>
                   <div className="mt-1 text-sm text-[color:var(--ink-hi)] font-semibold">{typeof s.score === 'number' ? s.score.toFixed(1) : '—'}</div>
                   <div className="mt-1 text-[10px] text-[color:var(--ink-lo)]">S {s.status_counts?.satisfied ?? 0} · P {s.status_counts?.partial ?? 0} · M {s.status_counts?.missing ?? 0} · X {s.status_counts?.extra ?? 0}</div>
@@ -367,7 +375,7 @@ export function DifferentiationOverviewPage() {
       {/* Remediation */}
       <div className="glass p-5">
         <div className="flex items-center gap-2 mb-4 flex-wrap">
-          <ArrowUpRight className="h-4 w-4" style={{ color: '#7FE9FF' }} />
+          <ArrowUpRight className="h-4 w-4" style={{ color: '#7dd3fc' }} />
           <h2 className="text-lg font-semibold text-[color:var(--ink-hi)]">整改建议 · Remediation</h2>
           <span className="text-xs text-[color:var(--ink-lo)]">列出全部需整改二级功能及其 L3 对象 AI 缺口/建议</span>
         </div>
@@ -390,7 +398,7 @@ export function DifferentiationOverviewPage() {
             const sm = STATUS_META[rec.status] || STATUS_META.partial;
             const dm = DOMAIN_META[rec.domain];
             const prio = rec.priority;
-            const prioColor: Record<string, string> = { immediate: '#FF5C7A', high: '#FFA33C', medium: '#38E1FF', low: '#6B7B99' };
+            const prioColor: Record<string, string> = { immediate: '#FF5C7A', high: '#FFA33C', medium: '#38bdf8', low: '#6B7B99' };
             const mapped = mappedById[rec.node_id];
             const objectDetail = mapped?.object_detail || [];
             const objectGaps = objectDetail.filter((o: any) => (o.satisfaction ?? 0) < 0.95);
@@ -414,10 +422,10 @@ export function DifferentiationOverviewPage() {
                 </div>
                 <div className="space-y-2 text-sm">
                   {rec.gap && <RecRow label="缺口" color="#FFA33C">{rec.gap}</RecRow>}
-                  {rec.action && <RecRow label="建议" color="#34E5A3">{rec.action}</RecRow>}
-                  {rec.ai_object_recommendations?.length > 0 && <RecRow label="AI对象级建议" color="#7FE9FF">{rec.ai_object_recommendations.join('；')}</RecRow>}
+                  {rec.action && <RecRow label="建议" color="#6ee7b7">{rec.action}</RecRow>}
+                  {rec.ai_object_recommendations?.length > 0 && <RecRow label="AI对象级建议" color="#7dd3fc">{rec.ai_object_recommendations.join('；')}</RecRow>}
                 </div>
-                <div className="rounded-lg border p-3" style={{ borderColor: 'var(--stroke-soft)', background: 'rgba(255,255,255,0.02)' }}>
+                <div className="rounded-lg border p-3" style={{ borderColor: 'var(--stroke-soft)', background: 'rgba(255, 255, 255, 0.02)' }}>
                   <div className="flex items-center justify-between gap-3 mb-2">
                     <div className="eyebrow">L3 对象整改清单 ({objectGaps.length})</div>
                     <button className="btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => setExpandedRem((prev) => ({ ...prev, [rec.node_id]: !expanded }))}>
@@ -429,20 +437,20 @@ export function DifferentiationOverviewPage() {
                       {objectGaps.length === 0 ? (
                         <div className="text-xs text-[color:var(--ink-lo)] italic">无需要整改的三级对象</div>
                       ) : objectGaps.map((o: any) => (
-                        <div key={o.object_id} className="rounded-md border p-2.5" style={{ borderColor: 'rgba(255,255,255,0.08)' }}>
+                        <div key={o.object_id} className="rounded-md border p-2.5" style={{ borderColor: 'rgba(255, 255, 255, 0.08)' }}>
                           <div className="flex items-start justify-between gap-2">
-                            <button className="text-left text-sm text-[color:var(--ink-hi)] hover:text-[#7FE9FF]" onClick={() => navigate(o.object_id)}>{o.name_zh}</button>
-                            <span className="chip" style={{ fontSize: 10, background: `${((o.satisfaction ?? 0) > 0 ? '#F4B740' : '#FF6B8A')}1a`, color: (o.satisfaction ?? 0) > 0 ? '#F4B740' : '#FF6B8A', borderColor: `${((o.satisfaction ?? 0) > 0 ? '#F4B740' : '#FF6B8A')}55` }}>{(o.satisfaction ?? 0) > 0 ? '部分满足' : '缺失'}</span>
+                            <button className="text-left text-sm text-[color:var(--ink-hi)] hover:text-[#7dd3fc]" onClick={() => navigate(o.object_id)}>{o.name_zh}</button>
+                            <span className="chip" style={{ fontSize: 10, background: `${((o.satisfaction ?? 0) > 0 ? '#fcd34d' : '#fda4af')}1a`, color: (o.satisfaction ?? 0) > 0 ? '#fcd34d' : '#fda4af', borderColor: `${((o.satisfaction ?? 0) > 0 ? '#fcd34d' : '#fda4af')}55` }}>{(o.satisfaction ?? 0) > 0 ? '部分满足' : '缺失'}</span>
                           </div>
                           {o.reason && <div className="mt-1.5 text-xs text-[color:var(--ink-mid)]"><span className="text-[#FFA33C] font-semibold">AI缺口：</span>{o.reason}</div>}
-                          {o.recommendation && <div className="mt-1 text-xs text-[color:var(--ink-mid)]"><span className="text-[#34E5A3] font-semibold">AI建议：</span>{o.recommendation}</div>}
+                          {o.recommendation && <div className="mt-1 text-xs text-[color:var(--ink-mid)]"><span className="text-[#6ee7b7] font-semibold">AI建议：</span>{o.recommendation}</div>}
                         </div>
                       ))}
                     </div>
                   ) : (
                     <div className="flex flex-wrap gap-2">
                       {objectGaps.slice(0, 6).map((o: any) => (
-                        <button key={o.object_id} className="chip" style={{ background: 'rgba(255,255,255,0.04)', color: 'var(--ink-mid)', borderColor: 'rgba(255,255,255,0.08)' }} onClick={() => navigate(o.object_id)}>
+                        <button key={o.object_id} className="chip" style={{ background: 'rgba(255, 255, 255, 0.04)', color: 'var(--ink-mid)', borderColor: 'rgba(255, 255, 255, 0.08)' }} onClick={() => navigate(o.object_id)}>
                           {o.name_zh}
                         </button>
                       ))}

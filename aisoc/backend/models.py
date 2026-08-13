@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from typing import Literal
+
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AuthLoginRequest(BaseModel):
@@ -28,7 +30,6 @@ class HealthResponse(BaseModel):
 
 
 class SystemBootstrapResponse(BaseModel):
-    embedded_chat: bool
     auth_scheme: str
 
 
@@ -69,4 +70,32 @@ class SkillToggleRequest(BaseModel):
 
 
 class MemoryWriteRequest(BaseModel):
+    content: str
+
+
+ChatQuickCommandType = Literal["agent", "prompt", "instruct"]
+
+
+class ChatQuickCommandResponse(BaseModel):
+    """One composer shortcut available in the chat module."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    type: ChatQuickCommandType
+    name: str
+    desc: str
+    content: str
+
+
+class ChatQuickCommandListResponse(BaseModel):
+    commands: list[ChatQuickCommandResponse] = Field(default_factory=list)
+
+
+class DrawerFileResponse(BaseModel):
+    """One workspace file prepared for a chat drawer preview."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    title: str
+    type: str
     content: str

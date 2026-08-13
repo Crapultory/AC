@@ -47,14 +47,6 @@ def configure_aisoc_parser(parser: argparse.ArgumentParser) -> argparse.Argument
         help="Allow binding to non-localhost (DANGEROUS: exposes APIs on the network)",
     )
     parser.add_argument(
-        "--tui",
-        action="store_true",
-        help=(
-            "Expose the in-browser Chat tab (embedded `hermes --tui` via PTY/WebSocket). "
-            "Alternatively set HERMES_AISOC_TUI=1."
-        ),
-    )
-    parser.add_argument(
         "--skip-build",
         action="store_true",
         help=(
@@ -223,8 +215,6 @@ def _validate_module_args(args: argparse.Namespace) -> None:
     module = getattr(args, "module", "server") or "server"
     if module == "a2a":
         invalid_flags = []
-        if getattr(args, "tui", False):
-            invalid_flags.append("--tui")
         if getattr(args, "skip_build", False):
             invalid_flags.append("--skip-build")
         if getattr(args, "no_open", False):
@@ -239,8 +229,6 @@ def _validate_module_args(args: argparse.Namespace) -> None:
 
     if module == "extcli":
         invalid_flags = []
-        if getattr(args, "tui", False):
-            invalid_flags.append("--tui")
         if getattr(args, "skip_build", False):
             invalid_flags.append("--skip-build")
         if getattr(args, "no_open", False):
@@ -325,13 +313,11 @@ def cmd_aisoc(args: argparse.Namespace) -> None:
 
     from aisoc.backend.server import start_server
 
-    embedded_chat = args.tui or os.environ.get("HERMES_AISOC_TUI") == "1"
     start_server(
         host=args.host,
         port=args.port,
         open_browser=not args.no_open,
         allow_public=getattr(args, "insecure", False),
-        embedded_chat=embedded_chat,
     )
 
 

@@ -11,8 +11,8 @@ def build_sessions_router() -> APIRouter:
     router = APIRouter(prefix="/api/sessions", tags=["sessions"])
 
     @router.get("")
-    async def get_sessions(limit: int = 20, offset: int = 0):
-        return session_service.list_sessions(limit=limit, offset=offset)
+    async def get_sessions(limit: int = 20, offset: int = 0, source: str = ""):
+        return session_service.list_sessions(limit=limit, offset=offset, source=source or None)
 
     @router.get("/search")
     async def search_sessions(q: str = "", limit: int = 20):

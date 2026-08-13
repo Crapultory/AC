@@ -33,8 +33,8 @@ export function MutationStatus({
       role="status"
       style={
         isError
-          ? { color: '#FF9DB2', background: 'rgba(255,107,138,0.10)', borderColor: 'rgba(255,107,138,0.35)' }
-          : { color: '#7CF3C8', background: 'rgba(52,229,163,0.10)', borderColor: 'rgba(52,229,163,0.35)' }
+          ? { color: '#fca5a5', background: 'rgba(248, 113, 113, 0.10)', borderColor: 'rgba(248, 113, 113, 0.35)' }
+          : { color: '#6ee7b7', background: 'rgba(52, 211, 153, 0.10)', borderColor: 'rgba(52, 211, 153, 0.35)' }
       }
     >
       {isError ? <XCircle className="h-3.5 w-3.5" /> : <CheckCircle2 className="h-3.5 w-3.5" />}

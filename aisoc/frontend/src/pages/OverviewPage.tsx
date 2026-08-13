@@ -136,9 +136,9 @@ const defaultOverviewInteractionDeps: OverviewInteractionDeps = {
   getKeywordSessionsDrilldown,
 };
 
-const CRON_COLORS = ["#00D4FF", "#00FF88", "#FF4D1C", "#A855F7", "#F59E0B", "#EC4899", "#06B6D4", "#84CC16"];
-const SOURCE_COLORS = ["#00D4FF", "#A855F7", "#00FF88", "#FF4D1C", "#FFD600"];
-const MODEL_COLORS = ["#00D4FF", "#A855F7", "#00FF88", "#F59E0B", "#EC4899", "#FF4D1C", "#06B6D4", "#84CC16", "#FFD600", "#6366F1"];
+const CRON_COLORS = ["#38bdf8", "#6ee7b7", "#f97316", "#A855F7", "#F59E0B", "#EC4899", "#06B6D4", "#84CC16"];
+const SOURCE_COLORS = ["#38bdf8", "#A855F7", "#6ee7b7", "#f97316", "#facc15"];
+const MODEL_COLORS = ["#38bdf8", "#A855F7", "#6ee7b7", "#F59E0B", "#EC4899", "#f97316", "#06B6D4", "#84CC16", "#facc15", "#6366F1"];
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
@@ -216,10 +216,10 @@ function getStatusIsOnline(status: string | undefined): boolean {
 
 function getEventRiskColor(level: string | undefined): string {
   const normalized = (level ?? "").toLowerCase();
-  if (normalized === "critical") return "#ff2d55";
+  if (normalized === "critical") return "#ef4444";
   if (normalized === "high") return "#ff6b35";
-  if (normalized === "medium") return "#ffb800";
-  if (normalized === "low") return "#00d4ff";
+  if (normalized === "medium") return "#fcd34d";
+  if (normalized === "low") return "#38bdf8";
   return "#6b7b8a";
 }
 
@@ -278,9 +278,9 @@ function drawTrendChart(canvas: HTMLCanvasElement, points: TokenTrendPoint[]): v
   for (let i = 0; i <= 4; i += 1) {
     const y = pad.top + (chartH / 4) * i;
     const val = max * (1 - i / 4);
-    ctx.fillStyle = "#3A5566";
+    ctx.fillStyle = "#54637a";
     ctx.fillText(formatCompactTokens(val), pad.left - 8, y + 3);
-    ctx.strokeStyle = "rgba(0, 212, 255, 0.08)";
+    ctx.strokeStyle = "rgba(56, 189, 248, 0.08)";
     ctx.lineWidth = 1;
     ctx.beginPath();
     ctx.moveTo(pad.left, y);
@@ -295,7 +295,7 @@ function drawTrendChart(canvas: HTMLCanvasElement, points: TokenTrendPoint[]): v
 
     if (inputH > 0) {
       const g = ctx.createLinearGradient(0, pad.top + chartH - inputH, 0, pad.top + chartH);
-      g.addColorStop(0, "rgba(0, 212, 255, 0.9)");
+      g.addColorStop(0, "rgba(56, 189, 248, 0.9)");
       g.addColorStop(1, "rgba(0, 120, 180, 0.35)");
       ctx.fillStyle = g;
       ctx.fillRect(x, pad.top + chartH - inputH - outputH, barW * 0.56, inputH);
@@ -309,13 +309,13 @@ function drawTrendChart(canvas: HTMLCanvasElement, points: TokenTrendPoint[]): v
       ctx.fillRect(x + barW * 0.56 + 2, pad.top + chartH - outputH, barW * 0.4, outputH);
     }
 
-    ctx.fillStyle = "#3A5566";
+    ctx.fillStyle = "#54637a";
     ctx.textAlign = "center";
     ctx.fillText(point.date.slice(5), x + barW / 2, height - 12);
   });
 
   ctx.beginPath();
-  ctx.strokeStyle = "rgba(0, 255, 136, 0.5)";
+  ctx.strokeStyle = "rgba(110, 231, 183, 0.5)";
   ctx.lineWidth = 1.4;
   points.forEach((point, index) => {
     const x = pad.left + index * gap + gap / 2;
@@ -330,7 +330,7 @@ function drawTrendChart(canvas: HTMLCanvasElement, points: TokenTrendPoint[]): v
     const y = pad.top + chartH - (point.total_tokens / max) * chartH;
     ctx.beginPath();
     ctx.arc(x, y, 2.8, 0, Math.PI * 2);
-    ctx.fillStyle = "#00FF88";
+    ctx.fillStyle = "#6ee7b7";
     ctx.fill();
   });
 }
@@ -375,14 +375,14 @@ function drawSourceChart(canvas: HTMLCanvasElement, distribution: Record<string,
 
   ctx.beginPath();
   ctx.arc(cx, cy, inner - 2, 0, Math.PI * 2);
-  ctx.fillStyle = "#050A0F";
+  ctx.fillStyle = "#040507";
   ctx.fill();
 
   ctx.textAlign = "center";
-  ctx.fillStyle = "#E0F7FF";
+  ctx.fillStyle = "#f1f5f9";
   ctx.font = 'bold 18px "JetBrains Mono", monospace';
   ctx.fillText(`${total}`, cx, cy + 2);
-  ctx.fillStyle = "#3A5566";
+  ctx.fillStyle = "#54637a";
   ctx.font = '9px "JetBrains Mono", monospace';
   ctx.fillText("SESSIONS", cx, cy + 16);
 }
@@ -427,12 +427,12 @@ function drawCronTokenChart(canvas: HTMLCanvasElement, dist: CronTokenDistributi
 
   ctx.beginPath();
   ctx.arc(cx, cy, inner - 2, 0, Math.PI * 2);
-  ctx.fillStyle = "#0A1018";
+  ctx.fillStyle = "#07080c";
   ctx.fill();
 
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillStyle = "#00D4FF";
+  ctx.fillStyle = "#38bdf8";
   ctx.font = '600 18px "JetBrains Mono", monospace';
   ctx.fillText(formatCompactTokens(dist.total_cron_tokens), cx, cy - 10);
   ctx.fillStyle = "#5a7a9a";
@@ -483,18 +483,18 @@ function drawModelChart(canvas: HTMLCanvasElement, dist: ModelUsageDistribution 
 
   ctx.beginPath();
   ctx.arc(cx, cy, inner - 2, 0, Math.PI * 2);
-  ctx.fillStyle = "#0A1018";
+  ctx.fillStyle = "#07080c";
   ctx.fill();
 
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillStyle = "#00D4FF";
+  ctx.fillStyle = "#38bdf8";
   ctx.font = '600 17px "JetBrains Mono", monospace';
   ctx.fillText(formatCompactTokens(dist.total_tokens), cx, cy - 10);
   ctx.fillStyle = "#5a7a9a";
   ctx.font = '10px "JetBrains Mono", monospace';
   ctx.fillText("TOKENS", cx, cy + 8);
-  ctx.fillStyle = "#00FF88";
+  ctx.fillStyle = "#6ee7b7";
   ctx.font = '9px "JetBrains Mono", monospace';
   ctx.fillText(formatUsd(dist.total_cost_usd), cx, cy + 24);
 }

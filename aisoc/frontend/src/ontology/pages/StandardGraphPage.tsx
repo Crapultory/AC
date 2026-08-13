@@ -1,5 +1,6 @@
 import { useMemo, useState } from 'react';
-import { Database, Boxes, Share2, Scale, Tag } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Database, Boxes, Share2, Scale, Tag, MessageSquare } from 'lucide-react';
 import { useOntologyArtifact } from '../hooks/useOntology';
 import { GraphCanvas } from '../components/GraphCanvas';
 import { NodeDetail } from '../components/NodeDetail';
@@ -20,6 +21,7 @@ const OBJECT_HINTS = [
 ];
 
 export function StandardGraphPage() {
+  const routerNavigate = useNavigate();
   const { data: standardGraph } = useOntologyArtifact('standard');
   const [selectedDomain, setSelectedDomain] = useState('ALL');
   const [selectedNode, setSelectedNode] = useState<any | null>(null);
@@ -70,10 +72,10 @@ export function StandardGraphPage() {
             <span className="font-mono text-[color:var(--ink-lo)]"> standard-graph_v3.json</span>
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-            <span className="chip" style={{ background: 'rgba(56,225,255,0.10)', color: '#7FE9FF', borderColor: 'rgba(56,225,255,0.30)' }}>
+            <span className="chip" style={{ background: 'rgba(56, 189, 248, 0.10)', color: '#7dd3fc', borderColor: 'rgba(56, 189, 248, 0.30)' }}>
               Schema · {standardGraph?.schema_version || standardGraph?.schema || 'N/A'}
             </span>
-            <span className="chip" style={{ background: 'rgba(124,243,200,0.08)', color: '#A8F5DA', borderColor: 'rgba(124,243,200,0.24)' }}>
+            <span className="chip" style={{ background: 'rgba(110, 231, 183, 0.08)', color: '#A8F5DA', borderColor: 'rgba(110, 231, 183, 0.24)' }}>
               Source · standard-graph_v3.json
             </span>
             {standardGraph?.layer_counts && (
@@ -83,14 +85,18 @@ export function StandardGraphPage() {
             )}
           </div>
         </div>
+        <button className="btn-ghost" onClick={() => routerNavigate('/chat?quick=instruct_ontology')}>
+          <MessageSquare className="h-4 w-4" />
+          咨询 AI
+        </button>
       </div>
 
       <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-        <StatCard label="Weight Total" value={standardGraph?.weight_total ?? '—'} sub="二级功能权重合计" accent="#38E1FF" icon={<Scale className="h-4 w-4" />} />
+        <StatCard label="Weight Total" value={standardGraph?.weight_total ?? '—'} sub="二级功能权重合计" accent="#38bdf8" icon={<Scale className="h-4 w-4" />} />
         <StatCard label="Domains" value={domainDefs.length} sub="① 核心域" accent="#8B7CF6" icon={<Database className="h-4 w-4" />} />
-        <StatCard label="Sub-capabilities" value={subcapCount} sub="② 二级功能" accent="#2FD6A6" icon={<Boxes className="h-4 w-4" />} />
+        <StatCard label="Sub-capabilities" value={subcapCount} sub="② 二级功能" accent="#6ee7b7" icon={<Boxes className="h-4 w-4" />} />
         <StatCard label="Objects" value={objectCount} sub="③ 三级对象(共享)" accent="#D4A64A" icon={<Tag className="h-4 w-4" />} />
-        <StatCard label="Semantic Links" value={semanticCount} sub={`跨域 ${edgeStats.cross_domain ?? 0} 条`} accent="#FF8A5B" icon={<Share2 className="h-4 w-4" />} />
+        <StatCard label="Semantic Links" value={semanticCount} sub={`跨域 ${edgeStats.cross_domain ?? 0} 条`} accent="#fb923c" icon={<Share2 className="h-4 w-4" />} />
       </div>
 
       {/* (a) domain filter uses NAMES not ids */}

@@ -44,7 +44,7 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
   }
 
   return (
-    <form className="login-form" onSubmit={handleSubmit}>
+    <form className="grid gap-[calc(10px*var(--density-scale))]" onSubmit={handleSubmit}>
       <label htmlFor="token-input">Session Token</label>
       <input
         id="token-input"
@@ -55,7 +55,11 @@ export function LoginForm({ onSuccess }: LoginFormProps) {
         placeholder="Paste AISOC token"
         required
       />
-      <button type="submit" disabled={pending}>
+      <button
+        type="submit"
+        disabled={pending}
+        className="min-h-[calc(40px*var(--density-scale))] cursor-pointer rounded-[var(--aisoc-radius-sm)] border border-transparent bg-aisoc-accent px-[calc(12px*var(--density-scale))] py-[calc(10px*var(--density-scale))] font-bold text-aisoc-on-accent transition-colors duration-[160ms] hover:bg-aisoc-accent-strong disabled:cursor-not-allowed disabled:opacity-55"
+      >
         {pending ? "Verifying..." : "Sign In"}
       </button>
       {error ? <p className="error-text">{error}</p> : null}

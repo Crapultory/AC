@@ -46,6 +46,12 @@ export function App() {
           <Route path="/skills" element={<SkillsPage />} />
           <Route path="/wiki" element={<WikiPage />} />
           <Route path="/memory" element={<MemoryPage />} />
+          {/* 旧本体对话入口收编到统一聊天页（quick 参数自动插入 @[instruct_ontology] 草稿）。
+              必须放在 /ontology/* 通配前才能命中。 */}
+          <Route
+            path="/ontology/chat"
+            element={<Navigate to="/chat?quick=instruct_ontology" replace />}
+          />
           <Route path="/ontology/*" element={<OntologyRoute />} />
           <Route path="/settings" element={<SettingsPage />} />
         </Route>
