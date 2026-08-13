@@ -607,7 +607,12 @@ def _run_agent_tool_execution_middleware(
             agent._iters_since_skill = 0
 
         _advance_start_order(_begin)
-        return execute(final_args)
+        try:
+            from tools.user_env_runtime import bind_current_user_env_identity_from_agent
+        except Exception:
+            return execute(final_args)
+        with bind_current_user_env_identity_from_agent(agent):
+            return execute(final_args)
 
     def _hermes_pipeline(relay_args: dict[str, Any]) -> Any:
         request_result = apply_tool_request_middleware(
@@ -1026,18 +1031,29 @@ def execute_tool_calls_concurrent(agent, assistant_message, messages: list, effe
 
         try:
             try:
+                try:
+                    from tools.user_env_runtime import bind_current_user_env_identity_from_agent
+                except Exception:
+                    bind_current_user_env_identity_from_agent = None
+
                 def _execute(next_args: dict[str, Any]) -> Any:
-                    return agent._invoke_tool(
-                        function_name,
-                        next_args,
-                        effective_task_id,
-                        tool_call.id,
-                        messages=messages,
-                        pre_tool_block_checked=True,
-                        skip_tool_request_middleware=True,
-                        skip_tool_execution_middleware=True,
-                        tool_request_middleware_trace=list(middleware_trace),
-                    )
+                    def _invoke() -> Any:
+                        return agent._invoke_tool(
+                            function_name,
+                            next_args,
+                            effective_task_id,
+                            tool_call.id,
+                            messages=messages,
+                            pre_tool_block_checked=True,
+                            skip_tool_request_middleware=True,
+                            skip_tool_execution_middleware=True,
+                            tool_request_middleware_trace=list(middleware_trace),
+                        )
+
+                    if bind_current_user_env_identity_from_agent is None:
+                        return _invoke()
+                    with bind_current_user_env_identity_from_agent(agent):
+                        return _invoke()
 
                 managed = _run_agent_tool_execution_middleware(
                     agent,
@@ -1935,6 +1951,36 @@ def execute_tool_calls_sequential(agent, assistant_message, messages: list, effe
                 agent._delegate_spinner = None
                 tool_duration = time.time() - tool_start_time
                 cute_msg = _get_cute_tool_message_impl('delegate_task', function_args, tool_duration, result=_delegate_result)
+                if spinner:
+                    spinner.stop(cute_msg)
+                elif agent._should_emit_quiet_tool_messages():
+                    agent._vprint(f"  {cute_msg}")
+        elif function_name == "a2a_delegate":
+            goal_preview = (function_args.get("goal") or "")[:30]
+            spinner_label = f"A2A delegate {goal_preview}" if goal_preview else "A2A delegate"
+            spinner = None
+            if agent._should_emit_quiet_tool_messages() and agent._should_start_quiet_spinner():
+                face = random.choice(KawaiiSpinner.get_waiting_faces())
+                spinner = KawaiiSpinner(f"{face} {spinner_label}", spinner_type='dots', print_fn=agent._print_fn)
+                spinner.start()
+            _delegate_result = None
+            try:
+                def _execute(next_args: dict) -> Any:
+                    return agent._dispatch_a2a_delegate(next_args)
+                function_result, function_args, middleware_trace, _execution_blocked, _execution_dispatched = _managed_values(_run_agent_tool_execution_middleware(
+                    agent,
+                    function_name=function_name,
+                    function_args=function_args,
+                    effective_task_id=effective_task_id,
+                    tool_call_id=getattr(tool_call, "id", "") or "",
+                    execute=_execute,
+                    scope_block=_ts_scope_block,
+                    display_index=i,
+                ))
+                _delegate_result = function_result
+            finally:
+                tool_duration = time.time() - tool_start_time
+                cute_msg = _get_cute_tool_message_impl('a2a_delegate', function_args, tool_duration, result=_delegate_result)
                 if spinner:
                     spinner.stop(cute_msg)
                 elif agent._should_emit_quiet_tool_messages():
