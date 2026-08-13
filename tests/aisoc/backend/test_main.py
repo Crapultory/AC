@@ -20,7 +20,6 @@ def _ns(**kwargs) -> argparse.Namespace:
         host="127.0.0.1",
         no_open=False,
         insecure=False,
-        tui=False,
         skip_build=False,
         module="server",
         name=None,
@@ -78,7 +77,7 @@ def test_cmd_aisoc_dispatches_a2a_module(monkeypatch: pytest.MonkeyPatch) -> Non
 def test_cmd_aisoc_rejects_server_only_flags_for_a2a() -> None:
     backend_main = _load_backend_main()
     with pytest.raises(SystemExit) as exc:
-        backend_main.cmd_aisoc(_ns(module="a2a", tui=True))
+        backend_main.cmd_aisoc(_ns(module="a2a", skip_build=True))
     assert exc.value.code == 2
 
 

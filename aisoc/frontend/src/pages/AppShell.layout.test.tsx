@@ -18,14 +18,14 @@ describe("AppShell layout", () => {
       </MemoryRouter>,
     );
 
-    expect(html).toContain("app-shell");
-    expect(html).toContain("side-nav");
-    expect(html).toContain("side-nav-workbench");
-    expect(html).toContain("side-nav-header");
-    expect(html).toContain("side-nav-group");
-    expect(html).toContain("side-nav-toggle");
+    expect(html).toContain("<aside");
+    expect(html).toContain('data-testid="side-nav"');
+    expect(html).toContain("<main");
+    // .main-panel / .workbench-main stay as styles.css hooks shared with page content
     expect(html).toContain("main-panel");
     expect(html).toContain("workbench-main");
+    expect(html).toContain('aria-label="Collapse navigation"');
+    expect(html).toContain(">Workbench<");
     expect(html).toContain("Workbench navigation");
     expect(html).toContain("aria-current=\"page\"");
     expect(html).toContain("Overview");

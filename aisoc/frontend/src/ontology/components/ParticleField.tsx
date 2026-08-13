@@ -46,7 +46,7 @@ export function ParticleField() {
         if (p.y < 0 || p.y > h) p.vy *= -1;
         ctx.beginPath();
         ctx.arc(p.x, p.y, p.r, 0, Math.PI * 2);
-        ctx.fillStyle = 'rgba(120,180,255,0.45)';
+        ctx.fillStyle = 'rgba(120, 180, 255, 0.45)';
         ctx.fill();
       }
       // link nearby particles

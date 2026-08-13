@@ -182,9 +182,9 @@ export function SessionsPage() {
       const payload = await fetchJSON<{ session_id: string }>(
         `/api/sessions/${encodeURIComponent(rawSessionId)}/latest-descendant`,
       );
-      navigate(`/chat?resume=${encodeURIComponent(payload.session_id || rawSessionId)}`);
+      navigate(`/chat?session=${encodeURIComponent(payload.session_id || rawSessionId)}`);
     } catch {
-      navigate(`/chat?resume=${encodeURIComponent(rawSessionId)}`);
+      navigate(`/chat?session=${encodeURIComponent(rawSessionId)}`);
     }
   }
 

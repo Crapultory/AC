@@ -37,11 +37,11 @@ def _build_message_search_query(query: str) -> str:
     return " ".join(terms)
 
 
-def list_sessions(limit: int = 20, offset: int = 0) -> dict[str, Any]:
+def list_sessions(limit: int = 20, offset: int = 0, source: str | None = None) -> dict[str, Any]:
     db = SessionDB()
     try:
-        sessions = db.list_sessions_rich(limit=limit, offset=offset)
-        total = db.session_count()
+        sessions = db.list_sessions_rich(source=source, limit=limit, offset=offset)
+        total = db.session_count(source=source)
         now = time.time()
         for item in sessions:
             item["is_active"] = (
@@ -193,6 +193,7 @@ def get_session_detail_with_messages(session_id: str) -> dict[str, Any] | None:
                 "role": role,
                 "content": text,
                 "tool_name": msg.get("tool_name"),
+                "tool_call_id": msg.get("tool_call_id"),
                 "timestamp": msg.get("timestamp"),
             }
         )

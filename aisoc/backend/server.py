@@ -14,9 +14,9 @@ import uvicorn
 
 from aisoc.backend.agent_runtime import prepare_hermes_home
 from aisoc.backend.auth import verify_bearer_token
+from aisoc.backend.chat import ChatSessionManager, build_agent_chat_router
 from aisoc.backend.config import AisocSettings, is_loopback_host, load_aisoc_settings
 from aisoc.backend.routes.auth import build_auth_router
-from aisoc.backend.routes.chat import build_chat_router
 from aisoc.backend.routes.cron import build_cron_router
 from aisoc.backend.routes.logs import build_logs_router
 from aisoc.backend.routes.memory import build_memory_router
@@ -26,6 +26,8 @@ from aisoc.backend.routes.sessions import build_sessions_router
 from aisoc.backend.routes.skills import build_skills_router
 from aisoc.backend.routes.kb import build_kb_router
 from aisoc.backend.routes.system import build_system_router
+from aisoc.backend.services.quick_command_service import QuickCommandService
+from aisoc.backend.services.skill_installer import bundled_skills_root, install_bundled_skills
 
 
 PUBLIC_API_PATHS = frozenset(
@@ -105,9 +107,20 @@ def create_app(settings: AisocSettings | None = None) -> FastAPI:
                 return JSONResponse(status_code=401, content={"detail": detail})
         return await call_next(request)
 
+    chat_manager = ChatSessionManager()
+    quick_command_service = QuickCommandService()
+    app.state.chat_manager = chat_manager
+    app.state.quick_command_service = quick_command_service
+
     app.include_router(build_auth_router(active_settings))
     app.include_router(build_system_router(active_settings))
-    app.include_router(build_chat_router(active_settings))
+    app.include_router(
+        build_agent_chat_router(
+            active_settings,
+            manager=chat_manager,
+            quick_command_service=quick_command_service,
+        )
+    )
     app.include_router(build_sessions_router())
     app.include_router(build_cron_router())
     app.include_router(build_skills_router())
@@ -117,6 +130,13 @@ def create_app(settings: AisocSettings | None = None) -> FastAPI:
     app.include_router(build_kb_router())
     app.include_router(build_ontology_router())
     _install_docs_bearer_auth(app)
+
+    # Agent2UI bridge + template assets. Mounted outside /api so the auth
+    # middleware does not intercept it: deliverable HTML rendered in the
+    # sandboxed preview iframe loads /agent2ui/agent2ui-bridge.js anonymously.
+    agent2ui_assets = bundled_skills_root() / "html-deliverable" / "assets"
+    if agent2ui_assets.is_dir():
+        app.mount("/agent2ui", StaticFiles(directory=agent2ui_assets), name="agent2ui")
 
     dist_index = None
     dist_root = active_settings.dist_dir
@@ -158,10 +178,13 @@ def start_server(
     port: int = 9120,
     open_browser: bool = True,
     allow_public: bool = False,
-    embedded_chat: bool = False,
 ) -> None:
     """Start the AISOC backend server."""
     prepare_hermes_home()
+
+    installed_skills = install_bundled_skills()
+    if installed_skills:
+        print(f"Installed bundled skills into HERMES_HOME: {', '.join(installed_skills)}")
 
     if not is_loopback_host(host) and not allow_public:
         raise SystemExit(
@@ -175,7 +198,6 @@ def start_server(
         port=port,
         open_browser=open_browser,
         allow_public=allow_public,
-        embedded_chat=embedded_chat,
         dist_dir=dist_dir,
     )
     app = create_app(settings)

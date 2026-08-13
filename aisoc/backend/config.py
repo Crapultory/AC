@@ -19,7 +19,6 @@ class AisocSettings:
     port: int = 9120
     open_browser: bool = True
     allow_public: bool = False
-    embedded_chat: bool = False
     session_token: str = ""
     token_source: TokenSource = "generated"
     a2a_auth_enabled: bool = False
@@ -40,7 +39,6 @@ def load_aisoc_settings(
     port: int = 9120,
     open_browser: bool = True,
     allow_public: bool = False,
-    embedded_chat: bool = False,
     dist_dir: Path | None = None,
 ) -> AisocSettings:
     """Load settings from explicit args plus environment fallback."""
@@ -72,7 +70,6 @@ def load_aisoc_settings(
         port=port,
         open_browser=open_browser,
         allow_public=allow_public,
-        embedded_chat=embedded_chat,
         session_token=token,
         token_source=source,
         a2a_auth_enabled=a2a_auth_enabled,

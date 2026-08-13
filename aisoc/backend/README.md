@@ -2,14 +2,14 @@
 
 ## 1. 模块定位
 AISOC Backend 是 `hermes aisoc` 的服务层。当前以 `server` 模块为主，后续扩展 `a2a` 模块后，同一入口将根据 `--module` 参数启动不同服务：
-- `server`：当前 Web Console / FastAPI API / Chat TUI PTY-WebSocket 网关
+- `server`：当前 Web Console / FastAPI API / 统一聊天 WebSocket 服务
 - `a2a`：A2A (Agent-to-Agent) 协议服务
 - `extcli`：本地增强交互命令行，直接在终端里与 `AIAgent` 对话
 
 `server` 模块当前负责：
 - 统一认证（Bearer Token）
 - 会话、Cron、Skill、Memory、Logs、Overview 数据读取/写入
-- Chat TUI 的 PTY/WebSocket 网关
+- 统一聊天模块（`/api/chat/session` WebSocket + quick commands + drawer 预览 + 附件）
 - 托管前端静态资源（`web_dist`）
 
 当前统一入口：`aisoc/backend/main.py`
@@ -25,7 +25,7 @@ AISOC Backend 是 `hermes aisoc` 的服务层。当前以 `server` 模块为主�
 在仓库根目录执行：
 
 ```bash
-hermes aisoc --module server --port 9120 --tui
+hermes aisoc --module server --port 9120
 ```
 
 常用参数：
@@ -34,7 +34,6 @@ hermes aisoc --module server --port 9120 --tui
 - `--host 127.0.0.1`：监听地址（默认 loopback）
 - `--no-open`：不自动打开浏览器，仅 `server` 模块使用
 - `--insecure`：允许非 loopback 绑定（有安全风险）
-- `--tui`：启用嵌入式 chat PTY/WS 能力，仅 `server` 模块使用
 - `--skip-build`：跳过前端构建（需已有 `backend/web_dist`），仅 `server` 模块使用
 
 未来 A2A 模块启动形态：
@@ -54,7 +53,7 @@ hermes aisoc --module extcli
 也支持直接以 Python 启动同一入口：
 
 ```bash
-python aisoc/backend/main.py -p myprofile --module server --port 9120 --tui
+python aisoc/backend/main.py -p myprofile --module server --port 9120
 python aisoc/backend/main.py --profile myprofile --module a2a --host 127.0.0.1 --port 9086
 python aisoc/backend/main.py -p myprofile --module extcli
 ```
@@ -78,13 +77,13 @@ python aisoc/backend/main.py -p myprofile --module extcli
 ### 2.2 直接以 Python 启动（调试后端）
 
 ```bash
-python aisoc/backend/main.py -p myprofile --module server --host 127.0.0.1 --port 9120 --no-open --tui
+python aisoc/backend/main.py -p myprofile --module server --host 127.0.0.1 --port 9120 --no-open
 ```
 
 或只调后端 server 模块：
 
 ```bash
-python -c "from aisoc.backend.server import start_server; start_server(host='127.0.0.1', port=9120, open_browser=False, embedded_chat=True)"
+python -c "from aisoc.backend.server import start_server; start_server(host='127.0.0.1', port=9120, open_browser=False)"
 ```
 
 ### 2.3 Token 配置
@@ -144,13 +143,23 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 - 重启成功返回 HTTP 202，统一字段为 `accepted`、`already_requested`、`service`、`pid`；重复请求不会启动第二个 watcher
 - 重启会重放当前启动命令；若认证 token 原本由进程启动时随机生成，新进程可能生成不同值
 
-### 3.5 Chat（`--tui`）链路设计
-当 `embedded_chat=True`（CLI `--tui`）时启用：
-- `/api/chat/pty`：浏览器 <-> PTY 双向字节流
-- `/api/chat/ws`：JSON-RPC sidecar（tui_gateway）
-- `/api/chat/pub`、`/api/chat/events`：事件分发通道
+### 3.5 统一聊天链路设计（1.0）
+聊天核心在 `aisoc/backend/chat/`（自 aegis chat 模块回迁，去用户化）：
+- `WS /api/chat/session`：唯一聊天通道。客户端事件 `session.bind` / `message.send` /
+  `approval.respond` / `clarify.respond` / `session.interrupt` / `session.resume`；
+  服务端事件 envelope（`message.delta/completed`、`run.state`、`tool.*`、
+  `delegate.*`、`approval.*`、`clarify.*`、`error`，含 `server_event_id` 去重）。
+- `message.send` 文本先经 `QuickCommandService.resolve_text` 做 `@[type_name]`
+  快捷指令服务端展开与 `{var}` 参数替换（seed 在 `services/quick_command_seeds.py`，
+  可用 `$HERMES_HOME/aisoc_quick_commands.json` 扩展/覆盖）。
+- `GET /api/chat/quick-commands`：composer 快捷指令清单。
+- `GET /api/chat/drawer-html?path=...`：工作区受限的文件预览（A2UI HTML 产物等）。
+- `POST /api/chat/attachments`：聊天附件上传。
+- `/agent2ui/*`：Agent2UI bridge 与模板静态资源（匿名，供 sandboxed 预览 iframe 加载）。
+- 会话即 `hermes_state.SessionDB` 会话（`platform=aisoc_web`），`/api/sessions?source=aisoc_web`
+  可过滤出 Web 聊天会话。
 
-非 `--tui` 模式下上述 WS 返回 `4403`。
+旧 PTY/TUI 链路（`/api/chat/pty|ws|pub|events`、`--tui`、`services/tui_embed.py`）已于 1.0 移除。
 
 ---
 
@@ -168,11 +177,10 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 
 ### 4.3 Chat
 前缀：`/api/chat`
-- `GET /status`
-- `WS /pty`
-- `WS /ws`
-- `WS /pub`
-- `WS /events`
+- `WS /session`
+- `GET /quick-commands`
+- `GET /drawer-html`
+- `POST /attachments`
 
 ### 4.4 Sessions
 前缀：`/api/sessions`
@@ -260,7 +268,7 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
   - `cron.jobs`（任务）
   - `skills_config` / `skills_tool`
   - `hermes_cli.logs`
-- PTY/TUI 桥接：`services/tui_embed.py` + `tui_gateway`
+- 聊天核心：`aisoc/backend/chat/`（agent 回调 → WS 事件流，复用 `agent_runtime.default_agent_factory`）
 
 ---
 

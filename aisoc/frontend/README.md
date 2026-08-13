@@ -31,7 +31,7 @@ npm run build    # tsc + vite build（输出到 ../backend/web_dist）
 推荐由根命令统一启动：
 
 ```bash
-hermes aisoc --port 9120 --tui
+hermes aisoc --port 9120
 ```
 
 该命令会构建前端并由后端托管静态资源，避免前后端端口/CORS错配。
@@ -71,11 +71,16 @@ hermes aisoc --port 9120 --tui
 3. `RequireAuth` 启动时调用 `GET /api/auth/session` 校验
 4. `fetchJSON` 默认自动注入 `Authorization: Bearer <token>`
 
-### 3.4 Chat 页面设计
-- 当前仅保留 **Terminal**（已移除 Event Feed）
-- 使用 `xterm.js` 嵌入 TUI 终端
-- 通过 `/api/chat/pty` 建立 PTY WS 链路
-- 使用 `resume` 参数支持会话恢复
+### 3.4 统一聊天模块（`src/chat/`，1.0）
+- 运行时：`src/chat/runtime/chatRuntime.tsx`（`AisocChatProvider` 挂在 AppShell 上，
+  每会话一条 `WS /api/chat/session`，`session.bind`/`message.send`/approval/clarify）
+- 会话列表来自后端 `GET /api/sessions?source=aisoc_web`，历史用
+  `GET /api/sessions/{id}/detail` 水合；`/chat?session=<id>` 续聊、`/chat?quick=<name>`
+  预填快捷指令草稿
+- 组件层：`src/chat/components/`（三栏 ChatLayout、SessionListPane、MessageStream +
+  bubbles、contentEditable Composer（`@` 快捷指令 pill、附件、A2UI 开关）、右侧 drawer
+  （Workflow 图 + 文件预览 sandboxed iframe + Agent2UI postMessage 回流））
+- 右下角 `FloatingChatWidget` 复用同一 Provider 的活跃会话，仅作便捷入口
 
 ---
 
@@ -126,8 +131,6 @@ Overview 页面接口说明（2026-05 更新）：
   - 接口类型可追踪，减少前后端契约偏差
 - **Vite**：
   - 构建速度快，适合高频迭代
-- **xterm.js**：
-  - 直接复用终端交互能力，避免重写 chat 输入/渲染内核
 - **Vitest**：
   - 页面结构与行为测试轻量可维护
 
@@ -140,7 +143,7 @@ Overview 页面接口说明（2026-05 更新）：
    - `lib/auth.ts`
    - `components/RequireAuth.tsx`
    - `lib/api.ts`
-3. 改动 Chat 页时不要重写 TUI 协议，优先保持 `/api/chat/pty` 直通。
+3. 改动聊天模块时保持 `/api/chat/session` WS 事件协议与 aegis chat 模块兼容（fork 关系，勿单方面改事件字段）。
 4. 提交前建议至少执行：
 
 ```bash

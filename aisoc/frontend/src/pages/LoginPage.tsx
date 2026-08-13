@@ -14,8 +14,8 @@ export function LoginPage() {
   }, [navigate]);
 
   return (
-    <section className="login-page">
-      <div className="login-card">
+    <section className="grid h-full place-items-center p-[calc(24px*var(--density-scale))]">
+      <div className="w-[min(520px,95vw)] rounded-[var(--aisoc-radius-lg)] border border-aisoc-border bg-aisoc-panel p-[calc(28px*var(--density-scale))] shadow-[var(--aisoc-shadow)] backdrop-blur-[14px] animate-[aisoc-fade-in_340ms_ease]">
         <p className="brand-kicker">AISOC Access</p>
         <h1>Authenticate to Continue</h1>
         <p className="subtle-copy">

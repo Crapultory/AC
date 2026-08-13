@@ -25,8 +25,8 @@ export function NodeDetail({
     if (layout === 'sidebar' || layout === 'overlay') return null; // only render on selection
     return (
       <div className="glass border-dashed min-h-[120px] flex flex-col sm:flex-row items-center justify-center text-center sm:text-left gap-4 p-5">
-        <div className="h-11 w-11 rounded-full flex items-center justify-center anim-pulse shrink-0" style={{ background: 'rgba(56,225,255,0.1)', border: '1px solid rgba(56,225,255,0.3)' }}>
-          <Sparkles className="h-5 w-5" style={{ color: '#7FE9FF' }} />
+        <div className="h-11 w-11 rounded-full flex items-center justify-center anim-pulse shrink-0" style={{ background: 'rgba(56, 189, 248, 0.1)', border: '1px solid rgba(56, 189, 248, 0.3)' }}>
+          <Sparkles className="h-5 w-5" style={{ color: '#7dd3fc' }} />
         </div>
         <div>
           <div className="text-sm font-medium text-[color:var(--ink-hi)]">选择一个节点查看详情</div>
@@ -119,12 +119,12 @@ export function NodeDetail({
               const t = OBJ_TYPE_META[o.object_type] || OBJ_TYPE_META.tool;
               const Icon = t.icon;
               const sat = o.satisfaction ?? (o.satisfied ? 1 : 0);
-              const sc = sat >= 0.95 ? '#2FD6A6' : sat > 0 ? '#F4B740' : '#FF6B8A';
+              const sc = sat >= 0.95 ? '#6ee7b7' : sat > 0 ? '#fcd34d' : '#fda4af';
               const sl = sat >= 0.95 ? '已满足' : sat > 0 ? '部分满足' : '缺失';
               return (
-                <div key={o.object_id} className="rounded-lg border p-2.5 text-xs" style={{ borderColor: 'var(--stroke-soft)', background: 'rgba(255,255,255,0.02)' }}>
+                <div key={o.object_id} className="rounded-lg border p-2.5 text-xs" style={{ borderColor: 'var(--stroke-soft)', background: 'rgba(255, 255, 255, 0.02)' }}>
                   <button onClick={() => onNavigate?.(o.object_id)} className="w-full flex items-center justify-between gap-2 text-left">
-                    <span className="flex items-center gap-1.5 text-[color:var(--ink-hi)] hover:text-[#7FE9FF]">
+                    <span className="flex items-center gap-1.5 text-[color:var(--ink-hi)] hover:text-[#7dd3fc]">
                       <Icon className="h-3.5 w-3.5" style={{ color: t.color }} />{o.name_zh}
                       <span className="text-[10px] text-[color:var(--ink-lo)]">{t.label}</span>
                     </span>
@@ -148,7 +148,7 @@ export function NodeDetail({
                       )}
                       {o.recommendation && (
                         <div className="flex gap-1.5">
-                          <span className="shrink-0 text-[10px] font-semibold px-1.5 rounded" style={{ color: '#2FD6A6', background: '#2FD6A614' }}>AI建议</span>
+                          <span className="shrink-0 text-[10px] font-semibold px-1.5 rounded" style={{ color: '#6ee7b7', background: '#2FD6A614' }}>AI建议</span>
                           <span className="text-[color:var(--ink-mid)] leading-relaxed">{o.recommendation}</span>
                         </div>
                       )}
@@ -166,7 +166,7 @@ export function NodeDetail({
           <div className="eyebrow mb-2 flex items-center gap-1.5"><FileText className="h-3.5 w-3.5" /> Evidence ({node.evidence.length})</div>
           <div className="space-y-2">
             {node.evidence.slice(0, 4).map((ev: any, i: number) => (
-              <div key={i} className="rounded-lg border p-2.5 text-xs font-mono break-all" style={{ borderColor: 'var(--stroke-soft)', background: 'rgba(255,255,255,0.02)' }}>
+              <div key={i} className="rounded-lg border p-2.5 text-xs font-mono break-all" style={{ borderColor: 'var(--stroke-soft)', background: 'rgba(255, 255, 255, 0.02)' }}>
                 <div className="text-[color:var(--ink-mid)]">{ev.source_path}</div>
                 <div className="text-[color:var(--ink-lo)] mt-1">{[ev.confidence, ev.discovery_method].filter(Boolean).join(' · ')}</div>
               </div>
@@ -180,7 +180,7 @@ export function NodeDetail({
 
 function LayerBadge({ layer }: { layer: number }) {
   const map: Record<number, { t: string; c: string }> = {
-    1: { t: 'L1 域', c: '#8B7CF6' }, 2: { t: 'L2 功能', c: '#2FD6A6' }, 3: { t: 'L3 对象', c: '#D4A64A' },
+    1: { t: 'L1 域', c: '#8B7CF6' }, 2: { t: 'L2 功能', c: '#6ee7b7' }, 3: { t: 'L3 对象', c: '#D4A64A' },
   };
   const m = map[layer] || map[2];
   return <span className="chip shrink-0" style={{ background: `${m.c}1a`, color: m.c, borderColor: `${m.c}55`, fontSize: 10 }}>{m.t}</span>;
@@ -198,10 +198,10 @@ function NeighborList({ title, icon, items, onNavigate }: { title: string; icon:
             <button
               key={i}
               onClick={() => it.otherId && onNavigate?.(it.otherId)}
-              className="w-full flex items-center gap-2 text-[13px] text-left rounded-md px-2 py-1.5 hover:bg-[rgba(56,225,255,0.1)] transition-colors group leading-snug"
+              className="w-full flex items-center gap-2 text-[13px] text-left rounded-md px-2 py-1.5 hover:bg-[rgba(56, 189, 248, 0.1)] transition-colors group leading-snug"
             >
-              <span className="chip shrink-0" style={{ fontSize: 9, color: '#9CB3D6', background: 'rgba(156,179,214,0.10)', borderColor: 'rgba(156,179,214,0.3)' }}>{it.label || it.type}</span>
-              <span className="text-[color:var(--ink-mid)] group-hover:text-[#7FE9FF] flex-1 break-words">{it.other?.label || it.other?.name_zh || it.otherId}</span>
+              <span className="chip shrink-0" style={{ fontSize: 9, color: '#9CB3D6', background: 'rgba(156, 179, 214, 0.10)', borderColor: 'rgba(156, 179, 214, 0.3)' }}>{it.label || it.type}</span>
+              <span className="text-[color:var(--ink-mid)] group-hover:text-[#7dd3fc] flex-1 break-words">{it.other?.label || it.other?.name_zh || it.otherId}</span>
               <span className="text-[10px] font-mono text-[color:var(--ink-lo)] shrink-0">{it.otherId}</span>
             </button>
           ))}

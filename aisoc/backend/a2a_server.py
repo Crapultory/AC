@@ -457,7 +457,6 @@ def start_a2a_server(
         port=port,
         open_browser=False,
         allow_public=allow_public,
-        embedded_chat=False,
         dist_dir=None,
     )
     if getattr(settings, "a2a_auth_enabled", False):

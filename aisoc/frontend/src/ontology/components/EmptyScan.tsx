@@ -18,8 +18,8 @@ export function EmptyScan({
   return (
     <div className="glass p-8 anim-fade-up">
       <div className="max-w-xl mx-auto text-center space-y-5">
-        <div className="mx-auto h-14 w-14 rounded-2xl flex items-center justify-center glow-cyan anim-pulse" style={{ background: 'linear-gradient(150deg,#0C2436,#08131F)' }}>
-          <AlertCircle className="h-7 w-7" style={{ color: '#FFC24B' }} />
+        <div className="mx-auto h-14 w-14 rounded-2xl flex items-center justify-center glow-cyan anim-pulse" style={{ background: 'linear-gradient(150deg,#161d2c,#0d111a)' }}>
+          <AlertCircle className="h-7 w-7" style={{ color: '#fbbf24' }} />
         </div>
         <div>
           <h2 className="text-xl font-semibold font-display text-gradient">{title}</h2>

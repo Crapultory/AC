@@ -4,7 +4,7 @@ export function StatCard({
   label,
   value,
   sub,
-  accent = '#38E1FF',
+  accent = '#38bdf8',
   icon,
 }: {
   label: string;
@@ -31,7 +31,7 @@ export function StatCard({
   );
 }
 
-export function ProgressBar({ ratio, color = '#38E1FF' }: { ratio: number; color?: string }) {
+export function ProgressBar({ ratio, color = '#38bdf8' }: { ratio: number; color?: string }) {
   const pct = Math.max(0, Math.min(1, ratio)) * 100;
   return (
     <div className="h-2 w-full rounded-full bg-white/5 overflow-hidden">

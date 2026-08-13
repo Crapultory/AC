@@ -31,7 +31,6 @@ def build_system_router(settings: AisocSettings) -> APIRouter:
     @router.get("/api/system/bootstrap", response_model=SystemBootstrapResponse)
     async def bootstrap() -> SystemBootstrapResponse:
         return SystemBootstrapResponse(
-            embedded_chat=settings.embedded_chat,
             auth_scheme="bearer-token",
         )
 

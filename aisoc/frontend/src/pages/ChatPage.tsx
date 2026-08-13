@@ -1,313 +1,232 @@
-import { FitAddon } from "@xterm/addon-fit";
-import { Unicode11Addon } from "@xterm/addon-unicode11";
-import { WebLinksAddon } from "@xterm/addon-web-links";
-import { WebglAddon } from "@xterm/addon-webgl";
-import { Terminal } from "@xterm/xterm";
-import "@xterm/xterm/css/xterm.css";
-import { useEffect, useMemo, useRef, useState } from "react";
+/**
+ * 统一聊天页（薄组装层）：读取 useChatRuntime，组合
+ * SessionListPane / MessageStream / Composer / ChatDrawer；
+ * 处理 pendingHtmlPreviews 自动打开 drawer 文件 tab；支持 ?session=<id>；
+ * 支持 ?quick=<name>（进入后向 composer 插入 `@[<name>] ` 草稿并清掉参数）。
+ */
+import { useEffect, useRef, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 
-import { fetchJSON } from "../lib/api";
 import {
-  buildEventsUrl,
-  buildGatewayUrl,
-  buildPtyUrl,
-  CHAT_SESSION_CHANGED_EVENT,
-  clearStoredChatResumeSession,
-  generateChannelId,
-  getStoredChatResumeSession,
-  setStoredChatResumeSession,
-} from "../lib/chat";
+  ChatDrawer,
+  ChatLayout,
+  Composer,
+  MessageStream,
+  RunStateIndicator,
+  SessionListPane,
+} from "../chat/components";
+import {
+  CachedDrawerTabsByConversation,
+  CachedDynamicDrawerTab,
+  CachedWorkflowDrawerTab,
+  loadCachedDrawerTabs,
+  saveCachedDrawerTabs,
+} from "../chat/lib/chatDrawerTabs";
+import { dispatchComposerInsert } from "../chat/lib/composerBus";
+import { useChatRuntime } from "../chat/runtime/chatRuntime";
 
-type ChatStatus = {
-  embedded_chat: boolean;
-  ready: boolean;
-};
+/** drawer tab 持久化的存储命名空间（后端无用户体系时的固定值）。 */
+const DRAWER_TABS_USER_ID = "aisoc-web";
 
-type LatestDescendant = {
-  session_id: string;
-};
-
-type ChatEventPayload = {
-  method?: string;
-  params?: {
-    payload?: { session_id?: string };
-    session_id?: string;
-    type?: string;
-  };
-  payload?: { session_id?: string };
-  session_id?: string;
-};
-
-export function resolveInitialResumeSession(requestedResume: string, cachedResume: string): string | null {
-  const requested = requestedResume.trim();
-  if (requested) return requested;
-  const cached = cachedResume.trim();
-  return cached || null;
+function drawerTabId(path: string): CachedDynamicDrawerTab["id"] {
+  return `file:${encodeURIComponent(path)}`;
 }
-
-export function extractSessionIdFromChatEvent(raw: string): string {
-  try {
-    const payload = JSON.parse(raw) as ChatEventPayload;
-    const rpcNested =
-      payload.params && payload.params.payload && typeof payload.params.payload.session_id === "string"
-        ? payload.params.payload.session_id.trim()
-        : "";
-    if (rpcNested) return rpcNested;
-    const direct = typeof payload.session_id === "string" ? payload.session_id.trim() : "";
-    if (direct) return direct;
-    const nested =
-      payload.payload && typeof payload.payload.session_id === "string"
-        ? payload.payload.session_id.trim()
-        : "";
-    return nested;
-  } catch {
-    return "";
-  }
-}
-
-const TERMINAL_THEME = {
-  background: "#0d2626",
-  foreground: "#f0e6d2",
-  cursor: "#f0e6d2",
-  cursorAccent: "#0d2626",
-  selectionBackground: "#f0e6d244",
-};
 
 export function ChatPage() {
-  const hostRef = useRef<HTMLDivElement | null>(null);
-  const wsRef = useRef<WebSocket | null>(null);
-  const termRef = useRef<Terminal | null>(null);
+  const {
+    activeConvId,
+    activeConversation,
+    conversations,
+    pendingHtmlPreviews,
+    consumePendingHtmlPreview,
+    openSession,
+  } = useChatRuntime();
   const [searchParams, setSearchParams] = useSearchParams();
-  const requestedResume = (searchParams.get("resume") || "").trim();
-  const [launchResume, setLaunchResume] = useState<string | null>(() => {
-    return resolveInitialResumeSession(requestedResume, getStoredChatResumeSession());
-  });
-  const [sessionSeed, setSessionSeed] = useState(0);
-  const [chatSessionId, setChatSessionId] = useState<string>(() => getStoredChatResumeSession().trim());
-  const channel = useMemo(() => generateChannelId(), [launchResume, sessionSeed]);
-  const [status, setStatus] = useState<ChatStatus | null>(null);
-  const [banner, setBanner] = useState<string | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [drawerFullscreen, setDrawerFullscreen] = useState(false);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [drawerTabsByConversation, setDrawerTabsByConversation] =
+    useState<CachedDrawerTabsByConversation>({});
+  const [refreshNonceByTab, setRefreshNonceByTab] = useState<Record<string, number>>({});
+  // drawer tab 缓存必须用能在刷新前后保持不变的 key。新会话刚创建时的
+  // conversation.id 是本 tab 生成的本地 id（createLocalId()），session.bound
+  // 之后才会拿到后端 sessionId，但 id 字段本身在这个 tab 的生命周期里不会变；
+  // 刷新后 conversations 完全由 /api/sessions 重建，此时
+  // conversationFromSessionItem() 把 id 直接设成了 sessionId —— 同一个会话在
+  // 刷新前后的 id 是两个不同的字符串。所以缓存 key 一律优先用 sessionId，只有
+  // 还没绑定成功（没有 sessionId）时才退回本地 id。
+  const drawerCacheKey = (conversation?: { id: string; sessionId?: string }) =>
+    conversation?.sessionId || conversation?.id || "";
+  const activeDrawerKey = drawerCacheKey(activeConversation) || activeConvId;
+  const restoredConvIdsRef = useRef<Set<string>>(new Set());
+  const autoOpenAttemptedRef = useRef<Set<string>>(new Set());
+  const skipNextDrawerSaveRef = useRef(false);
+  const handledSessionParamRef = useRef("");
+  const handledQuickParamRef = useRef(false);
 
-  function recordActiveSession(sessionId: string) {
-    const cleaned = sessionId.trim();
-    if (!cleaned) return;
-    setChatSessionId(cleaned);
-    setStoredChatResumeSession(cleaned);
-  }
-
-  function removeResumeFromUrl() {
-    if (!searchParams.has("resume")) return;
-    const next = new URLSearchParams(searchParams);
-    next.delete("resume");
-    setSearchParams(next, { replace: true });
-  }
-
-  function handleStartNewSession() {
-    clearStoredChatResumeSession();
-    setChatSessionId("");
-    setLaunchResume(null);
-    setBanner(null);
-    setSessionSeed((value) => value + 1);
-    removeResumeFromUrl();
-  }
-
+  // ?session=<id> → 打开（或创建占位）该会话。
+  const sessionParam = (searchParams.get("session") || "").trim();
   useEffect(() => {
-    let cancelled = false;
-
-    async function loadStatus() {
-      try {
-        const payload = await fetchJSON<ChatStatus>("/api/chat/status");
-        if (!cancelled) setStatus(payload);
-      } catch {
-        if (!cancelled) setBanner("Failed to query chat runtime status.");
-      }
-    }
-
-    void loadStatus();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!requestedResume) return;
-    recordActiveSession(requestedResume);
-    if (requestedResume === launchResume) return;
-    setLaunchResume(requestedResume);
-  }, [requestedResume, launchResume]);
-
-  useEffect(() => {
-    const resumeId = (launchResume || "").trim();
-    if (!resumeId) return;
-    let cancelled = false;
-
-    async function syncLatest() {
-      try {
-        const payload = await fetchJSON<LatestDescendant>(
-          `/api/sessions/${encodeURIComponent(resumeId)}/latest-descendant`,
-        );
-        if (cancelled) return;
-        if (payload.session_id && payload.session_id !== resumeId) {
-          setLaunchResume(payload.session_id);
-          recordActiveSession(payload.session_id);
-          if (searchParams.get("resume") !== payload.session_id) {
-            const next = new URLSearchParams(searchParams);
-            next.set("resume", payload.session_id);
-            setSearchParams(next, { replace: true });
-          }
-        }
-      } catch {
-        // Best effort; stale session should not block chat launch.
-      }
-    }
-
-    void syncLatest();
-    return () => {
-      cancelled = true;
-    };
-  }, [launchResume, searchParams, setSearchParams]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") return;
-    const sync = () => setChatSessionId(getStoredChatResumeSession().trim());
-    window.addEventListener(CHAT_SESSION_CHANGED_EVENT, sync as EventListener);
-    window.addEventListener("storage", sync);
-    return () => {
-      window.removeEventListener(CHAT_SESSION_CHANGED_EVENT, sync as EventListener);
-      window.removeEventListener("storage", sync);
-    };
-  }, []);
-
-  useEffect(() => {
-    if (!status?.ready) {
+    if (!sessionParam || handledSessionParamRef.current === sessionParam) {
       return;
     }
-    const host = hostRef.current;
-    if (!host) return;
+    handledSessionParamRef.current = sessionParam;
+    openSession(sessionParam);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessionParam]);
 
-    const term = new Terminal({
-      allowProposedApi: true,
-      cursorBlink: true,
-      fontFamily:
-        "'JetBrains Mono', 'Cascadia Mono', 'Fira Code', 'Source Code Pro', Menlo, Consolas, monospace",
-      fontSize: 12,
-      lineHeight: 1.08,
-      scrollback: 5000,
-      theme: TERMINAL_THEME,
-    });
-    const fit = new FitAddon();
-    term.loadAddon(fit);
-    term.loadAddon(new Unicode11Addon());
-    term.loadAddon(new WebLinksAddon());
-    try {
-      term.loadAddon(new WebglAddon());
-    } catch {
-      // WebGL can fail on remote/virtualized GPUs; fallback renderer is fine.
+  // ?quick=<name> → composer 挂载后插入 `@[<name>] ` 草稿，然后清掉参数。
+  const quickParam = (searchParams.get("quick") || "").trim();
+  useEffect(() => {
+    if (!quickParam || handledQuickParamRef.current) {
+      return;
     }
+    handledQuickParamRef.current = true;
+    // setTimeout 0：等 Composer 完成挂载并订阅 composerBus 后再派发插入事件。
+    const timer = setTimeout(() => {
+      dispatchComposerInsert(`@[${quickParam}] `);
+    }, 0);
+    const next = new URLSearchParams(searchParams);
+    next.delete("quick");
+    setSearchParams(next, { replace: true });
+    return () => clearTimeout(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [quickParam]);
 
-    term.open(host);
-    fit.fit();
-    term.focus();
+  // 会话列表就绪后按会话恢复持久化的 drawer 文件 tab。
+  useEffect(() => {
+    const ids = conversations.map((conversation) => drawerCacheKey(conversation));
+    const newIds = ids.filter((id) => !restoredConvIdsRef.current.has(id));
+    if (newIds.length === 0) {
+      return;
+    }
+    newIds.forEach((id) => restoredConvIdsRef.current.add(id));
+    const restored = loadCachedDrawerTabs(DRAWER_TABS_USER_ID, newIds);
+    if (Object.keys(restored).length > 0) {
+      // setDrawerTabsByConversation 的更新要等到下一次 commit 才会反映到下面
+      // 持久化 effect 的闭包里；这次 commit 里持久化 effect仍会用旧的（未恢复）
+      // state 跑一遍，若不跳过就会把刚读出来的缓存原样写回一个空对象，抹掉
+      // localStorage 里的记录（表现为刷新后 agent2ui 生成的网页再也找不回来）。
+      skipNextDrawerSaveRef.current = true;
+      setDrawerTabsByConversation((current) => ({ ...restored, ...current }));
+    }
+  }, [conversations]);
 
-    const ptyUrl = buildPtyUrl({ channel, resume: launchResume });
-    const ptyWs = new WebSocket(ptyUrl);
-    ptyWs.binaryType = "arraybuffer";
-    wsRef.current = ptyWs;
-    termRef.current = term;
+  // activeConvId 可能在上面的恢复 effect 之后才就位（例如刷新后没有已存的
+  // active 会话，由 useChatRuntime 异步选出第一个会话）。单独用一个 effect
+  // 盯着 activeConvId + 恢复出的 tabs，一旦两者都到位且该会话有非空 tab，
+  // 就重新打开 drawer；否则内容虽已恢复但因 drawerOpen 重置为 false 而不可见。
+  // 用 autoOpenAttemptedRef 保证每个会话只自动展开一次，避免用户手动关闭
+  // drawer 后又被重新弹开。
+  useEffect(() => {
+    if (!activeDrawerKey || autoOpenAttemptedRef.current.has(activeDrawerKey)) {
+      return;
+    }
+    const tabs = drawerTabsByConversation[activeDrawerKey]?.tabs;
+    if (tabs === undefined) {
+      return;
+    }
+    autoOpenAttemptedRef.current.add(activeDrawerKey);
+    if (tabs.length > 0) {
+      setDrawerOpen(true);
+    }
+  }, [activeDrawerKey, drawerTabsByConversation]);
 
-    ptyWs.onopen = () => {
-      term.writeln("\x1b[2mConnected to AISOC chat PTY.\x1b[0m");
-      const { cols, rows } = term;
-      ptyWs.send(`\x1b[RESIZE:${cols};${rows}]`);
-    };
-    ptyWs.onmessage = (event) => {
-      if (typeof event.data === "string") {
-        term.write(event.data);
-        return;
-      }
-      term.write(new Uint8Array(event.data));
-    };
-    ptyWs.onerror = () => {
-      term.writeln("\r\n\x1b[31mPTY websocket error.\x1b[0m");
-    };
-    ptyWs.onclose = (event) => {
-      term.writeln("\r\n\x1b[33mPTY connection closed.\x1b[0m");
-      if (event.code === 4401) {
-        setBanner("Session token expired. Please sign in again.");
-      } else if (event.code === 4403) {
-        setBanner("Embedded chat is disabled on the server. Start with --tui.");
-      }
-    };
+  // drawer tab 状态变化时持久化（按当前会话集合裁剪）。会话列表还没加载完成时
+  // （刚 mount，conversations 为空）不写入，否则会把 localStorage 里已有的
+  // 缓存当成"用户没有任何 tab"直接删掉，抢在恢复 effect 读取之前就清空数据。
+  useEffect(() => {
+    if (conversations.length === 0) {
+      return;
+    }
+    if (skipNextDrawerSaveRef.current) {
+      skipNextDrawerSaveRef.current = false;
+      return;
+    }
+    saveCachedDrawerTabs(
+      DRAWER_TABS_USER_ID,
+      drawerTabsByConversation,
+      conversations.map((conversation) => drawerCacheKey(conversation)),
+    );
+  }, [conversations, drawerTabsByConversation]);
 
-    const disposeData = term.onData((text) => {
-      if (ptyWs.readyState === WebSocket.OPEN) {
-        ptyWs.send(text);
-      }
+  function setActiveDrawerTab(tab: CachedWorkflowDrawerTab) {
+    if (!activeDrawerKey) return;
+    setDrawerTabsByConversation((current) => {
+      const existing = current[activeDrawerKey] || { activeTab: "workflow" as const, tabs: [] };
+      return { ...current, [activeDrawerKey]: { ...existing, activeTab: tab } };
     });
-    const disposeResize = term.onResize(({ cols, rows }) => {
-      if (ptyWs.readyState === WebSocket.OPEN) {
-        ptyWs.send(`\x1b[RESIZE:${cols};${rows}]`);
-      }
-    });
-    const resizeObserver = new ResizeObserver(() => {
-      fit.fit();
-    });
-    resizeObserver.observe(host);
+  }
 
-    const gatewayWs = new WebSocket(buildGatewayUrl(channel));
-    const eventsWs = new WebSocket(buildEventsUrl(channel));
-    eventsWs.onmessage = (event) => {
-      if (typeof event.data !== "string") return;
-      const nextSessionId = extractSessionIdFromChatEvent(event.data);
-      if (!nextSessionId) return;
-      recordActiveSession(nextSessionId);
-    };
-    gatewayWs.onclose = (event) => {
-      if (event.code === 4401) {
-        setBanner("Session token expired. Please sign in again.");
-      } else if (event.code === 4403) {
-        setBanner("Embedded chat is disabled on the server. Start with --tui.");
-      }
-    };
+  function openFile(path: string) {
+    const normalized = path.trim();
+    if (!normalized || !activeDrawerKey) return;
+    const tabId = drawerTabId(normalized);
+    setDrawerOpen(true);
+    setDrawerTabsByConversation((current) => {
+      const existing = current[activeDrawerKey] || { activeTab: "workflow" as const, tabs: [] };
+      const hasTab = existing.tabs.some((tab) => tab.id === tabId);
+      const tabs = hasTab
+        ? existing.tabs
+        : [
+            ...existing.tabs,
+            {
+              id: tabId,
+              path: normalized,
+              title: normalized.split("/").filter(Boolean).pop() || normalized,
+            },
+          ];
+      return { ...current, [activeDrawerKey]: { activeTab: tabId, tabs } };
+    });
+    // 已存在的 tab 再次打开时强制刷新内容（文件可能已被 agent 重写）。
+    setRefreshNonceByTab((current) => ({ ...current, [tabId]: (current[tabId] || 0) + 1 }));
+  }
 
-    return () => {
-      disposeData.dispose();
-      disposeResize.dispose();
-      resizeObserver.disconnect();
-      eventsWs.close();
-      gatewayWs.close();
-      ptyWs.close();
-      term.dispose();
-      wsRef.current = null;
-      termRef.current = null;
-    };
-  }, [channel, launchResume, status?.ready]);
+  // 任务完成产出 HTML 时自动打开 drawer 文件预览。
+  const pendingPreview = activeConvId ? pendingHtmlPreviews[activeConvId] : undefined;
+  useEffect(() => {
+    if (!pendingPreview) return;
+    openFile(pendingPreview.path);
+    consumePendingHtmlPreview(pendingPreview.conversationId, pendingPreview.messageId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingPreview]);
+
+  const activeDrawerTabs = activeDrawerKey ? drawerTabsByConversation[activeDrawerKey] : undefined;
+  const toggleDrawer = () => setDrawerOpen((current) => !current);
+  const toggleSidebar = () => setSidebarCollapsed((current) => !current);
+  const toggleDrawerFullscreen = () => setDrawerFullscreen((current) => !current);
 
   return (
-    <section className="chat-workbench-page">
-      <div className="chat-workbench">
-        <article className="detail-panel chat-terminal-zone chat-terminal-pane">
-          <header className="chat-zone-header">
-            <h3>{`Terminal - ${chatSessionId || "new"}`}</h3>
-            <button
-              type="button"
-              className="ghost-button chat-new-session-button"
-              onClick={handleStartNewSession}
-              title="Start new session"
-            >
-              New
-            </button>
-          </header>
-          {!status?.ready ? (
-            <p className="subtle-copy">
-              Embedded chat is disabled. Start AISOC with `hermes aisoc --tui`.
-            </p>
-          ) : null}
-          {banner ? <p className="error-text">{banner}</p> : null}
-          <div className="terminal-host" ref={hostRef} />
-        </article>
-      </div>
-    </section>
+    <div className="relative min-h-0 flex-1 overflow-hidden">
+      <ChatLayout
+        sidebar={
+          <SessionListPane
+            drawerOpen={drawerOpen}
+            onToggleDrawer={toggleDrawer}
+            onToggleSidebar={toggleSidebar}
+          />
+        }
+        sidebarCollapsed={sidebarCollapsed}
+        onToggleSidebar={toggleSidebar}
+        drawerOpen={drawerOpen}
+        drawerFullscreen={drawerFullscreen}
+        drawer={
+          <ChatDrawer
+            conversation={activeConversation}
+            tabs={activeDrawerTabs?.tabs || []}
+            activeTab={activeDrawerTabs?.activeTab || "workflow"}
+            refreshNonceByTab={refreshNonceByTab}
+            onSelectTab={setActiveDrawerTab}
+            onClose={() => setDrawerOpen(false)}
+            fullscreen={drawerFullscreen}
+            onToggleFullscreen={toggleDrawerFullscreen}
+          />
+        }
+      >
+        <MessageStream onOpenFile={openFile} />
+        {activeConversation ? <RunStateIndicator conversation={activeConversation} /> : null}
+        <Composer />
+      </ChatLayout>
+    </div>
   );
 }
