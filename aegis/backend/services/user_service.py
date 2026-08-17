@@ -183,6 +183,45 @@ class UserService:
             raise HTTPException(status_code=409, detail="OIDC user already exists or conflicts with another user.") from exc
         return self._build_user_response(record)
 
+    def upsert_lark_user(self, *, email: str) -> UserResponse:
+        """Find or create an enabled local user using Lark email identity."""
+        normalized_email = _normalize_email(email)
+        if not normalized_email:
+            raise HTTPException(status_code=400, detail="Lark identity email is missing.")
+        self._validate_email(normalized_email)
+
+        user = self._store.get_user_by_email(normalized_email)
+        if user is not None:
+            if user["username"] == DEFAULT_ADMIN_USERNAME:
+                raise HTTPException(status_code=403, detail="The local admin account cannot be bound by email.")
+            if user["status"] != "enabled":
+                raise HTTPException(status_code=403, detail="User account is disabled.")
+            self._store.update_last_login(user["uid"], _utc_timestamp())
+            refreshed = self._store.get_user_by_uid(user["uid"])
+            assert refreshed is not None
+            return self._build_user_response(refreshed)
+
+        username_prefix = f"lark_{hashlib.sha256(normalized_email.encode('utf-8')).hexdigest()[:16]}"
+        username = username_prefix
+        suffix = 1
+        while self._store.get_user_by_username(username) is not None:
+            suffix += 1
+            username = f"{username_prefix}_{suffix}"
+        record = {
+            "uid": self._generate_user_uid(),
+            "username": username,
+            "passwd": hash_password(secrets.token_urlsafe(32)),
+            "email": normalized_email,
+            "status": "enabled",
+            "create_time": _utc_timestamp(),
+            "last_login": _utc_timestamp(),
+        }
+        try:
+            self._store.create_user(record)
+        except sqlite3.IntegrityError as exc:
+            raise HTTPException(status_code=409, detail="Lark user already exists or conflicts with another user.") from exc
+        return self._build_user_response(record)
+
     def reset_password(self, uid: str, new_password: str) -> None:
         self._require_user_row(uid)
         self._validate_password(new_password)

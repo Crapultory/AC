@@ -224,6 +224,11 @@ async def complete_callback(
         raise OidcProtocolError("OIDC login transaction was already used.")
 
     user = user_service.upsert_oidc_user(subject=subject, email=email)
+    return create_sso_login_ticket(store, user)
+
+
+def create_sso_login_ticket(store: AegisUserStore, user: Any) -> str:
+    """Issue the shared short-lived ticket used by all external SSO providers."""
     raw_ticket = secrets.token_urlsafe(32)
     now = datetime.now(UTC)
     store.create_sso_login_ticket(

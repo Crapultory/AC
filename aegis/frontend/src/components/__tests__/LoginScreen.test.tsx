@@ -3,12 +3,14 @@ import { describe, expect, it, vi } from 'vitest';
 import LoginScreen from '../LoginScreen';
 
 describe('LoginScreen', () => {
-  it('keeps credentials empty and exposes the SSO entry', () => {
-    const onSsoLogin = vi.fn();
+  it('keeps credentials empty and exposes both SSO entries', () => {
+    const onAegisSsoLogin = vi.fn();
+    const onLarkSsoLogin = vi.fn();
     render(
       <LoginScreen
         onSubmit={vi.fn()}
-        onSsoLogin={onSsoLogin}
+        onAegisSsoLogin={onAegisSsoLogin}
+        onLarkSsoLogin={onLarkSsoLogin}
         onSwitchToRegister={vi.fn()}
         pending={false}
       />,
@@ -16,7 +18,11 @@ describe('LoginScreen', () => {
 
     expect(screen.getByLabelText('Username')).toHaveValue('');
     expect(screen.getByLabelText('Password')).toHaveValue('');
-    fireEvent.click(screen.getByRole('button', { name: 'SSO 认证登录' }));
-    expect(onSsoLogin).toHaveBeenCalledOnce();
+    fireEvent.click(screen.getByRole('button', { name: 'Aegis SSO' }));
+    expect(onAegisSsoLogin).toHaveBeenCalledOnce();
+    expect(onLarkSsoLogin).not.toHaveBeenCalled();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lark SSO' }));
+    expect(onLarkSsoLogin).toHaveBeenCalledOnce();
   });
 });

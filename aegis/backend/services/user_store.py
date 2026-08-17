@@ -35,6 +35,18 @@ CREATE TABLE IF NOT EXISTS oidc_login_transactions (
 CREATE INDEX IF NOT EXISTS idx_oidc_login_transactions_expires
     ON oidc_login_transactions (expires_at);
 
+CREATE TABLE IF NOT EXISTS lark_login_transactions (
+    state TEXT PRIMARY KEY,
+    app_id TEXT NOT NULL,
+    code_verifier TEXT NOT NULL,
+    expires_at TEXT NOT NULL,
+    consumed_at TEXT,
+    created_at TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_lark_login_transactions_expires
+    ON lark_login_transactions (expires_at);
+
 CREATE TABLE IF NOT EXISTS sso_login_tickets (
     ticket_digest TEXT PRIMARY KEY,
     user_uid TEXT NOT NULL REFERENCES users(uid),
@@ -183,6 +195,64 @@ class AegisUserStore:
             )
             conn.commit()
         return cursor.rowcount == 1
+
+    def create_lark_login_transaction(self, record: dict[str, Any]) -> None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "DELETE FROM lark_login_transactions WHERE expires_at <= ?",
+                (record["created_at"],),
+            )
+            conn.execute(
+                "INSERT INTO lark_login_transactions "
+                "(state, app_id, code_verifier, expires_at, created_at) "
+                "VALUES (?, ?, ?, ?, ?)",
+                (
+                    record["state"],
+                    record["app_id"],
+                    record["code_verifier"],
+                    record["expires_at"],
+                    record["created_at"],
+                ),
+            )
+            conn.commit()
+
+    def claim_lark_login_transaction(
+        self,
+        state: str,
+        app_id: str,
+        now: str,
+        claimed_at: str,
+    ) -> dict[str, Any] | None:
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "DELETE FROM lark_login_transactions WHERE expires_at <= ?",
+                (now,),
+            )
+            cursor = conn.execute(
+                "UPDATE lark_login_transactions SET consumed_at = ? "
+                "WHERE state = ? AND app_id = ? AND consumed_at IS NULL AND expires_at > ?",
+                (claimed_at, state, app_id, now),
+            )
+            if cursor.rowcount != 1:
+                conn.commit()
+                return None
+            row = conn.execute(
+                "SELECT state, app_id, code_verifier, expires_at, consumed_at, created_at "
+                "FROM lark_login_transactions WHERE state = ?",
+                (state,),
+            ).fetchone()
+            conn.commit()
+        return dict(row) if row is not None else None
+
+    def get_lark_login_transaction(self, state: str, now: str) -> dict[str, Any] | None:
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT state, app_id, code_verifier, expires_at, consumed_at, created_at "
+                "FROM lark_login_transactions "
+                "WHERE state = ? AND consumed_at IS NULL AND expires_at > ?",
+                (state, now),
+            ).fetchone()
+        return dict(row) if row is not None else None
 
     def create_sso_login_ticket(self, record: dict[str, Any]) -> None:
         with self._lock, self._connect() as conn:

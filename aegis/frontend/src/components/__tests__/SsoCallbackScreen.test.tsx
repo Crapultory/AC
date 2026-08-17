@@ -11,9 +11,9 @@ describe('SsoCallbackScreen', () => {
     vi.restoreAllMocks();
   });
 
-  it('exchanges the HttpOnly ticket and forwards the local auth response', async () => {
+  it('uses the shared callback exchange endpoint for identity authentication', async () => {
     const onComplete = vi.fn().mockResolvedValue(undefined);
-    global.fetch = vi.fn(async () => new Response(JSON.stringify({
+    const fetchSpy = vi.fn(async () => new Response(JSON.stringify({
       authenticated: true,
       access_token: 'local-jwt',
       token_type: 'bearer',
@@ -28,11 +28,15 @@ describe('SsoCallbackScreen', () => {
         is_admin: false,
       },
     }), { status: 200, headers: { 'Content-Type': 'application/json' } })) as typeof global.fetch;
+    global.fetch = fetchSpy;
 
     render(<SsoCallbackScreen onComplete={onComplete} onBackToLogin={vi.fn()} />);
 
     await waitFor(() => expect(onComplete).toHaveBeenCalledOnce());
-    expect((global.fetch as ReturnType<typeof vi.fn>).mock.calls[0][0]).toBe('/api/sso/exchange');
+    expect(fetchSpy).toHaveBeenCalledWith(
+      '/api/sso/exchange',
+      expect.objectContaining({ method: 'POST' }),
+    );
   });
 
   it('shows an upstream OIDC error without attempting token exchange', async () => {

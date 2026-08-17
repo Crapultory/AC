@@ -23,6 +23,9 @@ class AegisSettings:
     oidc_client_secret: str = ""
     oidc_redirect_uri: str = "http://127.0.0.1:9130/api/sso/callback"
     oidc_post_login_redirect: str = "/sso/callback"
+    lark_app_id: str = ""
+    lark_app_secret: str = ""
+    lark_redirect_uri: str = "http://127.0.0.1:9130/api/lark/callback"
     dist_dir: Path | None = None
 
 
@@ -48,6 +51,10 @@ def load_aegis_settings(
     oidc_post_login_redirect = (
         os.environ.get("OIDC_POST_LOGIN_REDIRECT") or "/sso/callback"
     ).strip()
+    lark_redirect_uri = (
+        os.environ.get("LARK_REDIRECT_URI")
+        or "http://127.0.0.1:9130/api/lark/callback"
+    ).strip()
 
     return AegisSettings(
         host=host,
@@ -63,6 +70,9 @@ def load_aegis_settings(
         oidc_client_secret=(os.environ.get("OIDC_CLIENT_SECRET") or "").strip(),
         oidc_redirect_uri=oidc_redirect_uri,
         oidc_post_login_redirect=oidc_post_login_redirect,
+        lark_app_id=(os.environ.get("LARK_APP_ID") or "").strip(),
+        lark_app_secret=(os.environ.get("LARK_APP_SECRET") or "").strip(),
+        lark_redirect_uri=lark_redirect_uri,
         dist_dir=dist_dir,
     )
 

@@ -39,7 +39,7 @@
 说明：
 
 - 登录方式为用户名/密码，成功后前端会保存后端签发的 JWT access token。
-- 登录页提供“SSO 认证登录”，通过 `/api/sso/start?sso=1` 进入 Aegis Portal；Portal 负责登录和多组织选择。
+- 登录页提供“Aegis SSO”和“Lark SSO”两个入口。Aegis SSO 通过 `/api/sso/start?sso=1` 进入 Aegis Portal；Lark SSO 通过 `/api/lark/start` 进入 Lark 授权。
 - 从 Portal“我的服务”进入时，Aegis 根路径接收 `organization_id + client_id` 并自动启动 OIDC；不读取或转发 `subscription_id`。
 - OIDC 回调页面为 `/sso/callback`，只兑换 HttpOnly 一次性票据，不在 URL 中保存 access token 或 refresh token。
 - 首次启动前设置 `AEGIS_BOOTSTRAP_ADMIN_PASSWORD`，系统仅在该 secret 存在时创建 `admin`；未设置时显示初始化提示且拒绝登录，不提供匿名管理员注册或固定默认密码。
@@ -72,6 +72,11 @@ Vite 已经代理 `/api` 和 `/health` 到 `http://127.0.0.1:9130`。
 [`../backend/README.md`](../backend/README.md)。注册回调固定为
 `http://127.0.0.1:9130/api/sso/callback`，回调成功后由前端处理
 `/sso/callback` 页面并进入 Overview。
+
+Lark SSO 还需要配置 `LARK_APP_ID`、`LARK_APP_SECRET` 和
+`LARK_REDIRECT_URI=http://127.0.0.1:9130/api/lark/callback`，并在 Lark
+开发者后台登记同一个完整回调地址、开启 `contact:user.email:readonly`
+权限。Lark 回调成功后同样进入 `/sso/callback`，由前端兑换现有 Aegis JWT。
 
 ## 常规功能页面实现规范
 

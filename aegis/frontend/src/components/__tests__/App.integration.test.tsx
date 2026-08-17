@@ -94,6 +94,7 @@ describe('Aegis App integration', () => {
     cleanup();
     global.fetch = originalFetch;
     globalThis.WebSocket = originalWebSocket;
+    vi.unstubAllGlobals();
     vi.useRealTimers();
     vi.restoreAllMocks();
   });
@@ -137,6 +138,46 @@ describe('Aegis App integration', () => {
     await waitFor(() => {
       expect(alertSpy).toHaveBeenCalledWith('{"detail":"用户名或密码错误"}');
     });
+  });
+
+  it('routes each SSO button to its provider start endpoint', async () => {
+    const assignSpy = vi.fn();
+    const originalWindow = window;
+    const mockedWindow = Object.create(originalWindow) as Window;
+    Object.defineProperty(mockedWindow, 'location', {
+      configurable: true,
+      value: {
+        assign: assignSpy,
+        pathname: '/',
+        search: '',
+      },
+    });
+    vi.stubGlobal('window', new Proxy(mockedWindow, {
+      get(target, property) {
+        const value = property === 'location'
+          ? target.location
+          : Reflect.get(originalWindow, property, originalWindow);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    }));
+
+    global.fetch = vi.fn(async (input) => {
+      const url = typeof input === 'string' ? input : input.toString();
+      if (url === '/api/auth/session') {
+        return jsonResponse({ authenticated: false });
+      }
+      throw new Error(`Unhandled request: GET ${url}`);
+    }) as typeof global.fetch;
+
+    render(<App />);
+
+    expect(await screen.findByRole('heading', { name: /sign in/i })).toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Aegis SSO' }));
+    expect(assignSpy).toHaveBeenLastCalledWith('/api/sso/start?sso=1');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Lark SSO' }));
+    expect(assignSpy).toHaveBeenLastCalledWith('/api/lark/start');
   });
 
   it('supports register, login, agent/rule CRUD, and admin user management', async () => {

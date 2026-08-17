@@ -979,7 +979,8 @@ export default function App() {
       <LoginScreen
         notice={authNotice}
         onSubmit={handleLogin}
-        onSsoLogin={() => window.location.assign('/api/sso/start?sso=1')}
+        onAegisSsoLogin={() => window.location.assign('/api/sso/start?sso=1')}
+        onLarkSsoLogin={() => window.location.assign('/api/lark/start')}
         onSwitchToRegister={() => navigateAuth('/register')}
         pending={authPending}
       />

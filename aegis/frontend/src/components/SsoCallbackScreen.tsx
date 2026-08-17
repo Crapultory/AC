@@ -69,7 +69,7 @@ export default function SsoCallbackScreen({ onComplete, onBackToLogin }: SsoCall
           </>
         ) : (
           <p className="mt-4 text-sm leading-6 text-slate-400" role="status">
-            正在通过 Aegis Portal 验证并建立本地会话，请稍候…
+            正在完成身份认证并建立本地会话，请稍候…
           </p>
         )}
       </div>

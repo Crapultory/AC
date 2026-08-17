@@ -135,6 +135,26 @@ roles are not mapped to Aegis administrator rights. New SSO users are enabled
 regular users with a random unusable local password; administrators may reset
 a password through the existing user-management API if local login is needed.
 
+## Lark SSO
+
+The login page also supports Lark OAuth login. Configure the Lark application
+credentials in the process environment and register the exact callback URL in
+the Lark developer console:
+
+```dotenv
+LARK_APP_ID=<Lark application App ID>
+LARK_APP_SECRET=<Lark application App Secret>
+LARK_REDIRECT_URI=http://127.0.0.1:9130/api/lark/callback
+```
+
+The Lark application must have the `contact:user.email:readonly` permission.
+The browser starts at `/api/lark/start`, and the backend exchanges the
+authorization code at Lark before requesting `/open-apis/authen/v1/user_info`.
+Lark users are matched to Aegis accounts by normalized email. A missing email,
+disabled local account, invalid state, or failed upstream request rejects the
+login. The Lark access and refresh tokens are not stored; successful logins
+reuse the existing Aegis SSO ticket and JWT exchange flow.
+
 The existing `HERMES_HOME/aegis.db` is migrated additively at startup. The
 `users` table gains nullable `oidc_subject`; `oidc_login_transactions` and
 `sso_login_tickets` are created if absent. Existing users and local passwords
