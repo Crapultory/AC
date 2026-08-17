@@ -11,14 +11,14 @@ import { STATUS_META, DOMAIN_META } from '../design/tokens';
 import { EmptyScan, isNoScan404 } from '../components/EmptyScan';
 
 const STATE_FILTERS = ['ALL', 'satisfied', 'partial', 'missing', 'extra'] as const;
-const SCAN_STAGES = ['发现资源', '解析配置', '提取证据', '映射本体', '评分', '渲染差异'];
+const SCAN_STAGES = ['Discover Resources', 'Parse Config', 'Extract Evidence', 'Map Ontology', 'Score', 'Render Diff'];
 const JOB_STAGE_LABELS: Record<string, string> = {
-  queued: '排队中',
-  collecting_evidence: '证据采集',
-  judging_with_ai: 'AI 判定',
-  scoring_and_gap_analysis: '差异评分',
-  completed: '完成',
-  failed: '失败',
+  queued: 'Queued',
+  collecting_evidence: 'Collecting Evidence',
+  judging_with_ai: 'AI Judgment',
+  scoring_and_gap_analysis: 'Diff Scoring',
+  completed: 'Completed',
+  failed: 'Failed',
 };
 
 export function DifferentiationOverviewPage() {
@@ -209,7 +209,7 @@ export function DifferentiationOverviewPage() {
   const remDomains = useMemo(() => ['ALL', ...Array.from(new Set((roadmap?.items || []).map((x: any) => x.domain)))], [roadmap]);
   const remSubcaps = useMemo(() => {
     const base = (roadmap?.items || []).filter((x: any) => remDomain === 'ALL' || x.domain === remDomain);
-    return [{ id: 'ALL', title: '全部二级功能' }, ...base.map((x: any) => ({ id: x.node_id, title: x.title }))];
+    return [{ id: 'ALL', title: 'All sub-capabilities' }, ...base.map((x: any) => ({ id: x.node_id, title: x.title }))];
   }, [roadmap, remDomain]);
 
   // 无扫描快照：overview 404 → 展示空态并允许一键 scan（沿用 hermes-agent 的空态卡片）
@@ -217,10 +217,10 @@ export function DifferentiationOverviewPage() {
     return (
       <div className="space-y-6">
         <div className="anim-fade-up">
-          <div className="eyebrow mb-1">Onboarding · 环境差异</div>
+          <div className="eyebrow mb-1">Onboarding · Environment Differentiation</div>
           <h1 className="text-3xl font-bold font-display text-gradient">Differentiation Overview</h1>
           <p className="text-sm text-[color:var(--ink-mid)] mt-1.5">
-            当前环境尚未生成扫描快照。运行一次 Environment Scan 后即可显示差异分析、缺口与建议。
+            This environment has not generated a scan snapshot yet. Run an Environment Scan to display the differentiation analysis, gaps, and recommendations.
           </p>
         </div>
         <EmptyScan
@@ -236,17 +236,17 @@ export function DifferentiationOverviewPage() {
     <div className="space-y-6">
       <div className="flex items-start justify-between gap-4 anim-fade-up flex-wrap">
         <div>
-          <div className="eyebrow mb-1">Onboarding · 环境差异</div>
+          <div className="eyebrow mb-1">Onboarding · Environment Differentiation</div>
           <h1 className="text-3xl font-bold font-display text-gradient">Differentiation Overview</h1>
           <p className="text-sm text-[color:var(--ink-mid)] mt-1.5">
-            真实环境 vs 标准本体差异分析 · 数据源：
+            Real environment vs standard ontology differentiation analysis · Source:
             <span className="font-mono text-[color:var(--ink-lo)]"> mapped / gap / scorecard</span>
           </p>
           <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
-            <span className="chip" style={{ background: 'rgba(56, 189, 248, 0.10)', color: '#7dd3fc', borderColor: 'rgba(56, 189, 248, 0.30)' }}>
+            <span className="chip" style={{ background: 'var(--accent-cyan-soft)', color: 'var(--accent-cyan)', borderColor: 'color-mix(in srgb, var(--accent-cyan) 30%, transparent)' }}>
               Schema · {overview?.standard_graph_schema || 'N/A'}
             </span>
-            <span className="chip" style={{ background: 'rgba(110, 231, 183, 0.08)', color: '#A8F5DA', borderColor: 'rgba(110, 231, 183, 0.24)' }}>
+            <span className="chip" style={{ background: 'color-mix(in srgb, var(--accent-emerald) 12%, transparent)', color: 'var(--accent-emerald)', borderColor: 'color-mix(in srgb, var(--accent-emerald) 26%, transparent)' }}>
               Source · {overview?.standard_graph_path?.split('/').pop() || 'N/A'}
             </span>
             {overview?.standard_graph_counts && (
@@ -260,18 +260,18 @@ export function DifferentiationOverviewPage() {
           <div className="flex items-center gap-2">
             <button className="btn-ghost" onClick={() => routerNavigate('/chat?quick=instruct_ontology')}>
               <MessageSquare className="h-4 w-4" />
-              咨询 AI
+              Ask AI
             </button>
             <button className="btn-primary" disabled={scanBusy} onClick={runScan}>
               <Radar className={`h-4 w-4 ${scanBusy ? 'animate-spin' : ''}`} />
-              {scanBusy ? '差异分析执行中…' : 'Run Environment Scan'}
+              {scanBusy ? 'Running differentiation analysis…' : 'Run Environment Scan'}
             </button>
           </div>
           {/* always show explicit scan feedback so the click is never silent */}
           {scanBusy ? (
             <div className="w-full glass px-3 py-2 text-left">
               <div className="flex items-center justify-between text-xs text-[color:var(--ink-lo)] mb-1.5">
-                <span>正在执行环境扫描与差异分析…</span>
+                <span>Running environment scan and differentiation analysis…</span>
                 <span>{scanState?.batch_label || (scanState?.stage ? (JOB_STAGE_LABELS[scanState.stage] || scanState.stage) : SCAN_STAGES[Math.max(stage, 0)])}</span>
               </div>
               <ProgressBar ratio={scanState?.progress ?? ((Math.max(stage, 0) + 1) / SCAN_STAGES.length)} color="#38bdf8" />
@@ -288,12 +288,12 @@ export function DifferentiationOverviewPage() {
             </div>
           ) : scanState?.status === 'completed' ? (
             <div className="w-full glass px-3 py-2 text-left">
-              <div className="text-xs text-[color:var(--ink-lo)]">最近一次扫描已完成</div>
+              <div className="text-xs text-[color:var(--ink-lo)]">Latest scan completed</div>
               <div className="text-sm text-[color:var(--ink-hi)] font-mono mt-0.5">{scanState?.scan_id} · score {scanState?.score}</div>
             </div>
           ) : scanError ? (
-            <div className="w-full glass px-3 py-2 text-left border border-[rgba(255, 92, 122, 0.35)]">
-              <div className="text-xs text-[#FF8CA0]">扫描失败</div>
+            <div className="w-full glass px-3 py-2 text-left border border-[color:color-mix(in_srgb,var(--accent-rose)_38%,transparent)]">
+              <div className="text-xs text-[color:var(--accent-rose)] font-semibold">Scan failed</div>
               <div className="text-xs text-[color:var(--ink-mid)] mt-0.5">{scanError}</div>
             </div>
           ) : null}
@@ -302,8 +302,8 @@ export function DifferentiationOverviewPage() {
             <div className="flex items-center gap-1.5">
               {SCAN_STAGES.map((s, i) => (
                 <div key={s} className="flex items-center gap-1.5">
-                  <span className="text-[10px]" style={{ color: i <= stage ? '#7dd3fc' : 'var(--ink-lo)' }}>{s}</span>
-                  {i < SCAN_STAGES.length - 1 && <span className="h-px w-3" style={{ background: i < stage ? '#7dd3fc' : 'var(--stroke-soft)' }} />}
+                  <span className="text-[10px]" style={{ color: i <= stage ? 'var(--accent-cyan)' : 'var(--ink-lo)' }}>{s}</span>
+                  {i < SCAN_STAGES.length - 1 && <span className="h-px w-3" style={{ background: i < stage ? 'var(--accent-cyan)' : 'var(--stroke-soft)' }} />}
                 </div>
               ))}
             </div>
@@ -316,7 +316,7 @@ export function DifferentiationOverviewPage() {
           <div>
             <div className="eyebrow">Completeness Score</div>
             <div className="mt-1 flex items-end gap-2">
-              <span className="text-4xl font-bold font-display text-gradient glow-text-cyan">{Number(score).toFixed(1)}</span>
+              <span className="data-figure">{Number(score).toFixed(1)}</span>
               <span className="text-lg text-[color:var(--ink-lo)] mb-1">/ 100</span>
             </div>
           </div>
@@ -333,7 +333,7 @@ export function DifferentiationOverviewPage() {
             <div className="eyebrow mb-2">Recent Scan History</div>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-2">
               {overview.recent_scans.slice(0, 5).map((s) => (
-                <div key={s.scan_id} className="rounded-lg border px-3 py-2" style={{ borderColor: 'rgba(255, 255, 255, 0.08)', background: 'rgba(6, 7, 10, 0.45)' }}>
+                <div key={s.scan_id} className="rounded-lg border px-3 py-2" style={{ borderColor: 'var(--stroke-soft)', background: 'var(--bg-glass)' }}>
                   <div className="text-[11px] text-[color:var(--ink-lo)] font-mono truncate">{s.scan_id}</div>
                   <div className="mt-1 text-sm text-[color:var(--ink-hi)] font-semibold">{typeof s.score === 'number' ? s.score.toFixed(1) : '—'}</div>
                   <div className="mt-1 text-[10px] text-[color:var(--ink-lo)]">S {s.status_counts?.satisfied ?? 0} · P {s.status_counts?.partial ?? 0} · M {s.status_counts?.missing ?? 0} · X {s.status_counts?.extra ?? 0}</div>
@@ -355,7 +355,7 @@ export function DifferentiationOverviewPage() {
         {STATE_FILTERS.map((s) => (
           <button key={s} className="btn-ghost" data-active={stateFilter === s} onClick={() => setStateFilter(s)}>
             {s !== 'ALL' && <span className="h-2 w-2 rounded-full" style={{ background: STATUS_META[s]?.color }} />}
-            {s === 'ALL' ? '全部' : STATUS_META[s].label}
+            {s === 'ALL' ? 'All' : STATUS_META[s].label}
           </button>
         ))}
       </div>
@@ -375,21 +375,21 @@ export function DifferentiationOverviewPage() {
       {/* Remediation */}
       <div className="glass p-5">
         <div className="flex items-center gap-2 mb-4 flex-wrap">
-          <ArrowUpRight className="h-4 w-4" style={{ color: '#7dd3fc' }} />
-          <h2 className="text-lg font-semibold text-[color:var(--ink-hi)]">整改建议 · Remediation</h2>
-          <span className="text-xs text-[color:var(--ink-lo)]">列出全部需整改二级功能及其 L3 对象 AI 缺口/建议</span>
+          <ArrowUpRight className="h-4 w-4" style={{ color: 'var(--accent-cyan)' }} />
+          <h2 className="text-lg font-semibold text-[color:var(--ink-hi)]">Remediation</h2>
+          <span className="text-xs text-[color:var(--ink-lo)]">Lists all sub-capabilities needing remediation and their L3 object AI gaps/recommendations</span>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-[180px_220px_1fr] gap-3 mb-4">
           <select className="input" value={remDomain} onChange={(e) => { setRemDomain(e.target.value); setRemSubcap('ALL'); }}>
-            {remDomains.map((d) => <option key={d} value={d}>{d === 'ALL' ? '全部顶级域' : `${d} · ${DOMAIN_META[d]?.label_zh || d}`}</option>)}
+            {remDomains.map((d) => <option key={d} value={d}>{d === 'ALL' ? 'All top-level domains' : `${d} · ${DOMAIN_META[d]?.label_zh || d}`}</option>)}
           </select>
           <select className="input" value={remSubcap} onChange={(e) => setRemSubcap(e.target.value)}>
             {remSubcaps.map((s: any) => <option key={s.id} value={s.id}>{s.title}</option>)}
           </select>
           <label className="glass flex items-center gap-2 px-3 py-2 rounded-xl border" style={{ borderColor: 'var(--stroke-soft)' }}>
             <Search className="h-4 w-4 text-[color:var(--ink-lo)]" />
-            <input className="bg-transparent outline-none w-full text-sm" placeholder="按二级功能 / L3对象 / AI缺口 / AI建议 关键字筛选" value={remQuery} onChange={(e) => setRemQuery(e.target.value)} />
+            <input className="bg-transparent outline-none w-full text-sm" placeholder="Filter by sub-capability / L3 object / AI gap / AI recommendation keyword" value={remQuery} onChange={(e) => setRemQuery(e.target.value)} />
           </label>
         </div>
 
@@ -398,7 +398,7 @@ export function DifferentiationOverviewPage() {
             const sm = STATUS_META[rec.status] || STATUS_META.partial;
             const dm = DOMAIN_META[rec.domain];
             const prio = rec.priority;
-            const prioColor: Record<string, string> = { immediate: '#FF5C7A', high: '#FFA33C', medium: '#38bdf8', low: '#6B7B99' };
+            const prioColor: Record<string, string> = { immediate: 'var(--accent-rose)', high: 'var(--accent-amber)', medium: 'var(--accent-blue)', low: 'var(--ink-lo)' };
             const mapped = mappedById[rec.node_id];
             const objectDetail = mapped?.object_detail || [];
             const objectGaps = objectDetail.filter((o: any) => (o.satisfaction ?? 0) < 0.95);
@@ -411,46 +411,48 @@ export function DifferentiationOverviewPage() {
                     <div className="text-xs font-mono text-[color:var(--ink-lo)] mt-0.5">{rec.node_id} · {dm?.label_zh || rec.domain}</div>
                   </div>
                   <div className="flex items-center gap-1.5 shrink-0">
-                    {prio && <span className="chip" style={{ background: `${prioColor[prio]}1a`, color: prioColor[prio], borderColor: `${prioColor[prio]}55`, textTransform: 'uppercase', fontSize: 10 }}>{prio}</span>}
+                    {prio && <span className="chip" style={{ background: `color-mix(in srgb, ${prioColor[prio]} 12%, transparent)`, color: prioColor[prio], borderColor: `color-mix(in srgb, ${prioColor[prio]} 34%, transparent)`, textTransform: 'uppercase', fontSize: 10 }}>{prio}</span>}
                     <span className={`chip ${sm.chip}`}>{sm.label}</span>
                   </div>
                 </div>
                 <div className="flex items-center gap-3 text-xs text-[color:var(--ink-lo)]">
-                  <span>权重 <span className="text-[color:var(--ink-hi)]">{rec.importance_weight}</span></span>
+                  <span>Weight <span className="text-[color:var(--ink-hi)]">{rec.importance_weight}</span></span>
                   <div className="flex-1"><ProgressBar ratio={rec.fulfillment_ratio ?? 0} color={sm.color} /></div>
                   <span>{Math.round((rec.fulfillment_ratio ?? 0) * 100)}%</span>
                 </div>
                 <div className="space-y-2 text-sm">
-                  {rec.gap && <RecRow label="缺口" color="#FFA33C">{rec.gap}</RecRow>}
-                  {rec.action && <RecRow label="建议" color="#6ee7b7">{rec.action}</RecRow>}
-                  {rec.ai_object_recommendations?.length > 0 && <RecRow label="AI对象级建议" color="#7dd3fc">{rec.ai_object_recommendations.join('；')}</RecRow>}
+                  {rec.gap && <RecRow label="Gap" color="var(--accent-amber)">{rec.gap}</RecRow>}
+                  {rec.action && <RecRow label="Recommendation" color="var(--accent-emerald)">{rec.action}</RecRow>}
+                  {rec.ai_object_recommendations?.length > 0 && <RecRow label="AI Object-level Recommendations" color="var(--accent-cyan)">{rec.ai_object_recommendations.join('; ')}</RecRow>}
                 </div>
                 <div className="rounded-lg border p-3" style={{ borderColor: 'var(--stroke-soft)', background: 'rgba(255, 255, 255, 0.02)' }}>
                   <div className="flex items-center justify-between gap-3 mb-2">
-                    <div className="eyebrow">L3 对象整改清单 ({objectGaps.length})</div>
+                    <div className="eyebrow">L3 Object Remediation List ({objectGaps.length})</div>
                     <button className="btn-ghost" style={{ padding: '4px 10px', fontSize: 12 }} onClick={() => setExpandedRem((prev) => ({ ...prev, [rec.node_id]: !expanded }))}>
-                      {expanded ? '收起' : '展开详情'}
+                      {expanded ? 'Collapse' : 'Expand Details'}
                     </button>
                   </div>
                   {expanded ? (
                     <div className="space-y-2 max-h-[360px] overflow-y-auto pr-1">
                       {objectGaps.length === 0 ? (
-                        <div className="text-xs text-[color:var(--ink-lo)] italic">无需要整改的三级对象</div>
+                        <div className="text-xs text-[color:var(--ink-lo)] italic">No L3 objects need remediation</div>
                       ) : objectGaps.map((o: any) => (
-                        <div key={o.object_id} className="rounded-md border p-2.5" style={{ borderColor: 'rgba(255, 255, 255, 0.08)' }}>
+                        <div key={o.object_id} className="rounded-md border p-2.5" style={{ borderColor: 'var(--stroke-soft)' }}>
                           <div className="flex items-start justify-between gap-2">
-                            <button className="text-left text-sm text-[color:var(--ink-hi)] hover:text-[#7dd3fc]" onClick={() => navigate(o.object_id)}>{o.name_zh}</button>
-                            <span className="chip" style={{ fontSize: 10, background: `${((o.satisfaction ?? 0) > 0 ? '#fcd34d' : '#fda4af')}1a`, color: (o.satisfaction ?? 0) > 0 ? '#fcd34d' : '#fda4af', borderColor: `${((o.satisfaction ?? 0) > 0 ? '#fcd34d' : '#fda4af')}55` }}>{(o.satisfaction ?? 0) > 0 ? '部分满足' : '缺失'}</span>
+                            <button className="text-left text-sm text-[color:var(--ink-hi)] hover:text-[color:var(--accent-cyan)]" onClick={() => navigate(o.object_id)}>{o.name_zh}</button>
+                            {(() => { const sc = (o.satisfaction ?? 0) > 0 ? 'var(--accent-amber)' : 'var(--accent-rose)'; return (
+                            <span className="chip" style={{ fontSize: 10, background: `color-mix(in srgb, ${sc} 12%, transparent)`, color: sc, borderColor: `color-mix(in srgb, ${sc} 34%, transparent)` }}>{(o.satisfaction ?? 0) > 0 ? 'Partial' : 'Missing'}</span>
+                            ); })()}
                           </div>
-                          {o.reason && <div className="mt-1.5 text-xs text-[color:var(--ink-mid)]"><span className="text-[#FFA33C] font-semibold">AI缺口：</span>{o.reason}</div>}
-                          {o.recommendation && <div className="mt-1 text-xs text-[color:var(--ink-mid)]"><span className="text-[#6ee7b7] font-semibold">AI建议：</span>{o.recommendation}</div>}
+                          {o.reason && <div className="mt-1.5 text-xs text-[color:var(--ink-mid)]"><span className="text-[color:var(--accent-amber)] font-semibold">AI Gap: </span>{o.reason}</div>}
+                          {o.recommendation && <div className="mt-1 text-xs text-[color:var(--ink-mid)]"><span className="text-[color:var(--accent-emerald)] font-semibold">AI Recommendation: </span>{o.recommendation}</div>}
                         </div>
                       ))}
                     </div>
                   ) : (
                     <div className="flex flex-wrap gap-2">
                       {objectGaps.slice(0, 6).map((o: any) => (
-                        <button key={o.object_id} className="chip" style={{ background: 'rgba(255, 255, 255, 0.04)', color: 'var(--ink-mid)', borderColor: 'rgba(255, 255, 255, 0.08)' }} onClick={() => navigate(o.object_id)}>
+                        <button key={o.object_id} className="chip" style={{ background: 'color-mix(in srgb, var(--ink-hi) 5%, transparent)', color: 'var(--ink-mid)', borderColor: 'var(--stroke-soft)' }} onClick={() => navigate(o.object_id)}>
                           {o.name_zh}
                         </button>
                       ))}
@@ -470,7 +472,7 @@ export function DifferentiationOverviewPage() {
 function RecRow({ label, color, children }: { label: string; color: string; children: React.ReactNode }) {
   return (
     <div className="flex gap-2 leading-relaxed">
-      <span className="shrink-0 text-[11px] font-semibold mt-0.5 px-1.5 rounded" style={{ color, background: `${color}14` }}>{label}</span>
+      <span className="shrink-0 text-[11px] font-semibold mt-0.5 px-1.5 rounded" style={{ color, background: `color-mix(in srgb, ${color} 12%, transparent)` }}>{label}</span>
       <span className="text-[color:var(--ink-mid)]">{children}</span>
     </div>
   );

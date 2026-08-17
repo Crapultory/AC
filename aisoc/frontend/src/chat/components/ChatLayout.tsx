@@ -39,7 +39,7 @@ export function ChatLayout({
         <>
           {/* 左：会话列表（折叠态收缩为一条窄边） */}
           <aside
-            aria-label="会话列表"
+            aria-label="Session list"
             className={`relative flex h-full shrink-0 flex-col overflow-hidden border-r border-[var(--aisoc-border)] bg-[var(--aisoc-bg-alt)] transition-[width] duration-150 ${
               sidebarCollapsed ? 'w-7' : 'w-[260px]'
             }`}
@@ -48,9 +48,9 @@ export function ChatLayout({
               <button
                 type="button"
                 onClick={onToggleSidebar}
-                aria-label="展开会话列表"
+                aria-label="Expand session list"
                 aria-expanded={false}
-                title="展开会话列表"
+                title="Expand session list"
                 className="flex h-7 w-7 items-center justify-center text-[var(--aisoc-muted)] transition-colors hover:bg-[var(--aisoc-panel-strong)] hover:text-[var(--aisoc-accent)]"
               >
                 <PanelLeftOpen className="h-3.5 w-3.5" aria-hidden="true" />
@@ -61,7 +61,7 @@ export function ChatLayout({
           </aside>
 
           {/* 中：消息流 + composer */}
-          <section aria-label="对话" className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
+          <section aria-label="Conversation" className="flex h-full min-w-0 flex-1 flex-col overflow-hidden">
             {children}
           </section>
         </>
@@ -70,7 +70,7 @@ export function ChatLayout({
       {/* 右：drawer（Workflow / 文件预览）；全屏态占满整行 */}
       {showDrawer ? (
         <aside
-          aria-label="会话侧栏"
+          aria-label="Session sidebar"
           className={`flex h-full shrink-0 flex-col overflow-hidden border-l border-[var(--aisoc-border)] bg-[var(--aisoc-bg-alt)] ${
             isFullscreen ? 'w-full' : 'w-[420px]'
           }`}

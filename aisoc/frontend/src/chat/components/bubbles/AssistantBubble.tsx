@@ -84,7 +84,7 @@ export function AssistantBubble({ message, onOpenFile }: AssistantBubbleProps) {
           <ChatMarkdown content={message.text} />
           {message.pending ? (
             <span
-              aria-label="正在生成"
+              aria-label="Generating"
               className="ml-0.5 inline-block h-3.5 w-[7px] translate-y-[2px] animate-pulse rounded-[1px] bg-[var(--aisoc-accent)]"
             />
           ) : null}

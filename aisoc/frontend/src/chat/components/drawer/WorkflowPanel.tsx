@@ -1,6 +1,7 @@
 /**
- * 会话 workflow 图（移植自 aegis SessionWorkflow，按 MASTER v3 简化视觉：
- * 无发光/辉光，保留节点/边/状态色、缩放平移、长工具链折叠展开与节点详情）。
+ * 会话 workflow 图（移植自 aegis SessionWorkflow，按 MASTER v4 "Command Deck" 视觉：
+ * 节点/边/状态色走统一 --aisoc-* 令牌随深/浅主题重着色，克制辉光；
+ * 保留缩放平移、长工具链折叠展开与节点详情）。
  */
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Focus, RotateCcw, ZoomIn, ZoomOut } from 'lucide-react';
@@ -70,7 +71,7 @@ export function WorkflowPanel({ conversation }: { conversation?: Conversation })
     () =>
       projectSessionWorkflow({
         conversationId: conversation?.id || 'empty',
-        title: conversation?.title || '当前会话',
+        title: conversation?.title || 'Current session',
         messages: conversation?.messages || [],
         trace: conversation?.workflowTrace || [],
         partial: legacyTraceAvailable,
@@ -223,18 +224,18 @@ export function WorkflowPanel({ conversation }: { conversation?: Conversation })
       >
         {/* 缩放控制 */}
         <div className="absolute left-2 top-2 z-20 flex items-center gap-0.5 rounded-[var(--aisoc-radius-sm)] border border-[var(--aisoc-border)] bg-[var(--aisoc-panel-strong)] p-0.5">
-          <button type="button" aria-label="放大" onClick={() => zoomBy(1.15)} className="flex h-6 w-6 items-center justify-center text-[var(--aisoc-muted)] hover:text-[var(--aisoc-accent)]">
+          <button type="button" aria-label="Zoom in" onClick={() => zoomBy(1.15)} className="flex h-6 w-6 items-center justify-center text-[var(--aisoc-muted)] hover:text-[var(--aisoc-accent)]">
             <ZoomIn className="h-3 w-3" aria-hidden="true" />
           </button>
-          <button type="button" aria-label="缩小" onClick={() => zoomBy(0.87)} className="flex h-6 w-6 items-center justify-center text-[var(--aisoc-muted)] hover:text-[var(--aisoc-accent)]">
+          <button type="button" aria-label="Zoom out" onClick={() => zoomBy(0.87)} className="flex h-6 w-6 items-center justify-center text-[var(--aisoc-muted)] hover:text-[var(--aisoc-accent)]">
             <ZoomOut className="h-3 w-3" aria-hidden="true" />
           </button>
-          <button type="button" aria-label="适配视图" onClick={fitGraph} className="flex h-6 w-6 items-center justify-center text-[var(--aisoc-muted)] hover:text-[var(--aisoc-accent)]">
+          <button type="button" aria-label="Fit view" onClick={fitGraph} className="flex h-6 w-6 items-center justify-center text-[var(--aisoc-muted)] hover:text-[var(--aisoc-accent)]">
             <Focus className="h-3 w-3" aria-hidden="true" />
           </button>
           <button
             type="button"
-            aria-label="重置视图"
+            aria-label="Reset view"
             onClick={() => {
               setUserMovedViewport(true);
               setTransform({ x: 36, y: 36, scale: 1 });
@@ -248,7 +249,7 @@ export function WorkflowPanel({ conversation }: { conversation?: Conversation })
           </span>
         </div>
 
-        <svg className="absolute inset-0 h-full w-full overflow-visible" aria-label="会话执行图">
+        <svg className="absolute inset-0 h-full w-full overflow-visible" aria-label="Session Execution Graph">
           <g transform={`translate(${transform.x} ${transform.y}) scale(${transform.scale})`}>
             {graph.edges.map((edge) => {
               const from = nodeById.get(edge.from);
@@ -301,8 +302,8 @@ export function WorkflowPanel({ conversation }: { conversation?: Conversation })
                   data-node-kind={node.kind}
                   aria-label={
                     node.kind === 'tool-group'
-                      ? `展开 ${node.hiddenToolCount || 0} 个折叠工具`
-                      : `查看节点 ${node.label}`
+                      ? `Expand ${node.hiddenToolCount || 0} collapsed tools`
+                      : `View node ${node.label}`
                   }
                   transform={`translate(${node.x} ${node.y})`}
                   className="cursor-pointer outline-none"
@@ -361,7 +362,7 @@ export function WorkflowPanel({ conversation }: { conversation?: Conversation })
               <div className="font-mono text-[10px] uppercase tracking-[0.2em] text-[var(--aisoc-muted)]">
                 Awaiting First Turn
               </div>
-              <div className="mt-2 text-[11px] text-[var(--aisoc-muted)]">执行分支将随会话实时生长。</div>
+              <div className="mt-2 text-[11px] text-[var(--aisoc-muted)]">Execution branches grow in real time as the session progresses.</div>
             </div>
           </div>
         ) : null}

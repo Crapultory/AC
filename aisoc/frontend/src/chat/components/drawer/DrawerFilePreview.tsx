@@ -60,7 +60,7 @@ export function DrawerFilePreview({ path, refreshNonce = 0 }: DrawerFilePreviewP
       })
       .catch((requestError: unknown) => {
         if (!cancelled) {
-          setError(requestError instanceof Error ? requestError.message : '文件预览加载失败。');
+          setError(requestError instanceof Error ? requestError.message : 'Failed to load file preview.');
         }
       })
       .finally(() => {
@@ -75,7 +75,7 @@ export function DrawerFilePreview({ path, refreshNonce = 0 }: DrawerFilePreviewP
     return (
       <div className="flex items-center gap-2 p-4 font-mono text-[10px] uppercase tracking-wider text-[var(--aisoc-muted)]" role="status">
         <LoaderCircle className="h-3 w-3 animate-spin" aria-hidden="true" />
-        加载文件预览中…
+        Loading file preview…
       </div>
     );
   }
@@ -89,7 +89,7 @@ export function DrawerFilePreview({ path, refreshNonce = 0 }: DrawerFilePreviewP
   if (!payload || !payload.content) {
     return (
       <div className="p-4 font-mono text-[10px] uppercase tracking-wider text-[var(--aisoc-muted)]" role="status">
-        二进制文件 — 无法预览
+        Binary file — cannot preview
       </div>
     );
   }
@@ -117,7 +117,7 @@ export function DrawerFilePreview({ path, refreshNonce = 0 }: DrawerFilePreviewP
   return (
     <iframe
       ref={iframeRef}
-      title={payload.title || 'AISOC 文件预览'}
+      title={payload.title || 'AISOC file preview'}
       data-testid="drawer-html-frame"
       className="h-full w-full border-0 bg-white"
       sandbox="allow-scripts allow-forms"

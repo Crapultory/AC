@@ -33,7 +33,7 @@
   --color-aisoc-success: var(--aisoc-success);
   --color-aisoc-warning: var(--aisoc-warning);
   --color-aisoc-danger: var(--aisoc-danger);
-  --font-display: "Space Grotesk", "Inter", sans-serif;
+  --font-display: "Chakra Petch", "Space Grotesk", "Inter", sans-serif;
   --font-mono-aisoc: "JetBrains Mono", ui-monospace, monospace;
 }
 
@@ -112,28 +112,42 @@ h1,
 h2,
 h3,
 h4 {
-  font-family: "Space Grotesk", "Inter", sans-serif;
+  font-family: var(--font-display);
   letter-spacing: -0.01em;
 }
 
 h1 {
   margin: 0 0 10px;
-  font-size: calc(30px * var(--density-scale));
-  line-height: 1.1;
+  font-size: var(--fs-h1);
+  line-height: var(--lh-tight);
 }
 
 h2 {
   margin: 0 0 8px;
-  font-size: calc(28px * var(--density-scale));
+  font-size: var(--fs-h2);
+  line-height: var(--lh-tight);
 }
 
+h3 {
+  margin: 0 0 6px;
+  font-size: var(--fs-h3);
+  line-height: var(--lh-snug);
+}
+
+h4 {
+  margin: 0 0 6px;
+  font-size: var(--fs-h4);
+  line-height: var(--lh-snug);
+}
+
+/* 品牌 kicker —— 眉标的强调变体:共用 eyebrow 字号,但用 accent 色 + 更重字重 */
 .brand-kicker {
   margin: 0 0 8px;
-  font-family: "JetBrains Mono", ui-monospace, monospace;
-  font-size: calc(11px * var(--density-scale));
+  font-family: var(--font-mono);
+  font-size: var(--fs-eyebrow);
   font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.22em;
+  letter-spacing: 0.2em;
   color: var(--aisoc-accent);
 }
 
@@ -161,8 +175,7 @@ select,
   padding: calc(10px * var(--density-scale)) calc(12px * var(--density-scale));
   font-size: calc(15px * var(--density-scale));
   color: var(--aisoc-text);
-  background:
-    linear-gradient(180deg, rgba(10, 14, 20, 0.82), rgba(7, 9, 14, 0.9));
+  background: var(--field-bg);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03);
   transition: border-color var(--aisoc-transition), box-shadow var(--aisoc-transition), background var(--aisoc-transition), transform var(--aisoc-transition);
 }
@@ -173,7 +186,7 @@ select:focus {
   outline: none;
   border-color: var(--aisoc-border-strong);
   box-shadow: 0 0 0 3px var(--aisoc-accent-soft), 0 10px 24px rgba(6, 8, 12, 0.34);
-  background: linear-gradient(180deg, rgba(12, 16, 24, 0.96), rgba(8, 11, 16, 0.98));
+  background: var(--field-bg-focus);
 }
 
 /* :not(.chat-shell button) 排除 aisoc/frontend/src/chat 模块下的按钮：这段是
@@ -200,7 +213,7 @@ select:focus {
   font-weight: 700;
   cursor: pointer;
   color: var(--aisoc-muted);
-  background: var(--aisoc-bg);
+  background: var(--control-bg);
   transition: transform var(--aisoc-transition), box-shadow var(--aisoc-transition), border-color var(--aisoc-transition), filter var(--aisoc-transition), color var(--aisoc-transition), background var(--aisoc-transition);
 }
 
@@ -214,7 +227,7 @@ select:focus {
 ):not(.chat-shell button):hover {
   border-color: rgba(34, 211, 238, 0.45);
   color: var(--aisoc-text);
-  background: rgba(8, 12, 20, 0.98);
+  background: var(--control-bg-hover);
 }
 
 :is(
@@ -259,7 +272,7 @@ select:focus {
 }
 
 .ghost-button {
-  background: linear-gradient(180deg, rgba(10, 13, 20, 0.9), rgba(7, 9, 14, 0.92));
+  background: var(--control-bg);
   color: var(--aisoc-text);
   border-color: var(--aisoc-border);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.03), 0 10px 24px rgba(3, 4, 6, 0.28);
@@ -288,9 +301,7 @@ select:focus {
 .cyber-panel,
 .panel,
 .card {
-  background:
-    linear-gradient(180deg, rgba(8, 11, 16, 0.86), rgba(6, 8, 12, 0.92)),
-    var(--aisoc-line);
+  background: var(--bg-glass);
   border: 1px solid var(--aisoc-border);
   border-radius: var(--aisoc-radius-md);
   box-shadow: var(--aisoc-shadow-soft);
@@ -349,7 +360,7 @@ select:focus {
 .cyber-code {
   margin: 0;
   padding: 10px;
-  background: linear-gradient(180deg, rgba(5, 7, 9, 0.96), rgba(6, 8, 11, 0.92));
+  background: var(--surface-inset);
   border: 1px solid rgba(34, 211, 238, 0.14);
   border-radius: 8px;
   white-space: pre-wrap;
@@ -417,7 +428,7 @@ select:focus {
 .settings-runtime-grid > div {
   min-width: 0;
   padding: 14px;
-  background: rgba(6, 7, 11, 0.92);
+  background: var(--surface-inset);
 }
 
 .settings-runtime-grid dt {
@@ -587,21 +598,21 @@ select:focus {
   text-align: left;
   color: #cbd5e1;
   border-color: rgba(34, 211, 238, 0.12);
-  background: linear-gradient(180deg, rgba(9, 13, 19, 0.76), rgba(7, 9, 13, 0.86));
+  background: var(--control-bg);
   box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.02);
 }
 
 .memory-nav button:hover {
   color: #f1f5f9;
   border-color: rgba(34, 211, 238, 0.24);
-  background: linear-gradient(180deg, rgba(12, 15, 22, 0.88), rgba(8, 11, 16, 0.94));
+  background: var(--control-bg-hover);
   box-shadow: 0 12px 22px rgba(6, 8, 11, 0.28), inset 0 1px 0 rgba(255, 255, 255, 0.03);
 }
 
 .memory-nav button.active {
   color: #f1f5f9;
   border-color: rgba(34, 211, 238, 0.36);
-  background: linear-gradient(180deg, rgba(14, 19, 28, 0.92), rgba(9, 12, 18, 0.96));
+  background: var(--control-bg-hover);
   box-shadow:
     inset 0 0 0 1px rgba(103, 232, 249, 0.12),
     0 0 0 1px rgba(34, 211, 238, 0.16),
@@ -922,7 +933,7 @@ select:focus {
   padding: 8px 10px;
   border: 1px solid rgba(34, 211, 238, 0.12);
   border-radius: 10px;
-  background: rgba(7, 8, 12, 0.42);
+  background: var(--field-bg);
 }
 
 .sessions-message-stream .detail-message p {
@@ -1160,7 +1171,7 @@ select:focus {
 .cron-history-row {
   width: 100%;
   border: 1px solid rgba(34, 211, 238, 0.12);
-  background: linear-gradient(180deg, rgba(9, 12, 18, 0.86), rgba(7, 9, 13, 0.92));
+  background: var(--control-bg);
   color: #cbd5e1;
   display: grid;
   grid-template-columns: auto minmax(0, 1fr) auto;
@@ -1250,9 +1261,7 @@ select:focus {
   max-height: 82vh;
   display: grid;
   grid-template-rows: auto 1fr;
-  background:
-    linear-gradient(180deg, rgba(8, 10, 15, 0.98), rgba(6, 7, 10, 0.99)),
-    var(--aisoc-line);
+  background: var(--surface-modal);
   border: 1px solid rgba(34, 211, 238, 0.2);
   border-radius: var(--aisoc-radius-md);
   box-shadow: 0 0 0 1px rgba(34, 211, 238, 0.1), 0 26px 58px rgba(3, 4, 6, 0.7);
@@ -1462,7 +1471,7 @@ select:focus {
   padding: calc(2px * var(--density-scale)) calc(8px * var(--density-scale));
   min-width: calc(48px * var(--density-scale));
   color: #e2e8f0;
-  background: linear-gradient(180deg, rgba(15, 20, 30, 0.92), rgba(10, 13, 19, 0.96));
+  background: var(--control-bg);
 }
 
 .skills-detail-pane {
@@ -1482,7 +1491,7 @@ select:focus {
 .skills-appendix-content pre {
   margin: 0;
   padding: calc(10px * var(--density-scale));
-  background: rgba(6, 7, 10, 0.9);
+  background: var(--surface-inset);
   border: 1px solid rgba(34, 211, 238, 0.22);
   border-radius: 8px;
   white-space: pre-wrap;
@@ -1736,7 +1745,7 @@ select:focus {
   padding: 16px 20px;
   border: 1px solid var(--aisoc-border);
   border-radius: var(--aisoc-radius-md);
-  background: rgba(5, 7, 9, 0.6);
+  background: var(--bg-glass-strong);
 }
 
 .wiki-detail-content::-webkit-scrollbar { width: 6px; }
@@ -1769,7 +1778,7 @@ select:focus {
   font-family: "JetBrains Mono", ui-monospace, Menlo, monospace;
   font-size: 0.88em;
   padding: 2px 6px;
-  background: rgba(0, 0, 0, 0.3);
+  background: var(--surface-inset);
   border: 1px solid rgba(255, 255, 255, 0.06);
   border-radius: 3px;
   color: var(--aisoc-accent);
@@ -1778,7 +1787,7 @@ select:focus {
 .wiki-detail-content pre {
   margin: 0.8em 0;
   padding: 12px 14px;
-  background: rgba(5, 7, 9, 0.92);
+  background: var(--surface-inset);
   border: 1px solid var(--aisoc-border);
   border-radius: var(--aisoc-radius-sm);
   overflow-x: auto;
@@ -1812,7 +1821,7 @@ select:focus {
   text-align: left;
 }
 .wiki-detail-content th {
-  background: rgba(0, 0, 0, 0.25);
+  background: var(--surface-inset);
   color: var(--aisoc-muted);
   font-weight: 600;
 }
@@ -1863,7 +1872,7 @@ select:focus {
   border-radius: var(--aisoc-radius-sm);
   overflow: hidden;
   border: 1px solid var(--aisoc-border);
-  background: rgba(7, 9, 13, 0.82);
+  background: var(--field-bg);
 }
 
 .table th,
@@ -1882,7 +1891,7 @@ select:focus {
 .detail-panel table th {
   color: var(--aisoc-accent-strong);
   font-weight: 600;
-  background: rgba(12, 16, 24, 0.72);
+  background: var(--surface-inset);
 }
 
 .badge,
@@ -1894,7 +1903,7 @@ select:focus {
   padding: calc(2px * var(--density-scale)) calc(10px * var(--density-scale));
   border-radius: 999px;
   border: 1px solid var(--aisoc-border);
-  background: rgba(13, 16, 25, 0.62);
+  background: var(--badge-bg);
   color: var(--aisoc-accent);
   font-size: calc(12px * var(--density-scale));
   font-weight: 600;

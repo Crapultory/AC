@@ -51,22 +51,22 @@ export function AttachmentChips({ attachments, onRemove, onRetry }: AttachmentCh
           </span>
           <span className="shrink-0 tabular-nums">{formatSize(attachment.file.size)}</span>
           {attachment.status === 'uploading' ? (
-            <LoaderCircle className="h-3 w-3 shrink-0 animate-spin text-[var(--aisoc-accent)]" aria-label="上传中" />
+            <LoaderCircle className="h-3 w-3 shrink-0 animate-spin text-[var(--aisoc-accent)]" aria-label="Uploading" />
           ) : null}
           {attachment.status === 'failed' ? (
             <button
               type="button"
               onClick={() => onRetry(attachment.localId)}
-              title={attachment.error || '重试上传'}
+              title={attachment.error || 'Retry upload'}
               className="shrink-0 font-bold hover:text-[var(--aisoc-text)]"
             >
-              重试
+              Retry
             </button>
           ) : null}
           <button
             type="button"
             onClick={() => onRemove(attachment.localId)}
-            aria-label={`移除 ${attachment.file.name}`}
+            aria-label={`Remove ${attachment.file.name}`}
             className="shrink-0 hover:text-[var(--aisoc-text)]"
           >
             <X className="h-3 w-3" aria-hidden="true" />

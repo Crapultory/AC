@@ -56,7 +56,7 @@ export function useQuickCommands(enabled: boolean): {
         if (!cancelled) setCommands(loaded);
       })
       .catch(() => {
-        if (!cancelled) setError('快捷指令加载失败。');
+        if (!cancelled) setError('Failed to load Quick Commands.');
       })
       .finally(() => {
         if (!cancelled) setLoading(false);
@@ -106,12 +106,12 @@ export function QuickCommandMenu({
     <div
       id="aisoc-quick-command-listbox"
       role="listbox"
-      aria-label="可用快捷指令"
+      aria-label="Available Quick Commands"
       className="absolute bottom-full left-0 z-[var(--aisoc-z-drawer)] mb-1.5 max-h-56 w-full max-w-md overflow-y-auto rounded-[var(--aisoc-radius-md)] border border-[var(--aisoc-border)] bg-[var(--aisoc-panel-strong)] py-1 shadow-[var(--aisoc-shadow-soft)] backdrop-blur"
     >
       {loading ? (
         <div className="px-3 py-2 font-mono text-[10px] uppercase tracking-wider text-[var(--aisoc-muted)]" role="status">
-          加载快捷指令中…
+          Loading Quick Commands…
         </div>
       ) : null}
       {error ? (
@@ -121,7 +121,7 @@ export function QuickCommandMenu({
       ) : null}
       {!loading && !error && commands.length === 0 ? (
         <div className="px-3 py-2 font-mono text-[10px] uppercase tracking-wider text-[var(--aisoc-muted)]">
-          无匹配指令
+          No matching commands
         </div>
       ) : null}
       {!loading && !error
@@ -151,7 +151,7 @@ export function QuickCommandMenu({
                   {command.name}
                 </span>
                 <span className="block truncate text-[10px] text-[var(--aisoc-muted)]">
-                  {command.desc || '无描述'}
+                  {command.desc || 'No description'}
                 </span>
               </span>
               <span className="shrink-0 font-mono text-[9px] uppercase tracking-wider text-[var(--aisoc-muted)]">

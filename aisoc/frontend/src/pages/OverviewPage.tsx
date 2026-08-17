@@ -1,5 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState } from "react";
 
+import { useChartTheme } from "../components/charts/hudChartInternals";
+import { useCountUp } from "../design/motion";
 import {
   getCronTokenDistribution,
   getCronjobHistoryDrilldown,
@@ -29,6 +31,34 @@ import {
   type TokenTrendPoint,
 } from "../lib/overview";
 import "./OverviewPageReplica.css";
+
+// Recharts HUD 图表懒加载 —— 与外壳分包,首屏先绘壳。图表在客户端挂载后渲染
+// (ResponsiveContainer 在 SSR / renderToStaticMarkup 下为空,不抛错,测试仍绿)。
+const HudBarChart = lazy(() =>
+  import("../components/charts/HudBarChart").then((m) => ({ default: m.HudBarChart })),
+);
+const HudDonut = lazy(() =>
+  import("../components/charts/HudDonut").then((m) => ({ default: m.HudDonut })),
+);
+
+/** 图表懒加载占位:等高骨架,避免布局跳动。 */
+function ChartFallback({ height }: { height: number }) {
+  return <div className="chart-skeleton" style={{ height }} aria-hidden="true" />;
+}
+
+/** KPI 数字滚动:数值可用则 count-up 到目标;不可用显示 "--"。守 reduced-motion(useCountUp 内已处理)。 */
+function AnimatedStat({
+  value,
+  render,
+}: {
+  value: number | undefined | null;
+  render?: (n: number) => string;
+}) {
+  const isNum = typeof value === "number" && Number.isFinite(value);
+  const animated = useCountUp(isNum ? (value as number) : 0, 900);
+  if (!isNum) return <>--</>;
+  return <>{render ? render(animated) : Math.round(animated).toLocaleString("en-US")}</>;
+}
 
 type OverviewData = {
   status?: OverviewStatus;
@@ -136,9 +166,6 @@ const defaultOverviewInteractionDeps: OverviewInteractionDeps = {
   getKeywordSessionsDrilldown,
 };
 
-const CRON_COLORS = ["#38bdf8", "#6ee7b7", "#f97316", "#A855F7", "#F59E0B", "#EC4899", "#06B6D4", "#84CC16"];
-const SOURCE_COLORS = ["#38bdf8", "#A855F7", "#6ee7b7", "#f97316", "#facc15"];
-const MODEL_COLORS = ["#38bdf8", "#A855F7", "#6ee7b7", "#F59E0B", "#EC4899", "#f97316", "#06B6D4", "#84CC16", "#facc15", "#6366F1"];
 
 function formatNumber(value: number): string {
   return new Intl.NumberFormat("en-US").format(value);
@@ -247,256 +274,6 @@ function resolveEventIcon(icon: string | undefined): string {
   };
   if (!icon) return "📌";
   return iconMap[icon] ?? icon;
-}
-
-function drawTrendChart(canvas: HTMLCanvasElement, points: TokenTrendPoint[]): void {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  const dpr = window.devicePixelRatio || 1;
-  // Read the canvas's own laid-out width (CSS width:100%). Do NOT set
-  // canvas.style.width from the parent clientWidth — that includes the
-  // parent padding and feeds back, widening the chart on every redraw.
-  const width = Math.floor(canvas.clientWidth || canvas.parentElement?.clientWidth || 640);
-  const height = 240;
-  canvas.width = Math.floor(width * dpr);
-  canvas.height = Math.floor(height * dpr);
-  canvas.style.height = `${height}px`;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, width, height);
-
-  if (!points.length) return;
-
-  const max = Math.max(...points.map((point) => point.total_tokens), 1);
-  const pad = { top: 20, right: 16, bottom: 38, left: 56 };
-  const chartW = width - pad.left - pad.right;
-  const chartH = height - pad.top - pad.bottom;
-  const gap = chartW / points.length;
-  const barW = Math.min(28, gap * 0.58);
-
-  ctx.font = '10px "JetBrains Mono", monospace';
-  ctx.textAlign = "right";
-  for (let i = 0; i <= 4; i += 1) {
-    const y = pad.top + (chartH / 4) * i;
-    const val = max * (1 - i / 4);
-    ctx.fillStyle = "#54637a";
-    ctx.fillText(formatCompactTokens(val), pad.left - 8, y + 3);
-    ctx.strokeStyle = "rgba(56, 189, 248, 0.08)";
-    ctx.lineWidth = 1;
-    ctx.beginPath();
-    ctx.moveTo(pad.left, y);
-    ctx.lineTo(width - pad.right, y);
-    ctx.stroke();
-  }
-
-  points.forEach((point, index) => {
-    const x = pad.left + index * gap + (gap - barW) / 2;
-    const inputH = (point.input_tokens / max) * chartH;
-    const outputH = (point.output_tokens / max) * chartH;
-
-    if (inputH > 0) {
-      const g = ctx.createLinearGradient(0, pad.top + chartH - inputH, 0, pad.top + chartH);
-      g.addColorStop(0, "rgba(56, 189, 248, 0.9)");
-      g.addColorStop(1, "rgba(0, 120, 180, 0.35)");
-      ctx.fillStyle = g;
-      ctx.fillRect(x, pad.top + chartH - inputH - outputH, barW * 0.56, inputH);
-    }
-
-    if (outputH > 0) {
-      const g2 = ctx.createLinearGradient(0, pad.top + chartH - outputH, 0, pad.top + chartH);
-      g2.addColorStop(0, "rgba(168, 85, 247, 0.9)");
-      g2.addColorStop(1, "rgba(100, 40, 180, 0.35)");
-      ctx.fillStyle = g2;
-      ctx.fillRect(x + barW * 0.56 + 2, pad.top + chartH - outputH, barW * 0.4, outputH);
-    }
-
-    ctx.fillStyle = "#54637a";
-    ctx.textAlign = "center";
-    ctx.fillText(point.date.slice(5), x + barW / 2, height - 12);
-  });
-
-  ctx.beginPath();
-  ctx.strokeStyle = "rgba(110, 231, 183, 0.5)";
-  ctx.lineWidth = 1.4;
-  points.forEach((point, index) => {
-    const x = pad.left + index * gap + gap / 2;
-    const y = pad.top + chartH - (point.total_tokens / max) * chartH;
-    if (index === 0) ctx.moveTo(x, y);
-    else ctx.lineTo(x, y);
-  });
-  ctx.stroke();
-
-  points.forEach((point, index) => {
-    const x = pad.left + index * gap + gap / 2;
-    const y = pad.top + chartH - (point.total_tokens / max) * chartH;
-    ctx.beginPath();
-    ctx.arc(x, y, 2.8, 0, Math.PI * 2);
-    ctx.fillStyle = "#6ee7b7";
-    ctx.fill();
-  });
-}
-
-function drawSourceChart(canvas: HTMLCanvasElement, distribution: Record<string, number> | undefined): void {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  const size = 180;
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.floor(size * dpr);
-  canvas.height = Math.floor(size * dpr);
-  canvas.style.width = `${size}px`;
-  canvas.style.height = `${size}px`;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, size, size);
-
-  if (!distribution) return;
-
-  const entries = Object.entries(distribution).sort((a, b) => b[1] - a[1]);
-  const total = entries.reduce((sum, entry) => sum + entry[1], 0);
-  if (total <= 0) return;
-
-  const cx = size / 2;
-  const cy = size / 2;
-  const outer = 72;
-  const inner = 46;
-  let start = -Math.PI / 2;
-
-  entries.forEach((entry, index) => {
-    const angle = (entry[1] / total) * Math.PI * 2;
-    const color = SOURCE_COLORS[index % SOURCE_COLORS.length];
-    ctx.beginPath();
-    ctx.arc(cx, cy, outer, start, start + angle);
-    ctx.arc(cx, cy, inner, start + angle, start, true);
-    ctx.closePath();
-    ctx.fillStyle = color;
-    ctx.globalAlpha = 0.75;
-    ctx.fill();
-    ctx.globalAlpha = 1;
-    start += angle;
-  });
-
-  ctx.beginPath();
-  ctx.arc(cx, cy, inner - 2, 0, Math.PI * 2);
-  ctx.fillStyle = "#040507";
-  ctx.fill();
-
-  ctx.textAlign = "center";
-  ctx.fillStyle = "#f1f5f9";
-  ctx.font = 'bold 18px "JetBrains Mono", monospace';
-  ctx.fillText(`${total}`, cx, cy + 2);
-  ctx.fillStyle = "#54637a";
-  ctx.font = '9px "JetBrains Mono", monospace';
-  ctx.fillText("SESSIONS", cx, cy + 16);
-}
-
-function drawCronTokenChart(canvas: HTMLCanvasElement, dist: CronTokenDistribution | null): void {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  const size = 280;
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.floor(size * dpr);
-  canvas.height = Math.floor(size * dpr);
-  canvas.style.width = `${size}px`;
-  canvas.style.height = `${size}px`;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, size, size);
-
-  if (!dist) return;
-
-  const cx = size / 2;
-  const cy = size / 2;
-  const outer = 115;
-  const inner = 70;
-  const jobs = dist.jobs ?? [];
-  const total = Math.max(dist.total_cron_tokens, 1);
-  let angle = -Math.PI / 2;
-
-  jobs.forEach((job, index) => {
-    const sweep = (job.io_tokens / total) * Math.PI * 2 - 0.03;
-    if (sweep <= 0) return;
-    const color = CRON_COLORS[index % CRON_COLORS.length];
-    ctx.beginPath();
-    ctx.arc(cx, cy, outer, angle, angle + sweep);
-    ctx.arc(cx, cy, inner, angle + sweep, angle, true);
-    ctx.closePath();
-    const grad = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
-    grad.addColorStop(0, `${color}44`);
-    grad.addColorStop(1, color);
-    ctx.fillStyle = grad;
-    ctx.fill();
-    angle += sweep + 0.03;
-  });
-
-  ctx.beginPath();
-  ctx.arc(cx, cy, inner - 2, 0, Math.PI * 2);
-  ctx.fillStyle = "#07080c";
-  ctx.fill();
-
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = "#38bdf8";
-  ctx.font = '600 18px "JetBrains Mono", monospace';
-  ctx.fillText(formatCompactTokens(dist.total_cron_tokens), cx, cy - 10);
-  ctx.fillStyle = "#5a7a9a";
-  ctx.font = '10px "JetBrains Mono", monospace';
-  ctx.fillText("CRON TOTAL", cx, cy + 10);
-  ctx.fillStyle = "#3a5a7a";
-  ctx.font = '9px "JetBrains Mono", monospace';
-  ctx.fillText(`${dist.cron_percent}% of all tokens`, cx, cy + 25);
-}
-
-function drawModelChart(canvas: HTMLCanvasElement, dist: ModelUsageDistribution | null): void {
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return;
-  const size = 280;
-  const dpr = window.devicePixelRatio || 1;
-  canvas.width = Math.floor(size * dpr);
-  canvas.height = Math.floor(size * dpr);
-  canvas.style.width = `${size}px`;
-  canvas.style.height = `${size}px`;
-  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-  ctx.clearRect(0, 0, size, size);
-
-  if (!dist) return;
-
-  const cx = size / 2;
-  const cy = size / 2;
-  const outer = 115;
-  const inner = 70;
-  const models = dist.models ?? [];
-  const total = Math.max(dist.total_tokens, 1);
-  let angle = -Math.PI / 2;
-
-  models.forEach((model, index) => {
-    const sweep = (model.total_tokens / total) * Math.PI * 2 - 0.03;
-    if (sweep <= 0) return;
-    const color = MODEL_COLORS[index % MODEL_COLORS.length];
-    ctx.beginPath();
-    ctx.arc(cx, cy, outer, angle, angle + sweep);
-    ctx.arc(cx, cy, inner, angle + sweep, angle, true);
-    ctx.closePath();
-    const grad = ctx.createRadialGradient(cx, cy, inner, cx, cy, outer);
-    grad.addColorStop(0, `${color}44`);
-    grad.addColorStop(1, color);
-    ctx.fillStyle = grad;
-    ctx.fill();
-    angle += sweep + 0.03;
-  });
-
-  ctx.beginPath();
-  ctx.arc(cx, cy, inner - 2, 0, Math.PI * 2);
-  ctx.fillStyle = "#07080c";
-  ctx.fill();
-
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillStyle = "#38bdf8";
-  ctx.font = '600 17px "JetBrains Mono", monospace';
-  ctx.fillText(formatCompactTokens(dist.total_tokens), cx, cy - 10);
-  ctx.fillStyle = "#5a7a9a";
-  ctx.font = '10px "JetBrains Mono", monospace';
-  ctx.fillText("TOKENS", cx, cy + 8);
-  ctx.fillStyle = "#6ee7b7";
-  ctx.font = '9px "JetBrains Mono", monospace';
-  ctx.fillText(formatUsd(dist.total_cost_usd), cx, cy + 24);
 }
 
 export async function loadOverviewDataResilient(
@@ -796,16 +573,63 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
   const sessionRequestId = useRef(0);
   const keywordRequestId = useRef(0);
 
-  const trendCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const sourceCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const cronCanvasRef = useRef<HTMLCanvasElement | null>(null);
-  const modelCanvasRef = useRef<HTMLCanvasElement | null>(null);
+  // HUD 图表 chrome / 分类色板 / 签名色随主题(深→CATEGORICAL,浅→CATEGORICAL_LIGHT)自动重算。
+  const ct = useChartTheme();
 
   const sourceEntries = useMemo(() => {
     const distribution = data?.stats?.source_distribution;
     if (!distribution) return [] as Array<[string, number]>;
     return Object.entries(distribution).sort((a, b) => b[1] - a[1]);
   }, [data?.stats?.source_distribution]);
+
+  // ── 图表数据派生(Recharts 消费;色取自主题 categorical/sig,深浅自动切换)──
+  /** TOKEN 使用趋势:分组柱(输入/输出)+ 总量折线。x 轴用日期尾段。 */
+  const trendChartData = useMemo(
+    () =>
+      (trendPoints ?? []).map((p) => ({
+        label: p.date.slice(5),
+        input: p.input_tokens,
+        output: p.output_tokens,
+        total: p.total_tokens,
+      })),
+    [trendPoints],
+  );
+
+  /** 会话来源环形图:按会话数降序,逐片主题色。 */
+  const sourceChartData = useMemo(
+    () =>
+      sourceEntries.map(([source, count], i) => {
+        const label = source === "api_server" ? "API" : source === "cron" ? "CRON" : source.toUpperCase();
+        return { name: label, value: count, color: ct.categorical[i % ct.categorical.length] };
+      }),
+    [sourceEntries, ct.categorical],
+  );
+  const sourceTotal = useMemo(
+    () => sourceEntries.reduce((sum, [, count]) => sum + count, 0),
+    [sourceEntries],
+  );
+
+  /** 计划任务 Token 环形图:各 job 的 io_tokens 逐片主题色。 */
+  const cronChartData = useMemo(
+    () =>
+      (cronDist?.jobs ?? []).map((job, i) => ({
+        name: job.name,
+        value: job.io_tokens,
+        color: ct.categorical[i % ct.categorical.length],
+      })),
+    [cronDist, ct.categorical],
+  );
+
+  /** 模型用量环形图:各模型 total_tokens 逐片主题色。 */
+  const modelChartData = useMemo(
+    () =>
+      (modelDist?.models ?? []).map((model, i) => ({
+        name: model.model,
+        value: model.total_tokens,
+        color: ct.categorical[i % ct.categorical.length],
+      })),
+    [modelDist, ct.categorical],
+  );
 
   useEffect(() => {
     const timer = window.setInterval(() => {
@@ -908,22 +732,6 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
       cancelled = true;
     };
   }, [deps]);
-
-  useEffect(() => {
-    if (trendCanvasRef.current && trendPoints) drawTrendChart(trendCanvasRef.current, trendPoints);
-  }, [trendPoints]);
-
-  useEffect(() => {
-    if (sourceCanvasRef.current) drawSourceChart(sourceCanvasRef.current, data?.stats?.source_distribution);
-  }, [data?.stats?.source_distribution]);
-
-  useEffect(() => {
-    if (cronCanvasRef.current) drawCronTokenChart(cronCanvasRef.current, cronDist);
-  }, [cronDist]);
-
-  useEffect(() => {
-    if (modelCanvasRef.current) drawModelChart(modelCanvasRef.current, modelDist);
-  }, [modelDist]);
 
   async function handleTrendSwitch(days: 7 | 30) {
     if (!shouldLoadTrendRange(trendDays, days, Boolean(trendPoints))) return;
@@ -1041,7 +849,8 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
 
       <div className="container">
         <div className="overview-title-banner">
-          <span className="overview-title-banner-text">ADIC AISOC OVERVIEW DASHBOARD</span>
+          <span className="overview-title-eyebrow">Real-Time Security Operations · Command Deck</span>
+          <h1 className="overview-title-banner-text">ADIC AISOC OVERVIEW DASHBOARD</h1>
         </div>
 
         {error ? <p className="error-text" style={{ marginBottom: 10 }}>{error}</p> : null}
@@ -1054,9 +863,9 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
               </svg>
             </div>
             <div className="stat-body">
-              <div className="stat-value">{formatNumberOrUnavailable(data.stats?.active_sessions)}</div>
+              <div className="stat-value"><AnimatedStat value={data.stats?.active_sessions} /></div>
               <div className="stat-label">
-                活跃会话 <span className="stat-sub">/ {formatNumberOrUnavailable(data.stats?.total_sessions)} total</span>
+                Active Sessions <span className="stat-sub">/ {formatNumberOrUnavailable(data.stats?.total_sessions)} total</span>
               </div>
             </div>
           </article>
@@ -1067,9 +876,9 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
               </svg>
             </div>
             <div className="stat-body">
-              <div className="stat-value">{formatNumberOrUnavailable(data.stats?.cron_jobs_total)}</div>
+              <div className="stat-value"><AnimatedStat value={data.stats?.cron_jobs_total} /></div>
               <div className="stat-label">
-                计划任务 <span className="stat-sub">/ {formatNumberOrUnavailable(data.stats?.cron_jobs_enabled)} 启用</span>
+                Cron Jobs <span className="stat-sub">/ {formatNumberOrUnavailable(data.stats?.cron_jobs_enabled)} enabled</span>
               </div>
             </div>
           </article>
@@ -1080,8 +889,8 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
               </svg>
             </div>
             <div className="stat-body">
-              <div className="stat-value">{memoryPercent}%</div>
-              <div className="stat-label">Memory 容量</div>
+              <div className="stat-value"><AnimatedStat value={memoryPercent} render={(n) => String(Math.round(n))} />%</div>
+              <div className="stat-label">Memory Capacity</div>
               <div className="memory-split">
                 <div className="memory-row">
                   <span className="memory-row-label">Soul</span>
@@ -1091,7 +900,7 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
                   <span className="memory-row-val">{soulPercent}% · {soulUsed}/{soulLimit}</span>
                 </div>
                 <div className="memory-row">
-                  <span className="memory-row-label">偏好</span>
+                  <span className="memory-row-label">Preferences</span>
                   <div className="memory-bar">
                     <div className="memory-fill" style={{ width: `${Math.max(0, Math.min(100, userPercent))}%` }} />
                   </div>
@@ -1108,8 +917,8 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
               </svg>
             </div>
             <div className="stat-body">
-              <div className="stat-value">{formatCompactTokens(data.stats?.today_tokens)}</div>
-              <div className="stat-label">今日 Token</div>
+              <div className="stat-value"><AnimatedStat value={data.stats?.today_tokens} render={(n) => formatCompactTokens(Math.round(n))} /></div>
+              <div className="stat-label">Today's Tokens</div>
               <div className="token-detail">
                 IN: {formatCompactTokens(data.stats?.today_input_tokens)} / OUT: {formatCompactTokens(data.stats?.today_output_tokens)}
               </div>
@@ -1122,8 +931,8 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
               </svg>
             </div>
             <div className="stat-body">
-              <div className="stat-value">{formatUsd(data.stats?.today_cost_usd)}</div>
-              <div className="stat-label">今日成本</div>
+              <div className="stat-value"><AnimatedStat value={data.stats?.today_cost_usd} render={(n) => formatUsd(n)} /></div>
+              <div className="stat-label">Today's Cost</div>
               <div className="token-detail">actual / estimated USD</div>
             </div>
           </article>
@@ -1133,7 +942,7 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
           <article className="panel panel-trend" style={{ animationDelay: "0.5s" }}>
             <div className="panel-header">
               <h3>
-                <span className="panel-icon">◈</span>TOKEN 使用趋势
+                <span className="panel-icon">◈</span>TOKEN USAGE TREND
               </h3>
               <div className="panel-tabs">
                 <button className={`tab ${trendDays === 7 ? "active" : ""}`} type="button" onClick={() => void handleTrendSwitch(7)}>
@@ -1145,7 +954,18 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
               </div>
             </div>
             <div className="panel-body chart-body">
-              <canvas ref={trendCanvasRef} aria-label="trend chart" />
+              <Suspense fallback={<ChartFallback height={240} />}>
+                <HudBarChart
+                  data={trendChartData}
+                  xKey="label"
+                  bars={[
+                    { key: "input", name: "Input", color: ct.sig.blue },
+                    { key: "output", name: "Output", color: ct.sig.cyan },
+                  ]}
+                  overlayLine={{ key: "total", name: "Total", color: ct.sig.violet }}
+                  height={240}
+                />
+              </Suspense>
               {trendLoading ? <p className="subtle-copy">Loading trend range...</p> : null}
               {trendError ? <p className="error-text">{trendError}</p> : null}
             </div>
@@ -1153,18 +973,28 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
           <article className="panel panel-source" style={{ animationDelay: "0.6s" }}>
             <div className="panel-header">
               <h3>
-                <span className="panel-icon">◈</span>会话来源
+                <span className="panel-icon">◈</span>Session Sources
               </h3>
             </div>
             <div className="panel-body source-layout">
-              <canvas ref={sourceCanvasRef} aria-label="source chart" />
+              <div className="chart-body--donut" aria-label="Session source distribution chart">
+                <Suspense fallback={<ChartFallback height={180} />}>
+                  <HudDonut
+                    data={sourceChartData}
+                    size={180}
+                    thickness={26}
+                    centerPrimary={String(sourceTotal)}
+                    centerSecondary="SESSIONS"
+                  />
+                </Suspense>
+              </div>
               <div className="source-legend">
                 {sourceEntries.map(([source, count], index) => {
                   const pct = data.stats?.source_distribution
                     ? ((count / Object.values(data.stats.source_distribution).reduce((s, x) => s + x, 0)) * 100).toFixed(1)
                     : "0.0";
                   const label = source === "api_server" ? "API" : source === "cron" ? "CRON" : source.toUpperCase();
-                  const color = SOURCE_COLORS[index % SOURCE_COLORS.length];
+                  const color = ct.categorical[index % ct.categorical.length];
                   return (
                     <div key={source} className="legend-item">
                       <span className="legend-dot" style={{ background: color, boxShadow: `0 0 6px ${color}` }} />
@@ -1182,7 +1012,7 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
         <section className="panel panel-keywords" style={{ animationDelay: "0.7s" }}>
           <div className="panel-header">
             <h3>
-              <span className="panel-icon">◈</span>安全关键词
+              <span className="panel-icon">◈</span>SECURITY KEYWORDS
             </h3>
             <span className="panel-hint">CLICK TO DRILL DOWN</span>
           </div>
@@ -1212,17 +1042,17 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
         <section className="panel panel-cron-tokens" style={{ animationDelay: "0.75s" }}>
           <div className="panel-header">
             <h3>
-              <span className="panel-icon">◈</span>计划任务 Token 消耗占比
+              <span className="panel-icon">◈</span>CRON TOKEN CONSUMPTION SHARE
             </h3>
             <div className="panel-tabs">
               <button className={`tab ${cronPeriod === "today" ? "active" : ""}`} type="button" onClick={() => handleCronPeriodSwitch("today")}>
-                今日
+                Today
               </button>
               <button className={`tab ${cronPeriod === "7d" ? "active" : ""}`} type="button" onClick={() => handleCronPeriodSwitch("7d")}>
-                7天
+                7D
               </button>
               <button className={`tab ${cronPeriod === "30d" ? "active" : ""}`} type="button" onClick={() => handleCronPeriodSwitch("30d")}>
-                30天
+                30D
               </button>
             </div>
           </div>
@@ -1231,11 +1061,20 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
             {cronDistError ? <p className="error-text">{cronDistError}</p> : null}
             <div className="cron-token-layout">
               <div className="cron-token-chart-wrap">
-                <canvas ref={cronCanvasRef} aria-label="cron token chart" />
+                <Suspense fallback={<ChartFallback height={220} />}>
+                  <HudDonut
+                    data={cronChartData}
+                    size={220}
+                    thickness={34}
+                    gap={2}
+                    centerPrimary={formatCompactTokens(cronDist?.total_cron_tokens)}
+                    centerSecondary={cronDist ? `${cronDist.cron_percent}% OF ALL` : "CRON TOTAL"}
+                  />
+                </Suspense>
               </div>
               <div className="cron-token-list">
                 {(cronDist?.jobs ?? []).map((job, index) => {
-                  const color = CRON_COLORS[index % CRON_COLORS.length];
+                  const color = ct.categorical[index % ct.categorical.length];
                   return (
                     <div key={job.job_id} className="cron-token-item">
                       <div className="cron-token-dot" style={{ background: color, boxShadow: `0 0 6px ${color}88` }} />
@@ -1251,7 +1090,7 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
                 {cronDist && cronDist.non_cron_tokens > 0 ? (
                   <div className="cron-token-item muted">
                     <div className="cron-token-dot" style={{ background: "#3a5a7a" }} />
-                    <div className="cron-token-name">非 Cron 会话 (API/CLI/Slack)</div>
+                    <div className="cron-token-name">Non-Cron Sessions (API/CLI/Slack)</div>
                     <div className="cron-token-value">{formatCompactTokens(cronDist.non_cron_tokens)}</div>
                     <div className="cron-token-pct">{Math.round((cronDist.non_cron_tokens / Math.max(cronDist.grand_total, 1)) * 100)}%</div>
                   </div>
@@ -1259,10 +1098,10 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
                 {cronDist ? (
                   <div className="cron-token-summary">
                     <span>
-                      总计 Cron: <strong>{formatCompactTokens(cronDist.total_cron_tokens)}</strong>
+                      Total Cron: <strong>{formatCompactTokens(cronDist.total_cron_tokens)}</strong>
                     </span>
                     <span>
-                      占全部: <strong>{cronDist.cron_percent}%</strong>
+                      Share of Total: <strong>{cronDist.cron_percent}%</strong>
                     </span>
                     <span>
                       Runs: <strong>{cronDist.jobs.reduce((sum, job) => sum + job.runs, 0)}</strong>
@@ -1277,17 +1116,17 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
         <section className="panel panel-model-usage" style={{ animationDelay: "0.78s" }}>
           <div className="panel-header">
             <h3>
-              <span className="panel-icon">◈</span>模型用量 & 成本
+              <span className="panel-icon">◈</span>Model Usage & Cost
             </h3>
             <div className="panel-tabs">
               <button className={`tab ${modelPeriod === "today" ? "active" : ""}`} type="button" onClick={() => handleModelPeriodSwitch("today")}>
-                今日
+                Today
               </button>
               <button className={`tab ${modelPeriod === "7d" ? "active" : ""}`} type="button" onClick={() => handleModelPeriodSwitch("7d")}>
-                7天
+                7D
               </button>
               <button className={`tab ${modelPeriod === "30d" ? "active" : ""}`} type="button" onClick={() => handleModelPeriodSwitch("30d")}>
-                30天
+                30D
               </button>
             </div>
           </div>
@@ -1296,11 +1135,20 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
             {modelDistError ? <p className="error-text">{modelDistError}</p> : null}
             <div className="cron-token-layout">
               <div className="cron-token-chart-wrap">
-                <canvas ref={modelCanvasRef} aria-label="model usage chart" />
+                <Suspense fallback={<ChartFallback height={220} />}>
+                  <HudDonut
+                    data={modelChartData}
+                    size={220}
+                    thickness={34}
+                    gap={2}
+                    centerPrimary={formatCompactTokens(modelDist?.total_tokens)}
+                    centerSecondary={modelDist ? formatUsd(modelDist.total_cost_usd) : "TOKENS"}
+                  />
+                </Suspense>
               </div>
               <div className="cron-token-list model-usage-list">
                 {(modelDist?.models ?? []).map((model, index) => {
-                  const color = MODEL_COLORS[index % MODEL_COLORS.length];
+                  const color = ct.categorical[index % ct.categorical.length];
                   return (
                     <div key={model.model} className="cron-token-item">
                       <div className="cron-token-dot" style={{ background: color, boxShadow: `0 0 6px ${color}88` }} />
@@ -1312,8 +1160,8 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
                         <div className="cron-token-bar-fill" style={{ width: `${model.percent_of_total}%`, background: `linear-gradient(90deg, ${color}22, ${color})` }} />
                       </div>
                       <div className="model-usage-detail">
-                        IN {formatCompactTokens(model.input_tokens)} · OUT {formatCompactTokens(model.output_tokens)} · 缓存读 {formatCompactTokens(model.cache_read_tokens)}
-                        {model.reasoning_tokens > 0 ? ` · 思考 ${formatCompactTokens(model.reasoning_tokens)}` : ""}
+                        IN {formatCompactTokens(model.input_tokens)} · OUT {formatCompactTokens(model.output_tokens)} · Cache Read {formatCompactTokens(model.cache_read_tokens)}
+                        {model.reasoning_tokens > 0 ? ` · Reasoning ${formatCompactTokens(model.reasoning_tokens)}` : ""}
                       </div>
                     </div>
                   );
@@ -1324,13 +1172,13 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
                 {modelDist ? (
                   <div className="cron-token-summary">
                     <span>
-                      总计 Token: <strong>{formatCompactTokens(modelDist.total_tokens)}</strong>
+                      Total Tokens: <strong>{formatCompactTokens(modelDist.total_tokens)}</strong>
                     </span>
                     <span>
-                      总成本: <strong>{formatUsd(modelDist.total_cost_usd)}</strong>
+                      Total Cost: <strong>{formatUsd(modelDist.total_cost_usd)}</strong>
                     </span>
                     <span>
-                      模型数: <strong>{modelDist.models.length}</strong>
+                      Models: <strong>{modelDist.models.length}</strong>
                     </span>
                   </div>
                 ) : null}
@@ -1343,7 +1191,7 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
           <article className="panel panel-cron" style={{ animationDelay: "0.8s" }}>
             <div className="panel-header">
               <h3>
-                <span className="panel-icon">◈</span>计划任务
+                <span className="panel-icon">◈</span>Cron Jobs
               </h3>
               <span className="panel-hint">{(cronPanel?.total ?? 0) + " TASKS"}</span>
             </div>
@@ -1410,7 +1258,7 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
           <article className="panel panel-events" style={{ animationDelay: "0.9s" }}>
             <div className="panel-header">
               <h3>
-                <span className="panel-icon">◈</span>安全事件
+                <span className="panel-icon">◈</span>SECURITY EVENTS
               </h3>
               <span className="panel-hint">RECENT INVESTIGATIONS</span>
             </div>
@@ -1491,7 +1339,7 @@ export function OverviewPage({ initialData, interactionDeps }: OverviewPageProps
       <div className={`modal-overlay modal-overlay-cron ${cronHistoryModal.open ? "active" : ""}`} onClick={() => setCronHistoryModal({ open: false, jobId: "", jobName: "", loading: false, error: "", items: [] })}>
         <div className="modal" onClick={(event) => event.stopPropagation()}>
           <div className="modal-header">
-            <h3>{cronHistoryModal.jobName || "执行历史"}</h3>
+            <h3>{cronHistoryModal.jobName || "Execution History"}</h3>
             <button type="button" className="modal-close" onClick={() => setCronHistoryModal({ open: false, jobId: "", jobName: "", loading: false, error: "", items: [] })}>
               ✕
             </button>

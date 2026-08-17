@@ -47,8 +47,8 @@ export function extractErrorMessage(error: unknown, fallback: string): string {
   const anyErr = error as { response?: { status?: number; data?: { detail?: string } }; message?: string } | undefined;
   const status = anyErr?.response?.status;
   const detail = anyErr?.response?.data?.detail;
-  if (status === 409) return '任务已在运行中，请稍后再试';
-  if (status === 504) return '任务超时，请稍后重试';
+  if (status === 409) return 'A task is already running, please try again later';
+  if (status === 504) return 'The task timed out, please try again later';
   if (detail) return detail;
   return anyErr?.message || fallback;
 }

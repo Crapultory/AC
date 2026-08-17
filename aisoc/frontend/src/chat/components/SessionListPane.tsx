@@ -8,8 +8,8 @@ import { useChatRuntime } from '../runtime/chatRuntime';
 import { Conversation } from '../types';
 
 function conversationBadge(conversation: Conversation): string | null {
-  if (conversation.pendingApproval) return '待审批';
-  if (conversation.pendingClarify) return '待澄清';
+  if (conversation.pendingApproval) return 'Pending approval';
+  if (conversation.pendingClarify) return 'Pending clarification';
   return null;
 }
 
@@ -35,7 +35,7 @@ export function SessionListPane({ drawerOpen, onToggleDrawer, onToggleSidebar }:
 
   function handleDelete(event: React.MouseEvent, conversation: Conversation) {
     event.stopPropagation();
-    if (window.confirm(`删除会话「${conversation.title}」？此操作不可恢复。`)) {
+    if (window.confirm(`Delete session "${conversation.title}"? This action cannot be undone.`)) {
       deleteConversation(conversation.id);
     }
   }
@@ -51,8 +51,8 @@ export function SessionListPane({ drawerOpen, onToggleDrawer, onToggleSidebar }:
           type="button"
           onClick={() => void refreshSessions()}
           disabled={sessionsLoading}
-          aria-label="刷新会话列表"
-          title="刷新会话列表"
+          aria-label="Refresh session list"
+          title="Refresh session list"
           className="flex h-6 w-6 items-center justify-center rounded-[var(--aisoc-radius-sm)] border border-[var(--aisoc-border)] text-[var(--aisoc-muted)] transition-colors hover:border-[var(--aisoc-border-strong)] hover:text-[var(--aisoc-text)] disabled:cursor-not-allowed disabled:opacity-50"
         >
           <RefreshCw className={`h-3 w-3 ${sessionsLoading ? 'animate-spin' : ''}`} aria-hidden="true" />
@@ -60,20 +60,20 @@ export function SessionListPane({ drawerOpen, onToggleDrawer, onToggleSidebar }:
         <button
           type="button"
           onClick={createConversation}
-          aria-label="新建会话"
-          title="新建会话"
+          aria-label="New Session"
+          title="New Session"
           className="flex h-6 items-center gap-1 rounded-[var(--aisoc-radius-sm)] border border-[var(--aisoc-border)] px-1.5 font-mono text-[10px] font-bold text-[var(--aisoc-accent)] transition-colors hover:border-[var(--aisoc-border-strong)] hover:bg-[var(--aisoc-accent-soft)]"
         >
           <Plus className="h-3 w-3" aria-hidden="true" />
-          新建
+          New
         </button>
         {onToggleDrawer ? (
           <button
             type="button"
             onClick={onToggleDrawer}
-            aria-label={drawerOpen ? '关闭侧栏' : '打开侧栏'}
+            aria-label={drawerOpen ? 'Close sidebar' : 'Open sidebar'}
             aria-expanded={drawerOpen}
-            title={drawerOpen ? '关闭侧栏' : '打开侧栏'}
+            title={drawerOpen ? 'Close sidebar' : 'Open sidebar'}
             className="flex h-6 w-6 items-center justify-center rounded-[var(--aisoc-radius-sm)] border border-[var(--aisoc-border)] text-[var(--aisoc-muted)] transition-colors hover:border-[var(--aisoc-border-strong)] hover:text-[var(--aisoc-text)]"
           >
             {drawerOpen ? (
@@ -87,9 +87,9 @@ export function SessionListPane({ drawerOpen, onToggleDrawer, onToggleSidebar }:
           <button
             type="button"
             onClick={onToggleSidebar}
-            aria-label="折叠会话列表"
+            aria-label="Collapse session list"
             aria-expanded={true}
-            title="折叠会话列表"
+            title="Collapse session list"
             className="flex h-6 w-6 items-center justify-center rounded-[var(--aisoc-radius-sm)] border border-[var(--aisoc-border)] text-[var(--aisoc-muted)] transition-colors hover:border-[var(--aisoc-border-strong)] hover:text-[var(--aisoc-text)]"
           >
             <PanelLeftClose className="h-3 w-3" aria-hidden="true" />
@@ -101,12 +101,12 @@ export function SessionListPane({ drawerOpen, onToggleDrawer, onToggleSidebar }:
         {sessionsLoading && conversations.length === 0 ? (
           <div className="flex items-center gap-2 px-3 py-4 font-mono text-[10px] uppercase tracking-wider text-[var(--aisoc-muted)]" role="status">
             <LoaderCircle className="h-3 w-3 animate-spin" aria-hidden="true" />
-            加载会话中…
+            Loading sessions…
           </div>
         ) : null}
         {!sessionsLoading && conversations.length === 0 ? (
           <p className="px-3 py-4 text-xs text-[var(--aisoc-muted)]">
-            暂无会话，点击「新建」开始对话。
+            No sessions yet. Click "New" to start a conversation.
           </p>
         ) : null}
         <ul>
@@ -143,7 +143,7 @@ export function SessionListPane({ drawerOpen, onToggleDrawer, onToggleSidebar }:
                     <div className="flex items-center gap-1.5">
                       {conversation.hasUnread ? (
                         <span
-                          aria-label="有未读消息"
+                          aria-label="Has unread messages"
                           className="h-1.5 w-1.5 shrink-0 rounded-full bg-[var(--aisoc-accent)]"
                         />
                       ) : null}
@@ -169,8 +169,8 @@ export function SessionListPane({ drawerOpen, onToggleDrawer, onToggleSidebar }:
                   <button
                     type="button"
                     onClick={(event) => handleDelete(event, conversation)}
-                    aria-label={`删除会话 ${conversation.title}`}
-                    title="删除会话"
+                    aria-label={`Delete session ${conversation.title}`}
+                    title="Delete session"
                     className="mt-0.5 hidden h-5 w-5 shrink-0 items-center justify-center rounded text-[var(--aisoc-muted)] transition-colors hover:text-[var(--aisoc-danger)] group-hover:flex"
                   >
                     <Trash2 className="h-3 w-3" aria-hidden="true" />

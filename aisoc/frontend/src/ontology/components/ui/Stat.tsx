@@ -23,7 +23,7 @@ export function StatCard({
         <div className="eyebrow">{label}</div>
         {icon && <div style={{ color: accent }}>{icon}</div>}
       </div>
-      <div className="mt-2 text-2xl font-semibold font-display" style={{ color: '#EAF2FF' }}>
+      <div className="mt-2 text-2xl font-semibold font-display" style={{ color: 'var(--ink-hi)' }}>
         {value}
       </div>
       {sub && <div className="mt-1 text-xs text-[color:var(--ink-lo)]">{sub}</div>}
@@ -34,7 +34,7 @@ export function StatCard({
 export function ProgressBar({ ratio, color = '#38bdf8' }: { ratio: number; color?: string }) {
   const pct = Math.max(0, Math.min(1, ratio)) * 100;
   return (
-    <div className="h-2 w-full rounded-full bg-white/5 overflow-hidden">
+    <div className="h-2 w-full rounded-full bg-[color:color-mix(in_srgb,var(--ink-hi)_9%,transparent)] overflow-hidden">
       <div
         className="h-full rounded-full transition-all duration-500"
         style={{ width: `${pct}%`, background: `linear-gradient(90deg, ${color}, ${color}cc)`, boxShadow: `0 0 12px -2px ${color}` }}

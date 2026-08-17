@@ -75,7 +75,7 @@ export function ToolGroupBubble({ message }: { message: Message }) {
           {runningCount > 0 ? (
             <span className="flex items-center gap-1 font-mono text-[9px] text-[var(--aisoc-accent)]">
               <LoaderCircle className="h-2.5 w-2.5 animate-spin" aria-hidden="true" />
-              {runningCount} 运行中
+              {runningCount} running
             </span>
           ) : null}
           <span className="ml-auto font-mono text-[9px] tabular-nums text-[var(--aisoc-muted)]">
@@ -90,11 +90,11 @@ export function ToolGroupBubble({ message }: { message: Message }) {
                 className="flex items-start gap-2 border-b border-[color-mix(in_srgb,var(--aisoc-border)_55%,transparent)] px-2.5 py-1.5 last:border-b-0"
               >
                 {row.running ? (
-                  <LoaderCircle className="mt-0.5 h-3 w-3 shrink-0 animate-spin text-[var(--aisoc-accent)]" aria-label="运行中" />
+                  <LoaderCircle className="mt-0.5 h-3 w-3 shrink-0 animate-spin text-[var(--aisoc-accent)]" aria-label="Running" />
                 ) : row.failed ? (
-                  <X className="mt-0.5 h-3 w-3 shrink-0 text-[var(--aisoc-danger)]" aria-label="失败" />
+                  <X className="mt-0.5 h-3 w-3 shrink-0 text-[var(--aisoc-danger)]" aria-label="Failed" />
                 ) : (
-                  <Check className="mt-0.5 h-3 w-3 shrink-0 text-[var(--aisoc-success)]" aria-label="已完成" />
+                  <Check className="mt-0.5 h-3 w-3 shrink-0 text-[var(--aisoc-success)]" aria-label="Completed" />
                 )}
                 <div className="min-w-0 flex-1">
                   <div className="font-mono text-[10px] font-bold text-[var(--aisoc-text)]">{row.name}</div>
