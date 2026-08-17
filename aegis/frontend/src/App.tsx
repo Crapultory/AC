@@ -6,6 +6,7 @@ import ChatTab from './components/ChatTab';
 import AgentTab from './components/AgentTab';
 import PolicyTab from './components/PolicyTab';
 import LoginScreen from './components/LoginScreen';
+import SsoCallbackScreen from './components/SsoCallbackScreen';
 import RegisterScreen from './components/RegisterScreen';
 import UserManagementTab from './components/UserManagementTab';
 import ChangePasswordDialog from './components/ChangePasswordDialog';
@@ -40,6 +41,8 @@ type AuthLoginResponse = {
   expires_in: number;
   user: AuthenticatedUser;
 };
+
+type SsoExchangeResponse = AuthLoginResponse;
 
 type AuthSessionResponse = {
   authenticated: boolean;
@@ -432,9 +435,32 @@ export default function App() {
       setIsBootstrapping(true);
       setSyncError('');
 
+      const initialPath = window.location.pathname;
+      const launchParams = new URLSearchParams(window.location.search);
+      const organizationId = launchParams.get('organization_id') || '';
+      const clientId = launchParams.get('client_id') || '';
+      if (initialPath === '/' && (organizationId || clientId)) {
+        if (!organizationId || !clientId) {
+          window.history.replaceState({}, '', '/login');
+          setAuthNotice('服务入口参数不完整，无法发起 OIDC 登录。');
+          setPathname('/login');
+          setIsBootstrapping(false);
+          return;
+        }
+        const query = new URLSearchParams({ organization_id: organizationId, client_id: clientId });
+        window.location.replace(`/api/sso/start?${query.toString()}`);
+        return;
+      }
+
+      if (initialPath === '/sso/callback') {
+        setIsAuthenticated(false);
+        setIsBootstrapping(false);
+        return;
+      }
+
       if (!hasStoredToken()) {
         setIsAuthenticated(false);
-        if (window.location.pathname !== '/register') {
+        if (window.location.pathname !== '/register' && window.location.pathname !== '/sso/callback') {
           window.history.replaceState({}, '', '/login');
           setPathname('/login');
         }
@@ -654,6 +680,14 @@ export default function App() {
     } finally {
       setAuthPending(false);
     }
+  }
+
+  async function handleSsoComplete(response: SsoExchangeResponse) {
+    setStoredAuth(response.access_token, response.user);
+    setCurrentUser(response.user);
+    setIsAuthenticated(true);
+    await loadConsoleData(response.user);
+    navigateTo('overview');
   }
 
   async function handleRegister(username: string, password: string, email: string) {
@@ -923,6 +957,14 @@ export default function App() {
   }
 
   if (!isAuthenticated || !currentUser) {
+    if (pathname === '/sso/callback') {
+      return (
+        <SsoCallbackScreen
+          onComplete={handleSsoComplete}
+          onBackToLogin={() => navigateAuth('/login')}
+        />
+      );
+    }
     if (pathname === '/register') {
       return (
         <RegisterScreen
@@ -937,6 +979,7 @@ export default function App() {
       <LoginScreen
         notice={authNotice}
         onSubmit={handleLogin}
+        onSsoLogin={() => window.location.assign('/api/sso/start?sso=1')}
         onSwitchToRegister={() => navigateAuth('/register')}
         pending={authPending}
       />

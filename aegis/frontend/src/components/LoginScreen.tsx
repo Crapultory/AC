@@ -3,6 +3,7 @@ import { FormEvent, useState } from 'react';
 interface LoginScreenProps {
   notice?: string;
   onSubmit: (username: string, password: string) => Promise<void>;
+  onSsoLogin: () => void;
   onSwitchToRegister: () => void;
   pending: boolean;
 }
@@ -10,6 +11,7 @@ interface LoginScreenProps {
 export default function LoginScreen({
   notice = '',
   onSubmit,
+  onSsoLogin,
   onSwitchToRegister,
   pending,
 }: LoginScreenProps) {
@@ -74,6 +76,13 @@ export default function LoginScreen({
             className="w-full rounded-xl bg-cyan-500 px-4 py-3 text-sm font-bold text-white transition hover:bg-cyan-600 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {pending ? 'Signing In...' : 'Sign In'}
+          </button>
+          <button
+            type="button"
+            onClick={onSsoLogin}
+            className="w-full rounded-xl border border-cyan-700 bg-cyan-950/40 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:border-cyan-400 hover:bg-cyan-900/50"
+          >
+            SSO 认证登录
           </button>
           <button
             type="button"
