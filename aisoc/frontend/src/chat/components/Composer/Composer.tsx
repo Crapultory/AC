@@ -216,7 +216,7 @@ export function Composer() {
       setPendingAttachments((current) =>
         current.map((item) =>
           item.localId === localId
-            ? { ...item, status: 'failed', error: error instanceof Error ? error.message : '上传失败' }
+            ? { ...item, status: 'failed', error: error instanceof Error ? error.message : 'Upload failed' }
             : item,
         ),
       );
@@ -339,8 +339,8 @@ export function Composer() {
   }
 
   const placeholder = clarifyAwaitingText
-    ? '输入澄清回答，Enter 发送'
-    : '输入消息，@ 唤起快捷指令，Enter 发送 / Shift+Enter 换行';
+    ? 'Type your clarification, Enter to send'
+    : 'Type a message, @ for Quick Commands, Enter to send / Shift+Enter for newline';
   const sendDisabled = busy || (!inputVal.trim() && !pendingAttachments.some((item) => item.status === 'ready'));
 
   return (
@@ -350,7 +350,7 @@ export function Composer() {
         type="file"
         multiple
         className="sr-only"
-        aria-label="上传聊天附件"
+        aria-label="Upload chat attachment"
         onChange={(event) => queueAttachments(event.target.files || [])}
       />
       <div className="space-y-2">
@@ -360,8 +360,8 @@ export function Composer() {
             type="button"
             onClick={() => fileInputRef.current?.click()}
             disabled={busy}
-            title="添加附件"
-            aria-label="添加附件"
+            title="Add attachment"
+            aria-label="Add attachment"
             className="flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--aisoc-radius-sm)] border border-[var(--aisoc-border)] text-[var(--aisoc-muted)] transition-colors hover:border-[var(--aisoc-border-strong)] hover:text-[var(--aisoc-text)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Paperclip className="h-4 w-4" aria-hidden="true" />
@@ -377,8 +377,8 @@ export function Composer() {
             }
             disabled={busy}
             aria-pressed={a2uiEnabled}
-            title="A2UI：任务结果交付为可交互 HTML 页面"
-            aria-label="切换 A2UI 模式"
+            title="A2UI: deliver task results as an interactive HTML page"
+            aria-label="Toggle A2UI mode"
             className={`flex h-9 shrink-0 items-center gap-1.5 rounded-[var(--aisoc-radius-sm)] border px-2.5 font-mono text-[11px] font-bold transition-colors disabled:cursor-not-allowed disabled:opacity-50 ${
               a2uiEnabled
                 ? 'border-[color-mix(in_srgb,var(--aisoc-accent)_45%,var(--aisoc-border))] bg-[var(--aisoc-accent-soft)] text-[var(--aisoc-accent)]'
@@ -403,7 +403,7 @@ export function Composer() {
               ref={composerRef}
               role="combobox"
               aria-multiline="true"
-              aria-label="聊天输入框"
+              aria-label="Chat input"
               aria-expanded={Boolean(shortcutQuery)}
               aria-controls={shortcutQuery ? 'aisoc-quick-command-listbox' : undefined}
               aria-activedescendant={
@@ -432,7 +432,7 @@ export function Composer() {
               className="flex h-9 shrink-0 items-center gap-1.5 rounded-[var(--aisoc-radius-sm)] border border-[color-mix(in_srgb,var(--aisoc-danger)_40%,var(--aisoc-border))] px-3 font-mono text-[11px] font-bold text-[var(--aisoc-danger)] transition-colors hover:bg-[color-mix(in_srgb,var(--aisoc-danger)_10%,transparent)]"
             >
               <OctagonPause className="h-3.5 w-3.5" aria-hidden="true" />
-              打断
+              Stop
             </button>
           ) : null}
           <button
@@ -442,7 +442,7 @@ export function Composer() {
             className="flex h-9 shrink-0 items-center gap-1.5 rounded-[var(--aisoc-radius-sm)] border border-[color-mix(in_srgb,var(--aisoc-accent)_45%,var(--aisoc-border))] bg-[var(--aisoc-accent-soft)] px-3.5 font-mono text-[11px] font-bold text-[var(--aisoc-accent)] transition-colors hover:bg-[color-mix(in_srgb,var(--aisoc-accent)_22%,transparent)] disabled:cursor-not-allowed disabled:opacity-50"
           >
             <Send className="h-3.5 w-3.5" aria-hidden="true" />
-            发送
+            Send
           </button>
         </div>
       </div>

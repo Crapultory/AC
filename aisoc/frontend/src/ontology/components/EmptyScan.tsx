@@ -12,13 +12,13 @@ export function EmptyScan({
   onRunScan,
   scanPending,
   scanError,
-  title = '尚无扫描记录',
-  message = '当前环境还没有生成扫描快照，此页面依赖扫描结果。请先运行 Environment Scan 生成 mapped/scorecard/gap 报告。',
+  title = 'No scan records yet',
+  message = 'This environment has not generated a scan snapshot yet, and this page depends on scan results. Please run an Environment Scan first to generate the mapped/scorecard/gap reports.',
 }: EmptyScanProps) {
   return (
     <div className="glass p-8 anim-fade-up">
       <div className="max-w-xl mx-auto text-center space-y-5">
-        <div className="mx-auto h-14 w-14 rounded-2xl flex items-center justify-center glow-cyan anim-pulse" style={{ background: 'linear-gradient(150deg,#161d2c,#0d111a)' }}>
+        <div className="mx-auto h-14 w-14 rounded-2xl flex items-center justify-center glow-cyan anim-pulse" style={{ background: 'color-mix(in srgb, var(--accent-cyan) 12%, var(--bg-elevated))' }}>
           <AlertCircle className="h-7 w-7" style={{ color: '#fbbf24' }} />
         </div>
         <div>
@@ -28,7 +28,7 @@ export function EmptyScan({
         {onRunScan ? (
           <button className="btn-primary" disabled={!!scanPending} onClick={onRunScan}>
             <Radar className={`h-4 w-4 ${scanPending ? 'animate-spin' : ''}`} />
-            {scanPending ? '扫描中…' : 'Run Environment Scan'}
+            {scanPending ? 'Scanning…' : 'Run Environment Scan'}
           </button>
         ) : null}
         {scanError ? (

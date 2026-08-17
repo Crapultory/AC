@@ -19,7 +19,7 @@ function OntologyRoute() {
     <Suspense
       fallback={
         <div style={{ padding: "2rem", color: "var(--text-muted, #94a3b8)", fontFamily: "monospace" }}>
-          加载本体模块…
+          Loading ontology module…
         </div>
       }
     >

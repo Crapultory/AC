@@ -4,31 +4,49 @@
    ═══════════════════════════════════════════════════════════════ */
 
 .workbench-overview {
-    --bg-deep: #020408;
-    --bg-panel: #05080f;
-    --bg-card: #080c14;
-    --bg-hover: #0f172a;
-    --border: #1e293b;
-    --border-glow: rgba(34, 211, 238, 0.45);
-    --teal: #22d3ee;
-    --teal-dim: rgba(34, 211, 238, 0.5);
-    --cyan: #38bdf8;
-    --cyan-dim: rgba(56, 189, 248, 0.6);
-    --green: #6ee7b7;
-    --green-dim: rgba(110, 231, 183, 0.6);
-    --white: #f1f5f9;
+    /* 内层小面/行用的深空板岩(大面板已强制磨砂玻璃)。surface/text 保持作用域内、随主题翻转。 */
+    --bg-deep: #0a1120;
+    --bg-panel: #0e1524;
+    --bg-card: #121a2b;
+    --bg-hover: #1a2438;
+    --border: #24314a;
+    /* 强调色一律引全站签名 token(青→蓝→紫 + 语义状态),不再自持一套 hex——
+       这是三套寄存器归一的关键。dim 变体用 color-mix 从同一 token 派生,
+       故 accent/white 随 [data-theme] 自动重着色,浅色块无需再逐条重定义。 */
+    --border-glow: color-mix(in srgb, var(--accent-cyan) 45%, transparent);
+    --teal: var(--accent-cyan);
+    --teal-dim: color-mix(in srgb, var(--accent-cyan) 50%, transparent);
+    --cyan: var(--accent-blue);
+    --cyan-dim: color-mix(in srgb, var(--accent-blue) 60%, transparent);
+    --green: var(--accent-emerald);
+    --green-dim: color-mix(in srgb, var(--accent-emerald) 60%, transparent);
+    --white: var(--ink-hi);
     --text-primary: #cbd5e1;
     --text-secondary: #8091a8;
     --text-dim: #54637a;
     --text-light: #cbd5e1;
-    --yellow: #fcd34d;
+    --yellow: var(--accent-amber);
     --orange: #f97316;
-    --purple: #A855F7;
-    --purple-dim: rgba(168, 85, 247, 0.5);
+    --purple: var(--accent-magenta);
+    --purple-dim: color-mix(in srgb, var(--accent-magenta) 50%, transparent);
     --radius: 8px;
-    --font-mono: 'JetBrains Mono', 'Share Tech Mono', 'SF Mono', monospace;
-    --font-body: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    /* 字体引全站 token(JetBrains Mono / Inter),不再自持副本 */
     --ov-scale: var(--density-scale, 0.9);
+}
+
+/* 浅色主题:仅重定义仍属局部的 surface/text/orange 为纸感浅色板。
+   accent/white/字体已引全站 token,随 [data-theme="light"] 自动加深,无需在此重复。 */
+:root[data-theme="light"] .workbench-overview {
+    --bg-deep: #eef2f9;
+    --bg-panel: #ffffff;
+    --bg-card: #f8fafd;
+    --bg-hover: #eef3fb;
+    --border: #d3dcea;
+    --text-primary: #26374f;
+    --text-secondary: #46587a;
+    --text-dim: #7d8ba8;
+    --text-light: #26374f;
+    --orange: #c2410c;
 }
 
 /* Reset */
@@ -36,10 +54,12 @@
 
 .workbench-overview {
     min-height: 100vh;
+    /* 背景保持透明:让 AppShell 的全局动态极光层(.app-ambient / .tac-*)透出。
+       原先末尾的不透明 var(--bg-deep) 基底会整屏盖住极光——正是用户发现的
+       "背景前面挡住的那个图层"。仅保留两处极淡径向染色叠加,增强层次而不遮挡。 */
     background:
-        radial-gradient(ellipse 70% 40% at 18% -5%, rgba(34, 211, 238, 0.07) 0, transparent 65%),
-        radial-gradient(ellipse 60% 40% at 85% 0%, rgba(56, 189, 248, 0.04) 0, transparent 60%),
-        var(--bg-deep);
+        radial-gradient(ellipse 70% 40% at 18% -5%, rgba(34, 211, 238, 0.05) 0, transparent 65%),
+        radial-gradient(ellipse 60% 40% at 85% 0%, rgba(56, 189, 248, 0.03) 0, transparent 60%);
     color: var(--text-primary);
     font-family: var(--font-body);
     font-size: calc(13px * var(--ov-scale));
@@ -48,15 +68,9 @@
 }
 
 /* ── Background Effects ── */
+/* 按用户要求移除背景网格 */
 .workbench-overview .bg-grid {
-    position: fixed;
-    inset: 0;
-    background-image:
-        linear-gradient(rgba(34, 211, 238, 0.035) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(34, 211, 238, 0.035) 1px, transparent 1px);
-    background-size: 80px 80px;
-    pointer-events: none;
-    z-index: 0;
+    display: none;
 }
 
 .workbench-overview .scanline {
@@ -88,16 +102,35 @@
 /* ══════ OVERVIEW TITLE BANNER ══════ */
 .workbench-overview .overview-title-banner {
     display: flex;
-    align-items: center;
+    flex-direction: column;
+    align-items: flex-start;
     justify-content: center;
-    padding: calc(18px * var(--ov-scale)) calc(28px * var(--ov-scale));
-    background: linear-gradient(135deg, var(--bg-panel) 0%, var(--bg-deep) 100%);
+    gap: calc(6px * var(--ov-scale));
+    padding: calc(20px * var(--ov-scale)) calc(28px * var(--ov-scale));
+    /* 半透明磨砂:让全局极光从标题模块透出(原先的不透明深色渐变即"黑色涂层")。 */
+    background: linear-gradient(135deg,
+        color-mix(in srgb, var(--bg-panel) 42%, transparent) 0%,
+        color-mix(in srgb, var(--bg-deep) 28%, transparent) 100%);
+    backdrop-filter: blur(22px) saturate(1.3);
+    -webkit-backdrop-filter: blur(22px) saturate(1.3);
     border: 1px solid rgba(34, 211, 238, 0.22);
     border-radius: var(--radius);
     margin-bottom: calc(22px * var(--ov-scale));
     position: relative;
     overflow: hidden;
-    text-align: center;
+    text-align: left;
+}
+
+/* 眉标 —— 与其他页头(.eyebrow)统一:小号大写、宽字距、低墨 */
+.workbench-overview .overview-title-eyebrow {
+    position: relative;
+    z-index: 1;
+    font-family: var(--font-mono);
+    font-size: var(--fs-eyebrow);
+    font-weight: var(--weight-eyebrow);
+    letter-spacing: var(--tracking-eyebrow);
+    text-transform: uppercase;
+    color: var(--ink-lo);
 }
 
 /* Static teal wash — ambiance without sweep/glitch motion */
@@ -125,13 +158,18 @@
 .workbench-overview .overview-title-banner-text {
     position: relative;
     z-index: 1;
-    font-family: var(--font-mono);
-    font-size: calc(20px * var(--ov-scale));
-    font-weight: 600;
-    letter-spacing: calc(4px * var(--ov-scale));
-    text-transform: uppercase;
-    color: var(--white);
-    text-shadow: 0 0 16px rgba(34, 211, 238, 0.28);
+    margin: 0;
+    font-family: var(--font-display);
+    font-size: calc(30px * var(--ov-scale));
+    font-weight: 700;
+    letter-spacing: 0.03em;
+    line-height: 1.1;
+    /* 签名渐变字(青→蓝→紫),与全站页头 .text-gradient 一致,随主题加深 */
+    background: var(--grad-signature-h);
+    -webkit-background-clip: text;
+    background-clip: text;
+    -webkit-text-fill-color: transparent;
+    color: transparent;
 }
 
 .workbench-overview .status-badge {
@@ -201,7 +239,12 @@
     align-items: center;
     gap: calc(16px * var(--ov-scale));
     padding: calc(20px * var(--ov-scale)) calc(22px * var(--ov-scale));
-    background: var(--bg-panel);
+    /* 磨砂玻璃:半透明 + 背景模糊,让全局极光透出(与 .panel/.card 一致)。 */
+    background:
+        radial-gradient(150% 130% at 0% 0%, rgba(120, 180, 255, 0.025), transparent 46%),
+        var(--bg-glass);
+    backdrop-filter: blur(22px) saturate(1.3);
+    -webkit-backdrop-filter: blur(22px) saturate(1.3);
     border: 1px solid var(--border);
     border-radius: var(--radius);
     transition: all 0.3s ease;
@@ -340,7 +383,8 @@
     position: relative;
 }
 
-/* Teal hairline across each panel top — quiet brand signal */
+/* 面板顶缘签名渐变发丝(青→蓝→紫)—— 与全站 .panel::before 同一 --grad-hairline,
+   仅几何上作 10% 内缩,保持 Overview 的克制感。统一色相,消除"这里青、别处渐变"。 */
 .workbench-overview .panel::before {
     content: '';
     position: absolute;
@@ -348,7 +392,7 @@
     left: 10%;
     right: 10%;
     height: 1px;
-    background: linear-gradient(90deg, transparent, rgba(34, 211, 238, 0.35), transparent);
+    background: var(--grad-hairline);
     pointer-events: none;
 }
 
@@ -436,8 +480,32 @@
 
 .workbench-overview .chart-body { padding: 12px 10px 8px; }
 
-/* Canvas fills the panel body and never drives its parent's width. */
-.workbench-overview .chart-body canvas { display: block; width: 100%; }
+/* Recharts ResponsiveContainer 自适应父宽,不反向撑父容器。 */
+.workbench-overview .chart-body .recharts-responsive-container { width: 100% !important; }
+
+/* 甜甜圈图居中容器(会话来源 / cron / 模型)。 */
+.workbench-overview .chart-body--donut {
+    display: grid;
+    place-items: center;
+    flex-shrink: 0;
+}
+
+/* 图表懒加载占位骨架:等高,冷玻璃微光呼吸,守 reduced-motion。 */
+.workbench-overview .chart-skeleton {
+    width: 100%;
+    border-radius: 12px;
+    background:
+        linear-gradient(180deg, rgba(120, 180, 255, 0.06), rgba(120, 180, 255, 0.02));
+    border: 1px solid var(--aisoc-border, rgba(120, 180, 255, 0.12));
+    animation: ov-chart-skeleton 1.6s ease-in-out infinite;
+}
+@keyframes ov-chart-skeleton {
+    0%, 100% { opacity: 0.5; }
+    50% { opacity: 0.85; }
+}
+@media (prefers-reduced-motion: reduce) {
+    .workbench-overview .chart-skeleton { animation: none; }
+}
 
 .workbench-overview .source-layout {
     display: flex;
@@ -1071,11 +1139,8 @@
     width: 280px;
     height: 280px;
     position: relative;
-}
-
-.workbench-overview .cron-token-chart-wrap canvas {
-    width: 100%;
-    height: 100%;
+    display: grid;
+    place-items: center;
 }
 
 .workbench-overview .cron-token-list {

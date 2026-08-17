@@ -9,10 +9,10 @@ import { Conversation } from '../../types';
 type ApprovalChoice = 'once' | 'session' | 'always' | 'deny';
 
 const CHOICE_LABELS: Record<ApprovalChoice, string> = {
-  once: '仅本次',
-  session: '本会话',
-  always: '总是允许',
-  deny: '拒绝',
+  once: 'Once',
+  session: 'This session',
+  always: 'Always allow',
+  deny: 'Reject',
 };
 
 export function ApprovalCard({ conversation }: { conversation: Conversation }) {
@@ -27,14 +27,14 @@ export function ApprovalCard({ conversation }: { conversation: Conversation }) {
 
   return (
     <section
-      aria-label="审批请求"
+      aria-label="Approval request"
       className="mx-4 my-2 rounded-[var(--aisoc-radius-md)] border border-[color-mix(in_srgb,var(--aisoc-warning)_30%,var(--aisoc-border))] bg-[color-mix(in_srgb,var(--aisoc-warning)_6%,var(--aisoc-panel))] p-3"
     >
       <div className="flex items-start gap-2.5">
         <ShieldAlert className="mt-0.5 h-4 w-4 shrink-0 text-[var(--aisoc-warning)]" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <div className="font-mono text-[10px] font-bold uppercase tracking-[0.18em] text-[var(--aisoc-warning)]">
-            需要审批
+            Approval required
           </div>
           {approval.command ? (
             <pre className="mt-2 overflow-x-auto rounded-[var(--aisoc-radius-sm)] border border-[var(--aisoc-border)] bg-[var(--aisoc-bg)] p-2 font-mono text-[11px] leading-relaxed text-[var(--aisoc-text)]">

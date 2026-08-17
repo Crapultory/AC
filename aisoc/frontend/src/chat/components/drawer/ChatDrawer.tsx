@@ -83,9 +83,9 @@ export function ChatDrawer({
           <button
             type="button"
             onClick={onToggleFullscreen}
-            aria-label={fullscreen ? '恢复分栏视图' : '全屏'}
+            aria-label={fullscreen ? 'Restore split view' : 'Fullscreen'}
             aria-pressed={fullscreen}
-            title={fullscreen ? '恢复分栏视图' : '全屏'}
+            title={fullscreen ? 'Restore split view' : 'Fullscreen'}
             className="ml-auto flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--aisoc-radius-sm)] text-[var(--aisoc-muted)] transition-colors hover:bg-[var(--aisoc-panel)] hover:text-[var(--aisoc-text)]"
           >
             {fullscreen ? (
@@ -98,8 +98,8 @@ export function ChatDrawer({
         <button
           type="button"
           onClick={onClose}
-          aria-label="关闭侧栏"
-          title="关闭侧栏"
+          aria-label="Close panel"
+          title="Close panel"
           className={`flex h-6 w-6 shrink-0 items-center justify-center rounded-[var(--aisoc-radius-sm)] text-[var(--aisoc-muted)] transition-colors hover:bg-[var(--aisoc-panel)] hover:text-[var(--aisoc-text)] ${
             onToggleFullscreen ? '' : 'ml-auto'
           }`}

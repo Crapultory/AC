@@ -341,7 +341,7 @@ export function SessionsPage() {
             </>
           ) : (
             <>
-              {loading ? <p>Loading sessions...</p> : null}
+              {loading ? <p className="subtle-copy">Loading sessions...</p> : null}
               {!loading && rows.length === 0 ? <p className="subtle-copy">No sessions found.</p> : null}
               <div className="sessions-history-scroll">
                 <ul className="list-grid sessions-history-list">
@@ -424,7 +424,7 @@ export function SessionsPage() {
           {!selectedSessionId ? (
             <p className="subtle-copy">Click a session row to inspect messages.</p>
           ) : null}
-          {detailLoading ? <p>Loading messages...</p> : null}
+          {detailLoading ? <p className="subtle-copy">Loading messages...</p> : null}
           {detailError ? <p className="error-text">{detailError}</p> : null}
           {!detailLoading && !detailError && selectedSessionId && renderedMessages.length === 0 ? (
             <p className="subtle-copy">No non-system messages available for this session.</p>

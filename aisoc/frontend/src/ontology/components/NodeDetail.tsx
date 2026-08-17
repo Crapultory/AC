@@ -2,10 +2,10 @@ import { Sparkles, FileText, Layers, ArrowUp, ArrowDown, Boxes, Wrench, Database
 import { DOMAIN_META, STATUS_META, domainColor } from '../design/tokens';
 
 const OBJ_TYPE_META: Record<string, { label: string; icon: any; color: string }> = {
-  system: { label: '对接系统', icon: Server, color: '#5B8DEF' },
-  data_source: { label: '数据源', icon: Database, color: '#3FB9A0' },
-  tool: { label: '工具', icon: Wrench, color: '#D4A64A' },
-  action: { label: '动作', icon: Terminal, color: '#B072E8' },
+  system: { label: 'System', icon: Server, color: '#5B8DEF' },
+  data_source: { label: 'Data Source', icon: Database, color: '#3FB9A0' },
+  tool: { label: 'Tool', icon: Wrench, color: '#D4A64A' },
+  action: { label: 'Action', icon: Terminal, color: '#B072E8' },
 };
 
 interface NeighborCtx {
@@ -29,9 +29,9 @@ export function NodeDetail({
           <Sparkles className="h-5 w-5" style={{ color: '#7dd3fc' }} />
         </div>
         <div>
-          <div className="text-sm font-medium text-[color:var(--ink-hi)]">选择一个节点查看详情</div>
+          <div className="text-sm font-medium text-[color:var(--ink-hi)]">Select a node to view details</div>
           <div className="text-xs text-[color:var(--ink-lo)] max-w-[420px] leading-relaxed mt-0.5">
-            点击图谱节点：查看定义、业务价值、关联上下级（可点击跳转）与三级对象实现方案。
+            Click a graph node to view its definition, business value, upstream/downstream relations (clickable to navigate), and L3 object implementation.
           </div>
         </div>
       </div>
@@ -77,7 +77,7 @@ export function NodeDetail({
         <div className="flex items-center gap-1.5 shrink-0">
           {sm && <span className={`chip ${sm.chip}`}>{sm.label}</span>}
           {layout === 'sidebar' && onClose && (
-            <button onClick={onClose} className="rounded-md p-1 hover:bg-white/10 text-[color:var(--ink-lo)]" title="关闭"><X className="h-4 w-4" /></button>
+            <button onClick={onClose} className="rounded-md p-1 hover:bg-white/10 text-[color:var(--ink-lo)]" title="Close"><X className="h-4 w-4" /></button>
           )}
         </div>
       </div>
@@ -85,42 +85,42 @@ export function NodeDetail({
       <div className="hairline" />
 
       <div className={`grid ${grid} gap-3 text-sm`}>
-        <Field label="Layer" value={layer === 1 ? '① 核心域' : layer === 2 ? '② 二级功能' : '③ 三级对象'} />
-        <Field label="Domain" value={dm ? `${node.domain} · ${dm.label_zh}` : (node.domain || (isObject ? '共享对象' : 'N/A'))} />
-        {otm ? <Field label="对象类型" value={otm.label} /> : <Field label="Type" value={node.type || 'Capability'} />}
+        <Field label="Layer" value={layer === 1 ? '① Core Domain' : layer === 2 ? '② Sub-capability' : '③ L3 Object'} />
+        <Field label="Domain" value={dm ? `${node.domain} · ${dm.label_zh}` : (node.domain || (isObject ? 'Shared object' : 'N/A'))} />
+        {otm ? <Field label="Object Type" value={otm.label} /> : <Field label="Type" value={node.type || 'Capability'} />}
         {'importance_weight' in node && node.importance_weight != null && <Field label="Weight" value={String(node.importance_weight)} />}
         {'subtotal' in node && node.subtotal != null && <Field label="Subtotal" value={String(node.subtotal)} />}
         {'fulfillment_ratio' in node && node.fulfillment_ratio != null && <Field label="Fulfillment" value={`${Math.round((node.fulfillment_ratio ?? 0) * 100)}%`} />}
       </div>
 
-      {node.definition && <Block icon={<Layers className="h-3.5 w-3.5" />} label="定义 Definition">{node.definition}</Block>}
-      {node.business_value && <Block icon={<Sparkles className="h-3.5 w-3.5" />} label="业务价值">{node.business_value}</Block>}
+      {node.definition && <Block icon={<Layers className="h-3.5 w-3.5" />} label="Definition">{node.definition}</Block>}
+      {node.business_value && <Block icon={<Sparkles className="h-3.5 w-3.5" />} label="Business Value">{node.business_value}</Block>}
 
       {/* L3 object: support + concrete implementation */}
       {isObject && node.support && (
-        <Block icon={<Lightbulb className="h-3.5 w-3.5" />} label="数据支撑建议">{node.support}</Block>
+        <Block icon={<Lightbulb className="h-3.5 w-3.5" />} label="Data Support Suggestion">{node.support}</Block>
       )}
       {isObject && node.implementation && (
-        <Block icon={<Wrench className="h-3.5 w-3.5" />} label="实现方案">{node.implementation}</Block>
+        <Block icon={<Wrench className="h-3.5 w-3.5" />} label="Implementation">{node.implementation}</Block>
       )}
 
       {/* Up neighbors — always shown. Down neighbors — hidden for L3 objects (b). */}
-      <NeighborList title="上级 / 输入关联" icon={<ArrowUp className="h-3.5 w-3.5" />} items={up} onNavigate={onNavigate} />
+      <NeighborList title="Upstream / Input Relations" icon={<ArrowUp className="h-3.5 w-3.5" />} items={up} onNavigate={onNavigate} />
       {!isObject && (
-        <NeighborList title="下级 / 输出关联" icon={<ArrowDown className="h-3.5 w-3.5" />} items={down} onNavigate={onNavigate} />
+        <NeighborList title="Downstream / Output Relations" icon={<ArrowDown className="h-3.5 w-3.5" />} items={down} onNavigate={onNavigate} />
       )}
 
       {/* diff mode: L2 subcap → object realisation */}
       {mode === 'diff' && objectDetail.length > 0 && (
         <div>
-          <div className="eyebrow mb-2 flex items-center gap-1.5"><Boxes className="h-3.5 w-3.5" /> 三级对象实现 ({objectDetail.filter((o) => o.satisfied).length}/{objectDetail.length})</div>
+          <div className="eyebrow mb-2 flex items-center gap-1.5"><Boxes className="h-3.5 w-3.5" /> L3 Object Realisation ({objectDetail.filter((o) => o.satisfied).length}/{objectDetail.length})</div>
           <div className="space-y-2">
             {objectDetail.map((o: any) => {
               const t = OBJ_TYPE_META[o.object_type] || OBJ_TYPE_META.tool;
               const Icon = t.icon;
               const sat = o.satisfaction ?? (o.satisfied ? 1 : 0);
               const sc = sat >= 0.95 ? '#6ee7b7' : sat > 0 ? '#fcd34d' : '#fda4af';
-              const sl = sat >= 0.95 ? '已满足' : sat > 0 ? '部分满足' : '缺失';
+              const sl = sat >= 0.95 ? 'Satisfied' : sat > 0 ? 'Partial' : 'Missing';
               return (
                 <div key={o.object_id} className="rounded-lg border p-2.5 text-xs" style={{ borderColor: 'var(--stroke-soft)', background: 'rgba(255, 255, 255, 0.02)' }}>
                   <button onClick={() => onNavigate?.(o.object_id)} className="w-full flex items-center justify-between gap-2 text-left">
@@ -132,7 +132,7 @@ export function NodeDetail({
                   </button>
                   {o.evidence?.length > 0 && (
                     <div className="mt-1.5 space-y-0.5">
-                      <div className="text-[10px] text-[color:var(--ink-lo)] uppercase tracking-wide">真实工具/元素</div>
+                      <div className="text-[10px] text-[color:var(--ink-lo)] uppercase tracking-wide">Real Tools / Elements</div>
                       {o.evidence.slice(0, 2).map((ev: any, i: number) => (
                         <div key={i} className="font-mono text-[11px] text-[color:var(--ink-mid)] break-all">{ev.source_path}</div>
                       ))}
@@ -142,13 +142,13 @@ export function NodeDetail({
                     <div className="mt-2 space-y-1.5">
                       {o.reason && (
                         <div className="flex gap-1.5">
-                          <span className="shrink-0 text-[10px] font-semibold px-1.5 rounded" style={{ color: '#FFA33C', background: '#FFA33C14' }}>AI缺口</span>
+                          <span className="shrink-0 text-[10px] font-semibold px-1.5 rounded" style={{ color: 'var(--accent-amber)', background: 'color-mix(in srgb, var(--accent-amber) 12%, transparent)' }}>AI Gap</span>
                           <span className="text-[color:var(--ink-mid)] leading-relaxed">{o.reason}</span>
                         </div>
                       )}
                       {o.recommendation && (
                         <div className="flex gap-1.5">
-                          <span className="shrink-0 text-[10px] font-semibold px-1.5 rounded" style={{ color: '#6ee7b7', background: '#2FD6A614' }}>AI建议</span>
+                          <span className="shrink-0 text-[10px] font-semibold px-1.5 rounded" style={{ color: 'var(--accent-emerald)', background: 'color-mix(in srgb, var(--accent-emerald) 12%, transparent)' }}>AI Recommendation</span>
                           <span className="text-[color:var(--ink-mid)] leading-relaxed">{o.recommendation}</span>
                         </div>
                       )}
@@ -180,7 +180,7 @@ export function NodeDetail({
 
 function LayerBadge({ layer }: { layer: number }) {
   const map: Record<number, { t: string; c: string }> = {
-    1: { t: 'L1 域', c: '#8B7CF6' }, 2: { t: 'L2 功能', c: '#6ee7b7' }, 3: { t: 'L3 对象', c: '#D4A64A' },
+    1: { t: 'L1 Domain', c: '#8B7CF6' }, 2: { t: 'L2 Capability', c: '#6ee7b7' }, 3: { t: 'L3 Object', c: '#D4A64A' },
   };
   const m = map[layer] || map[2];
   return <span className="chip shrink-0" style={{ background: `${m.c}1a`, color: m.c, borderColor: `${m.c}55`, fontSize: 10 }}>{m.t}</span>;
@@ -191,7 +191,7 @@ function NeighborList({ title, icon, items, onNavigate }: { title: string; icon:
     <div>
       <div className="eyebrow mb-1.5 flex items-center gap-1.5">{icon} {title} ({items.length})</div>
       {items.length === 0 ? (
-        <div className="text-xs text-[color:var(--ink-lo)] italic">无</div>
+        <div className="text-xs text-[color:var(--ink-lo)] italic">None</div>
       ) : (
         <div className="space-y-1">
           {items.map((it: any, i: number) => (

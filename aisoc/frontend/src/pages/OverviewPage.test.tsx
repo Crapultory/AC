@@ -112,10 +112,10 @@ describe("OverviewPage", () => {
     );
 
     expect(html).toContain("ADIC AISOC OVERVIEW DASHBOARD");
-    expect(html).toContain("TOKEN 使用趋势");
-    expect(html).toContain("会话关键词");
-    expect(html).toContain("计划任务 Token 消耗占比");
-    expect(html).toContain("安全事件");
+    expect(html).toContain("TOKEN USAGE TREND");
+    expect(html).toContain("SECURITY KEYWORDS");
+    expect(html).toContain("CRON TOKEN CONSUMPTION SHARE");
+    expect(html).toContain("SECURITY EVENTS");
     expect(html).toContain("overview-cyber-wrap workbench-overview");
     expect(html).toContain("panel panel-trend");
   });

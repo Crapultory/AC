@@ -171,7 +171,7 @@ export function WikiPage() {
           {!selectedPath ? (
             <p className="subtle-copy">Select a file from the tree to view its content.</p>
           ) : null}
-          {docLoading ? <p>Loading document…</p> : null}
+          {docLoading ? <p className="subtle-copy">Loading document…</p> : null}
           {docError ? <p className="error-text">{docError}</p> : null}
           {document && !docLoading ? (
             <div className="wiki-detail-content">

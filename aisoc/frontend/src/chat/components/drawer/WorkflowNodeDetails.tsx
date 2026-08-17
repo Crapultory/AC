@@ -24,9 +24,9 @@ export function WorkflowNodeDetails({ node, onClose }: WorkflowNodeDetailsProps)
     <section className="absolute bottom-3 right-3 z-30 w-[min(20rem,calc(100%-1.5rem))] select-text overflow-hidden rounded-[var(--aisoc-radius-md)] border border-[var(--aisoc-border)] bg-[var(--aisoc-panel-strong)] backdrop-blur">
       <div className="flex items-center justify-between border-b border-[var(--aisoc-border)] px-3 py-1.5">
         <span className="font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-[var(--aisoc-accent)]">
-          节点详情
+          Node Details
         </span>
-        <button type="button" aria-label="关闭节点详情" onClick={onClose} className="text-[var(--aisoc-muted)] hover:text-[var(--aisoc-text)]">
+        <button type="button" aria-label="Close node details" onClick={onClose} className="text-[var(--aisoc-muted)] hover:text-[var(--aisoc-text)]">
           <X className="h-3 w-3" aria-hidden="true" />
         </button>
       </div>

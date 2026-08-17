@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import cytoscape from 'cytoscape';
 import { statusColor } from '../design/tokens';
+import { useTheme } from '../../design/theme';
 
 interface GraphEdge { id: string; source: string; target: string; type?: string; label?: string; kind?: string; cross_domain?: boolean }
 
@@ -42,6 +43,27 @@ export function GraphCanvas({
   const ref = useRef<HTMLDivElement | null>(null);
   const cyRef = useRef<cytoscape.Core | null>(null);
   const [ready, setReady] = useState(false);
+  const theme = useTheme();
+
+  // 主题相关的画布 chrome(标签/描边/边线/边标背景 与 画布底)。节点的层级/状态/域
+  // 数据编码色是主题无关的宝石色,两个主题下都可读,故不随主题改。
+  const chrome = useMemo(() => {
+    const light = theme === 'light';
+    return {
+      canvasBg: light
+        ? 'radial-gradient(620px 420px at 28% 14%, rgba(56, 189, 248, 0.10), transparent 55%), radial-gradient(620px 420px at 76% 82%, rgba(167, 139, 250, 0.10), transparent 55%), #eef2f9'
+        : 'radial-gradient(620px 420px at 28% 14%, rgba(56, 189, 248, 0.07), transparent 55%), radial-gradient(620px 420px at 76% 82%, rgba(167, 139, 250, 0.07), transparent 55%), #030407',
+      nodeLabel: light ? '#0f1e33' : '#E4EEFF',
+      nodeOutline: light ? '#f4f6fb' : '#030406',
+      domainLabel: light ? '#0b1728' : '#F2F7FF',
+      edgeBase: light ? '#c3cee0' : '#141b28',
+      edgeHier: light ? '#8aa0c2' : '#5C7BA8',
+      edgeSem: light ? '#5b7bb0' : '#6E93C8',
+      edgeLabelText: light ? '#46587a' : '#C3D6F2',
+      edgeLabelBg: light ? '#ffffff' : '#040609',
+      crossText: light ? '#2563eb' : '#AEDBFF',
+    };
+  }, [theme]);
 
   const nodeIds = useMemo(() => new Set(nodes.map((n) => n.id)), [nodes]);
   const layerOf = (n: any): number =>
@@ -173,9 +195,9 @@ export function GraphCanvas({
           selector: 'node[halo != "yes"]',
           style: {
             'background-color': 'data(color)', 'background-opacity': 0.92, shape: 'data(shape)' as any,
-            label: 'data(label)', color: '#E4EEFF', 'font-family': 'Inter, sans-serif', 'font-size': 10,
+            label: 'data(label)', color: chrome.nodeLabel, 'font-family': 'Inter, sans-serif', 'font-size': 10,
             'font-weight': 500, 'text-wrap': 'wrap', 'text-max-width': '92px', 'text-valign': 'bottom',
-            'text-margin-y': 4, 'text-outline-color': '#030406', 'text-outline-width': 3, 'min-zoomed-font-size': 7,
+            'text-margin-y': 4, 'text-outline-color': chrome.nodeOutline, 'text-outline-width': 3, 'min-zoomed-font-size': 7,
             width: (e: any) => `${Math.min(42, Math.max(19, Number(e.data('weight')) * 7))}`,
             height: (e: any) => `${Math.min(42, Math.max(19, Number(e.data('weight')) * 7))}`,
             'border-width': 2, 'border-color': 'data(color)', 'border-opacity': 0.5,
@@ -187,7 +209,7 @@ export function GraphCanvas({
           selector: 'node[layer = 1]',
           style: {
             shape: 'ellipse', 'font-family': 'Orbitron, Inter, sans-serif', 'font-size': 11, 'font-weight': 700,
-            'text-valign': 'center', 'text-margin-y': 0, 'text-max-width': '70px', color: '#F2F7FF',
+            'text-valign': 'center', 'text-margin-y': 0, 'text-max-width': '70px', color: chrome.domainLabel,
             width: (e: any) => `${Math.min(80, 46 + Number(e.data('weight')) * 2.2)}`,
             height: (e: any) => `${Math.min(80, 46 + Number(e.data('weight')) * 2.2)}`,
             'border-width': 3, 'border-opacity': 1, 'background-opacity': 0.24, 'z-index': 20,
@@ -228,14 +250,14 @@ export function GraphCanvas({
         { selector: 'edge.dim', style: { opacity: 0.06 } },
         {
           selector: 'edge',
-          style: { width: 1, 'line-color': '#141b28', 'curve-style': 'bezier', 'target-arrow-shape': 'none', opacity: 0.28,
+          style: { width: 1, 'line-color': chrome.edgeBase, 'curve-style': 'bezier', 'target-arrow-shape': 'none', opacity: 0.28,
             'transition-property': 'opacity, line-color, width', 'transition-duration': 200 } as any,
         },
         // 层级/域内结构（contains/requires）— 柔和实线，稳定常显（不做自动半隐）
         {
           selector: 'edge[kind = "hierarchy"]',
           style: {
-            width: 1.6, 'line-color': '#5C7BA8', 'line-style': 'solid',
+            width: 1.6, 'line-color': chrome.edgeHier, 'line-style': 'solid',
             'target-arrow-shape': 'none', opacity: 0.55,
           } as any,
         },
@@ -243,10 +265,10 @@ export function GraphCanvas({
         {
           selector: 'edge[kind = "semantic"][cross = "no"]',
           style: {
-            width: 1.8, 'line-color': '#6E93C8', 'line-style': 'solid',
-            'target-arrow-shape': 'triangle', 'target-arrow-color': '#6E93C8', 'arrow-scale': 0.85, opacity: 0.7,
-            label: showEdgeLabels ? 'data(label)' : '', 'font-size': 10, 'font-family': 'Inter, sans-serif', color: '#C3D6F2',
-            'text-background-color': '#040609', 'text-background-opacity': 0.85, 'text-background-padding': '3px', 'text-rotation': 'autorotate',
+            width: 1.8, 'line-color': chrome.edgeSem, 'line-style': 'solid',
+            'target-arrow-shape': 'triangle', 'target-arrow-color': chrome.edgeSem, 'arrow-scale': 0.85, opacity: 0.7,
+            label: showEdgeLabels ? 'data(label)' : '', 'font-size': 10, 'font-family': 'Inter, sans-serif', color: chrome.edgeLabelText,
+            'text-background-color': chrome.edgeLabelBg, 'text-background-opacity': 0.85, 'text-background-padding': '3px', 'text-rotation': 'autorotate',
           } as any,
         },
         // 跨域 semantic — 虚线，流动，青色（默认淡，hover 点亮，避免总览杂乱）
@@ -254,17 +276,17 @@ export function GraphCanvas({
           selector: 'edge[kind = "semantic"][cross = "yes"]',
           style: {
             width: 1.8, 'line-color': '#6FD3FF', 'line-style': 'dashed', 'line-dash-pattern': [8, 6],
-            'target-arrow-shape': 'triangle', 'target-arrow-color': '#6FD3FF', 'arrow-scale': 0.85, opacity: 0.2, color: '#AEDBFF',
+            'target-arrow-shape': 'triangle', 'target-arrow-color': '#6FD3FF', 'arrow-scale': 0.85, opacity: 0.2, color: chrome.crossText,
             label: showEdgeLabels ? 'data(label)' : '', 'font-size': 10, 'font-family': 'Inter, sans-serif',
-            'text-background-color': '#040609', 'text-background-opacity': 0.85, 'text-background-padding': '3px', 'text-rotation': 'autorotate',
+            'text-background-color': chrome.edgeLabelBg, 'text-background-opacity': 0.85, 'text-background-padding': '3px', 'text-rotation': 'autorotate',
           } as any,
         },
         {
           selector: 'edge.hl',
           style: {
             'line-color': '#7dd3fc', 'target-arrow-color': '#7dd3fc', 'target-arrow-shape': 'triangle', width: 3, opacity: 1,
-            'line-style': 'dashed', 'line-dash-pattern': [6, 4], label: 'data(label)', 'font-size': 11, 'font-weight': 600, color: '#EAF2FF',
-            'text-background-color': '#040609', 'text-background-opacity': 0.9, 'text-background-padding': '3px', 'text-rotation': 'autorotate', 'z-index': 999,
+            'line-style': 'dashed', 'line-dash-pattern': [6, 4], label: 'data(label)', 'font-size': 11, 'font-weight': 600, color: chrome.nodeLabel,
+            'text-background-color': chrome.edgeLabelBg, 'text-background-opacity': 0.9, 'text-background-padding': '3px', 'text-rotation': 'autorotate', 'z-index': 999,
           } as any,
         },
       ],
@@ -322,7 +344,7 @@ export function GraphCanvas({
 
     cyRef.current = cy;
     return () => { cancelAnimationFrame(raf); cy.destroy(); };
-  }, [elements, onSelect, colorMode, clusterPositions]);
+  }, [elements, onSelect, colorMode, clusterPositions, chrome]);
 
   useEffect(() => {
     const cy = cyRef.current;
@@ -345,8 +367,7 @@ export function GraphCanvas({
         className="h-full w-full rounded-2xl border overflow-hidden"
         style={{
           borderColor: 'var(--stroke-soft)',
-          background:
-            'radial-gradient(620px 420px at 28% 14%, rgba(56, 189, 248, 0.07), transparent 55%), radial-gradient(620px 420px at 76% 82%, rgba(167, 139, 250, 0.07), transparent 55%), #030407',
+          background: chrome.canvasBg,
         }}
       />
       {!ready && (

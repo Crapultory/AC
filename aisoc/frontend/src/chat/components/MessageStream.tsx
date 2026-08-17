@@ -82,7 +82,7 @@ export function MessageStream({ onOpenFile }: MessageStreamProps) {
           <button
             type="button"
             onClick={() => setTransportError('')}
-            aria-label="关闭错误提示"
+            aria-label="Dismiss error"
             className="shrink-0 rounded p-0.5 transition-colors hover:bg-[color-mix(in_srgb,var(--aisoc-danger)_15%,transparent)]"
           >
             <X className="h-3.5 w-3.5" aria-hidden="true" />
@@ -95,12 +95,12 @@ export function MessageStream({ onOpenFile }: MessageStreamProps) {
           className="flex shrink-0 items-start gap-2 border-b border-[color-mix(in_srgb,var(--aisoc-warning)_30%,var(--aisoc-border))] bg-[color-mix(in_srgb,var(--aisoc-warning)_7%,var(--aisoc-bg-alt))] px-4 py-2 text-xs text-[var(--aisoc-warning)]"
         >
           <span className="min-w-0 flex-1 break-words">
-            消息被拒绝，未发送：{rejectedInput.text.length > 80 ? `${rejectedInput.text.slice(0, 80)}…` : rejectedInput.text}
+            Message rejected, not sent: {rejectedInput.text.length > 80 ? `${rejectedInput.text.slice(0, 80)}…` : rejectedInput.text}
           </span>
           <button
             type="button"
             onClick={clearRejectedInput}
-            aria-label="关闭拒绝提示"
+            aria-label="Dismiss rejection notice"
             className="shrink-0 rounded p-0.5 transition-colors hover:bg-[color-mix(in_srgb,var(--aisoc-warning)_15%,transparent)]"
           >
             <X className="h-3.5 w-3.5" aria-hidden="true" />
@@ -112,7 +112,7 @@ export function MessageStream({ onOpenFile }: MessageStreamProps) {
         ref={scrollRef}
         onScroll={handleScroll}
         className="min-h-0 flex-1 overflow-y-auto py-2"
-        aria-label="消息列表"
+        aria-label="Message list"
       >
         {!activeConversation || activeConversation.messages.length === 0 ? (
           <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center">
@@ -121,7 +121,7 @@ export function MessageStream({ onOpenFile }: MessageStreamProps) {
               Awaiting First Turn
             </div>
             <p className="max-w-xs text-xs leading-relaxed text-[var(--aisoc-muted)]">
-              在下方输入消息开始对话，输入 <code className="font-mono text-[var(--aisoc-accent)]">@</code> 可唤起快捷指令。
+              Type a message below to start a conversation, or enter <code className="font-mono text-[var(--aisoc-accent)]">@</code> to open Quick Commands.
             </p>
             {!activeConversation ? (
               <button
@@ -129,7 +129,7 @@ export function MessageStream({ onOpenFile }: MessageStreamProps) {
                 onClick={createConversation}
                 className="rounded-[var(--aisoc-radius-sm)] border border-[var(--aisoc-border)] px-3 py-1.5 font-mono text-[11px] font-bold text-[var(--aisoc-accent)] transition-colors hover:border-[var(--aisoc-border-strong)] hover:bg-[var(--aisoc-accent-soft)]"
               >
-                新建会话
+                New Session
               </button>
             ) : null}
           </div>

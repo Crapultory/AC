@@ -132,7 +132,7 @@ describe("CronPage behavior", () => {
   it("creates cron job from New modal and refreshes list", async () => {
     const createdPayload = {
       name: "daily-test-msg",
-      prompt: "向当前对话发送一条测试消息，内容为：这是一条每日测试消息。",
+      prompt: "Send a test message to the current conversation with the content: This is a daily test message.",
       schedule: "* * * * *",
       deliver: "slack",
       skills: [],

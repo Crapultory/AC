@@ -23,23 +23,23 @@ export function RunStateIndicator({ conversation }: { conversation: Conversation
   let tone = 'text-[var(--aisoc-muted)]';
   if (state === 'running' || state === 'waiting_for_delegate_input') {
     icon = <LoaderCircle className="h-3 w-3 animate-spin" aria-hidden="true" />;
-    label = state === 'running' ? `${actor} · 正在执行` : `${actor} · 等待 delegate 输入`;
+    label = state === 'running' ? `${actor} · Running` : `${actor} · Waiting for delegate input`;
     tone = 'text-[var(--aisoc-accent)]';
   } else if (state === 'waiting_for_approval') {
     icon = <ShieldAlert className="h-3 w-3" aria-hidden="true" />;
-    label = `${actor} · 等待审批`;
+    label = `${actor} · Waiting for approval`;
     tone = 'text-[var(--aisoc-warning)]';
   } else if (state === 'waiting_for_clarify') {
     icon = <ShieldAlert className="h-3 w-3" aria-hidden="true" />;
-    label = `${actor} · 等待澄清`;
+    label = `${actor} · Waiting for clarification`;
     tone = 'text-[var(--aisoc-warning)]';
   } else if (state === 'interrupted') {
     icon = <OctagonPause className="h-3 w-3" aria-hidden="true" />;
-    label = `${actor} · 已打断`;
+    label = `${actor} · Interrupted`;
     tone = 'text-[var(--aisoc-warning)]';
   } else if (state === 'error') {
     icon = <CircleAlert className="h-3 w-3" aria-hidden="true" />;
-    label = `${actor} · 会话出错`;
+    label = `${actor} · Session error`;
     tone = 'text-[var(--aisoc-danger)]';
   } else {
     label = `${actor} · ${state.replace(/_/g, ' ')}`;
@@ -59,7 +59,7 @@ export function RunStateIndicator({ conversation }: { conversation: Conversation
           className="ml-auto flex items-center gap-1 rounded-[var(--aisoc-radius-sm)] border border-[var(--aisoc-border)] px-2 py-0.5 font-mono text-[10px] font-bold text-[var(--aisoc-accent)] transition-colors hover:border-[var(--aisoc-border-strong)] hover:bg-[var(--aisoc-accent-soft)]"
         >
           <Play className="h-2.5 w-2.5" aria-hidden="true" />
-          恢复
+          Resume
         </button>
       ) : null}
     </div>
