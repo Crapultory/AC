@@ -22,9 +22,11 @@ from aegis.backend.routes.agents import build_agents_router
 from aegis.backend.routes.a2a_context import build_a2a_context_router
 from aegis.backend.routes.audit import build_audit_router
 from aegis.backend.routes.auth import build_auth_router
+from aegis.backend.routes.lark import build_lark_sso_router
 from aegis.backend.routes.overview import build_overview_router
 from aegis.backend.routes.prompt_templates import build_prompt_templates_router
 from aegis.backend.routes.routing import build_routing_router
+from aegis.backend.routes.sso import build_sso_router
 from aegis.backend.routes.system import build_system_router
 from aegis.backend.routes.system_instructs import build_system_instructs_router
 from aegis.backend.routes.skills_static import build_skills_static_router
@@ -46,6 +48,11 @@ PUBLIC_API_PATHS = frozenset(
         "/api/auth/register",
         "/api/auth/session",
         "/api/auth/logout",
+        "/api/sso/start",
+        "/api/sso/callback",
+        "/api/sso/exchange",
+        "/api/lark/start",
+        "/api/lark/callback",
         "/health",
         "/api/system/bootstrap",
     }
@@ -160,6 +167,8 @@ def create_app(settings: AegisSettings | None = None) -> FastAPI:
         return await call_next(request)
 
     app.include_router(build_auth_router(active_settings, user_service))
+    app.include_router(build_sso_router(active_settings, user_service, user_service.store))
+    app.include_router(build_lark_sso_router(active_settings, user_service, user_service.store))
     app.include_router(build_overview_router(active_settings, user_service))
     app.include_router(build_users_router(active_settings, user_service))
     app.include_router(
