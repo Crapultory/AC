@@ -51,6 +51,73 @@ def test_session_detail_includes_tool_call_id_for_history_reconstruction(monkeyp
     assert tool_messages[0]["content"] == "scan complete, 0 findings"
 
 
+def test_ownerless_session_is_readable_by_any_user(monkeypatch) -> None:
+    """Sessions with no user_id (legacy rows, tui/discord/cron/etc.) must stay
+    visible on the browse/search page regardless of who's asking — only
+    owned sessions are exclusive. Regression guard for the per-user isolation
+    change accidentally hiding all pre-existing/cross-platform history."""
+    from aisoc.backend.services import session_service
+
+    class FakeSessionDB:
+        def resolve_session_id(self, session_id: str) -> str:
+            return session_id
+
+        def get_session(self, sid: str) -> dict:
+            return {"source": "tui", "user_id": None}
+
+        def get_messages(self, sid: str) -> list[dict]:
+            return []
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(session_service, "SessionDB", FakeSessionDB)
+
+    assert session_service.get_session_detail("sess-tui", user_id="some-user") is not None
+    assert session_service.get_session_messages("sess-tui", user_id="some-user") is not None
+
+
+def test_owned_session_stays_exclusive_to_its_owner(monkeypatch) -> None:
+    """A session with a real owner must still be denied to a different user —
+    the ownerless-is-public relaxation must not reopen the isolation gap."""
+    from aisoc.backend.services import session_service
+
+    class FakeSessionDB:
+        def resolve_session_id(self, session_id: str) -> str:
+            return session_id
+
+        def get_session(self, sid: str) -> dict:
+            return {"source": "aisoc_web", "user_id": "owner-uid"}
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(session_service, "SessionDB", FakeSessionDB)
+
+    assert session_service.get_session_detail("sess-1", user_id="other-uid") is None
+    assert session_service.get_session_detail("sess-1", user_id="owner-uid") is not None
+
+
+def test_ownerless_session_cannot_be_deleted_by_anyone(monkeypatch) -> None:
+    """Delete stays strict: nobody can delete an unclaimed cross-platform
+    session just because they can now read it."""
+    from aisoc.backend.services import session_service
+
+    class FakeSessionDB:
+        def resolve_session_id(self, session_id: str) -> str:
+            return session_id
+
+        def get_session(self, sid: str) -> dict:
+            return {"source": "discord", "user_id": ""}
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(session_service, "SessionDB", FakeSessionDB)
+
+    assert session_service.delete_session("sess-discord", user_id="some-user") is False
+
+
 def test_latest_descendant_returns_resume_target(test_client, auth_headers, monkeypatch) -> None:
     from aisoc.backend.services import session_service
 
