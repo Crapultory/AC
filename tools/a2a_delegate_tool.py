@@ -12,6 +12,7 @@ import uuid
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+from urllib.parse import urlsplit
 from xml.sax.saxutils import escape
 
 import httpx
@@ -140,12 +141,24 @@ def _summarize_agent_card(card_json: dict[str, Any] | None) -> dict[str, Any] | 
             name = skill.get("name") or skill.get("id")
             if isinstance(name, str) and name:
                 skills.append(name)
+    raw_extensions = card_json.get("extensions") or card_json.get("supported_extensions") or []
+    extensions = [item for item in raw_extensions if isinstance(item, dict)] if isinstance(raw_extensions, list) else []
+    interaction_extension = next(
+        (
+            item
+            for item in extensions
+            if str(item.get("uri") or "") == "https://hermes.dev/extensions/interaction/v1"
+        ),
+        None,
+    )
     return {
         "name": card_json.get("name"),
         "description": card_json.get("description"),
         "version": card_json.get("version"),
         "skills": skills,
-        "supported_interfaces": card_json.get("supported_interfaces", []),
+        "supported_interfaces": card_json.get("supported_interfaces", card_json.get("supportedInterfaces", [])),
+        "extensions": extensions,
+        "interaction_extension": interaction_extension,
     }
 
 
@@ -710,6 +723,8 @@ class _A2ADelegateSession:
         poll_interval: float = 1.0,
         session_id: str | None = None,
         headers: dict[str, str] | None = None,
+        response_path: str | None = None,
+        interaction_supported: bool = False,
     ):
         self.base_url = base_url
         self.output = output
@@ -719,9 +734,12 @@ class _A2ADelegateSession:
         self.context_id = session_id
         self.task_id: str | None = None
         self.headers = headers or {}
+        self._response_path = str(response_path or "").strip()
+        self._interaction_supported = bool(interaction_supported)
         self._client = None
         self._http_client = None
         self._rendered_tool_entries: set[str] = set()
+        self._rendered_interactions: set[tuple[str, str]] = set()
         self._tool_names_by_call_id: dict[str, str] = {}
         self._streamed_assistant_text = ""
         self._last_assistant_text = ""
@@ -760,6 +778,43 @@ class _A2ADelegateSession:
     def latest_assistant_text(self) -> str:
         with self._state_lock:
             return self._last_assistant_text
+
+    def bind_output_adapter(self) -> None:
+        binder = getattr(self.output, "bind_a2a_interaction_session", None)
+        if callable(binder):
+            binder(self)
+
+    def unbind_output_adapter(self) -> None:
+        unbinder = getattr(self.output, "unbind_a2a_interaction_session", None)
+        if callable(unbinder):
+            unbinder(self)
+
+    def schedule_interaction_response(
+        self,
+        interaction_id: str,
+        kind: str,
+        value: Any,
+    ) -> bool:
+        """Schedule a remote response without blocking the caller's loop."""
+        with self._state_lock:
+            loop = self._owner_loop
+            owner_thread_id = self._owner_thread_id
+        if loop is None or not loop.is_running():
+            return False
+        coroutine = self.respond_interaction(interaction_id, kind, value)
+        if owner_thread_id == threading.get_ident():
+            loop.create_task(coroutine)
+            return True
+        future = asyncio.run_coroutine_threadsafe(coroutine, loop)
+
+        def _log_failure(done) -> None:
+            try:
+                done.result()
+            except Exception:
+                logger.warning("A2A interaction response failed", exc_info=True)
+
+        future.add_done_callback(_log_failure)
+        return True
 
     def should_suppress_stop_exception(self, exc: BaseException) -> bool:
         return self.stop_requested() and _is_benign_a2a_stop_exception(exc)
@@ -878,6 +933,49 @@ class _A2ADelegateSession:
             "task_id": self.task_id,
         }
 
+    def _interaction_url(self) -> str:
+        response_path = self._response_path or "/hermes/interaction/respond"
+        if response_path.startswith("http://") or response_path.startswith("https://"):
+            return response_path
+        base = self.base_url.rstrip("/")
+        base_parts = urlsplit(base)
+        base_path = base_parts.path.rstrip("/")
+        if response_path.startswith("/"):
+            if base_path and response_path.startswith(base_path + "/"):
+                return f"{base_parts.scheme}://{base_parts.netloc}{response_path}"
+            return f"{base_parts.scheme}://{base_parts.netloc}{response_path}"
+        return f"{base}/{response_path.lstrip('/')}"
+
+    async def respond_interaction(self, interaction_id: str, kind: str, value: Any) -> dict[str, Any]:
+        if not self._interaction_supported:
+            raise RuntimeError("remote A2A agent does not declare Hermes interaction support")
+        await self.open()
+        task_id, context_id = self._snapshot_remote_ids()
+        if not task_id or not context_id:
+            raise RuntimeError("remote A2A task is not available for interaction response")
+        payload: dict[str, Any] = {
+            "task_id": task_id,
+            "context_id": context_id,
+            "interaction_id": str(interaction_id),
+            "kind": str(kind),
+        }
+        if kind == "approval":
+            payload["choice"] = str(value)
+        else:
+            if isinstance(value, list):
+                payload["answer"] = [str(item) for item in value]
+            else:
+                payload["answer"] = str(value)
+        response = await self._http_client.post(self._interaction_url(), json=payload)
+        if response.status_code >= 400:
+            try:
+                detail = response.json().get("detail")
+            except Exception:
+                detail = response.text
+            raise RuntimeError(f"A2A interaction response failed ({response.status_code}): {detail}")
+        result = response.json()
+        return result if isinstance(result, dict) else {"ok": True}
+
     async def _send_text(self, text: str):
         from a2a.types import Message, Part, Role, SendMessageConfiguration, SendMessageRequest
 
@@ -969,6 +1067,7 @@ class _A2ADelegateSession:
         for message in messages:
             if message is None:
                 continue
+            self._emit_interaction_message(message, session_id=session_id)
             for tool_call in _a2a_message_tool_calls(message):
                 call_id, tool_name, arguments = _a2a_tool_call_details(tool_call)
                 if call_id:
@@ -982,6 +1081,34 @@ class _A2ADelegateSession:
 
             if _a2a_is_tool_message(message):
                 continue
+
+    def _emit_interaction_message(self, message, *, session_id: str | None) -> None:
+        metadata = _a2a_hermes_metadata(message)
+        kind = str(metadata.get("kind") or "")
+        if kind not in {
+            "approval_request",
+            "clarify_request",
+            "approval_resolved",
+            "clarify_resolved",
+        }:
+            return
+        if kind.endswith("_request") and not self._interaction_supported:
+            # A legacy remote card has no authenticated response channel.
+            # Do not manufacture UI controls that can never unblock the
+            # remote worker; its existing fail-closed behavior remains intact.
+            return
+        interaction_id = str(metadata.get("interaction_id") or "")
+        if not interaction_id:
+            return
+        event_type = kind
+        key = (interaction_id, event_type)
+        if key in self._rendered_interactions:
+            return
+        self._rendered_interactions.add(key)
+        payload = dict(metadata)
+        payload.setdefault("task_id", self.task_id)
+        payload.setdefault("context_id", self.context_id)
+        _emit(self.output, event_type, _compact_json_text(payload), session_id)
 
     def _emit_text_deltas(self, task, *, session_id: str | None) -> None:
         text = _a2a_task_text(task)
@@ -1023,6 +1150,18 @@ def _resolve_a2a_remote_url(entry: dict[str, Any]) -> str:
             if isinstance(url, str) and url:
                 return _normalize_a2a_base_url(url)
     return _normalize_a2a_base_url(str(entry.get("url") or ""))
+
+
+def _a2a_interaction_config(entry: dict[str, Any]) -> tuple[bool, str | None]:
+    card = entry.get("agent_card")
+    if not isinstance(card, dict):
+        return False, None
+    extension = card.get("interaction_extension")
+    if not isinstance(extension, dict):
+        return False, None
+    params = extension.get("params") or {}
+    response_path = params.get("response_path") if isinstance(params, dict) else None
+    return True, str(response_path).strip() if response_path else None
 
 
 class _RemoteA2ADelegateCancelHandle:
@@ -1197,13 +1336,19 @@ def _run_remote_delegate(
         output = None
 
     remote_session_id = _resolve_delegate_session_id(session_id)
+    interaction_supported, response_path = _a2a_interaction_config(entry)
     session = _A2ADelegateSession(
         _resolve_a2a_remote_url(entry),
         output=output,
         parent_agent=parent_agent,
         session_id=remote_session_id,
         headers=entry.get("headers") or {},
+        response_path=response_path,
+        interaction_supported=interaction_supported,
     )
+    bind_output = getattr(session, "bind_output_adapter", None)
+    if callable(bind_output):
+        bind_output()
     active_handle = _register_active_a2a_session(parent_agent, session)
 
     async def _run_loop() -> dict[str, Any]:
@@ -1363,6 +1508,10 @@ def _run_remote_delegate(
                     logger.debug("Suppressing benign A2A close exception after stop", exc_info=True)
                 else:
                     raise
+            finally:
+                unbind_output = getattr(session, "unbind_output_adapter", None)
+                if callable(unbind_output):
+                    unbind_output()
 
     return _run_coro_sync(_run_loop())
 

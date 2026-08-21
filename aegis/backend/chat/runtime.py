@@ -98,3 +98,13 @@ class AegisChatOutputAdapter:
             content=content,
             delegate_session_id=session_id,
         )
+
+    def bind_a2a_interaction_session(self, session) -> None:
+        binder = getattr(self._actor, "bind_a2a_interaction_session", None)
+        if callable(binder):
+            binder(session)
+
+    def unbind_a2a_interaction_session(self, session) -> None:
+        unbinder = getattr(self._actor, "unbind_a2a_interaction_session", None)
+        if callable(unbinder):
+            unbinder(session)

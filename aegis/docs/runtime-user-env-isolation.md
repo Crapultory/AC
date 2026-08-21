@@ -2,6 +2,8 @@
 
 本文档描述当前 Hermes 主线中 Aegis 二次开发的 messaging 用户级 runtime env 隔离。它覆盖 live gateway turn、local terminal、`userenv` 工具、Slack 直入和 Aegis 远端 A2A 委托的来源身份前缀，以及带身份的 cron job（包括 `no_agent=True` 脚本模式）。目标是让同一 Hermes 进程服务多个用户、多个会话时，用户环境变量不会互相读取、覆盖或残留。
 
+当前 A2A 交互服务端实现位于 `workagent/`（对应 AISOC 升级目录），本次更新不修改 `aisoc/` 下的 A2A executor/server。交互审批或澄清被响应后，会继续原有 Workagent agent turn，不会新建一份用户环境分区。
+
 ## 1. 设计目标与数据模型
 
 需要同时满足：
@@ -45,7 +47,8 @@
 - `tools/environments/base.py`、`tools/environments/local.py`、`tools/terminal_tool.py`: 注入、snapshot hygiene 和 local cache isolation。
 - `gateway/run.py`: 为 Slack 直入 Agent 的入站 turn 组装 `<source>` 前缀。
 - `tools/a2a_delegate_tool.py`: Aegis 父 Agent 委托远端 A2A Agent 时组装 `<source>` 前缀。
-- `aisoc/backend/a2a_service/executor.py`: 解析收到的 `<source>` 前缀，并将身份绑定到 Aegis Agent runtime。
+- `workagent/backend/a2a_service/executor.py`: 解析收到的 `<source>` 前缀，将身份绑定到 Workagent Agent runtime，并桥接 A2A 审批/澄清交互。
+- `workagent/backend/a2a_service/interactions.py`、`workagent/backend/a2a_server.py`: 注册交互等待、校验响应并在同一 A2A task 上发布 resolved metadata。
 - `cron/jobs.py`、`tools/cronjob_tools.py`、`cron/scheduler.py`: 延迟执行时的 cron 所属身份。
 
 ## 2. 存储与 `userenv`
@@ -158,6 +161,28 @@ Aegis executor 接收 A2A 请求时只解析文本偏移 0 处、精确形如 `<
 
 `<source>` 是**受信任上游附加的身份声明**，而不是独立的授权凭证。运行时 RBAC 可以使用已验证的 `platform + uid`（Slack 直入时可附加 `channel`）作判断，但不得仅因任意 A2A 请求正文含有该标签就授予权限。直接 A2A client 和远端服务仍必须依赖传输层认证、gateway/adapter 授权及服务端信任边界；消息正文中第二个或非首行的 `<source>` 一律只是非可信内容。
 
+### 3.2 A2A transport identity 与 userenv 分区的分离
+
+Workagent executor 使用 A2A `context_id` 作为稳定的 Hermes session key；`task_id` 只标识当前 task，不能用它替代跨轮 session。收到来源信封后，执行线程临时设置以下字段：
+
+| 字段 | 作用 | 是否作为 userenv 分区键 |
+| --- | --- | --- |
+| `agent.platform = "{platform}_a2a"` | 标记当前 Agent 的 A2A 执行 surface、日志和运行时语义。 | 否 |
+| `agent._user_env_platform = "{platform}"` | 保留原始 Slack/Feishu 等来源平台，供 userenv identity binding 优先读取。 | 是（与 user id 组合） |
+| `agent._user_id` / `agent._user_name` | 恢复委托方用户身份。 | 只有 `_user_id` 参与 key；名字仅保留为 `CURRENT_USER_NAME` |
+
+因此，来自 Slack 用户 `U123` 的远端 turn 即使执行 surface 是 `slack_a2a`，terminal/userenv 仍读取：
+
+```text
+storage key:       slack.U123
+runtime scope key: local::slack::U123
+agent platform:    slack_a2a       # 仅 A2A 执行标识
+```
+
+审批或澄清的交互过程也遵循同一分离：Workagent 在 `context_id` 对应的 agent 线程内注册并阻塞，用户点击后通过经认证的 A2A response endpoint 唤醒原 wait。它不会启动第二个 Agent turn，也不会因为 `platform` 的 `_a2a` 后缀生成 `slack_a2a.U123` 新分区。`_run_agent_conversation()` 在回合结束后恢复临时字段；terminal 在审批通过后的同一回合中仍通过 `UserEnvIdentity` 读取原始平台分区。
+
+如果 A2A 请求没有 `<source>`，executor 仍使用 transport-only 的 `HERMES_SESSION_PLATFORM=a2a` 参与审批上下文判断，但不会凭空构造用户 userenv identity，也不会退化为读取全局环境。
+
 ## 4. Terminal 和 shell snapshot
 
 ### 4.1 直接 subprocess 注入
@@ -188,6 +213,8 @@ local backend 使用 spawn-per-call + shell snapshot，而不是为每个用户�
 - 同平台同 user id 改名时复用原 local environment。
 
 这项隔离只改变 local backend。Docker、SSH、Modal、Daytona 等后端沿用各自既有缓存/复用语义，除非单独实现同等隔离。
+
+Workagent A2A 的审批/澄清恢复不改变上述 cache key：响应只是解除当前 agent thread 的阻塞，后续 terminal 仍沿用原始 `platform + user_id` 的 runtime scope。
 
 ## 5. Cron 身份、权限与环境
 
@@ -262,9 +289,9 @@ run_job(job)
 venv/bin/python -m pytest tests/tools/test_user_env_store.py tests/tools/test_user_env_runtime.py tests/tools/test_userenv_tool.py -q
 venv/bin/python -m pytest tests/tools/test_local_user_env.py tests/tools/test_userenv_terminal_isolation.py -q
 venv/bin/python -m pytest tests/tools/test_cronjob_tools.py tests/cron/test_scheduler.py tests/cron/test_cron_no_agent.py -q
-venv/bin/python -m pytest tests/gateway/test_shared_group_sender_prefix.py tests/tools/test_a2a_delegate_tool.py tests/aisoc/test_a2a.py -q
+venv/bin/python -m pytest tests/gateway/test_shared_group_sender_prefix.py tests/tools/test_a2a_delegate_tool.py tests/workagent/backend/test_a2a_interactions.py tests/workagent/backend/test_a2a_executor.py -q
 venv/bin/python -m py_compile tools/user_env_store.py tools/user_env_runtime.py tools/userenv_tool.py tools/cronjob_tools.py cron/jobs.py cron/scheduler.py
 git diff --check
 ```
 
-回归至少应覆盖：同平台不同用户、跨平台相同 user id、用户名变更、legacy 单记录迁移、多 legacy 候选拒绝迁移、`CURRENT_USER_NAME` 不可删除、变量值脱敏、local snapshot 不泄漏/删除即时生效、terminal cache scope、cron 跨用户不可见/不可操作、global job 兼容、malformed identify 失败、identified `no_agent` 脚本读取专属 env、Slack 直入 `<source>` 的首行与 `channel` 字段，以及 Aegis 远端委托首轮和 follow-up 的 `<source>` 前缀。
+回归至少应覆盖：同平台不同用户、跨平台相同 user id、用户名变更、legacy 单记录迁移、多 legacy 候选拒绝迁移、`CURRENT_USER_NAME` 不可删除、变量值脱敏、local snapshot 不泄漏/删除即时生效、terminal cache scope、cron 跨用户不可见/不可操作、global job 兼容、malformed identify 失败、identified `no_agent` 脚本读取专属 env、Slack 直入 `<source>` 的首行与 `channel` 字段、Aegis 远端委托首轮和 follow-up 的 `<source>` 前缀，以及 Workagent 中 `agent.platform` 的 `_a2a` 标识与 `_user_env_platform` 原始平台分离、审批/澄清恢复后继续使用原始 userenv 分区。

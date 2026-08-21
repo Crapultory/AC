@@ -562,6 +562,10 @@ function ChatTabContent({ agents }: ChatTabProps) {
   } = useAegisChatRuntime();
   const drawerTabsUserId = getStoredUser()?.uid || "";
   const [inputVal, setInputVal] = useState("");
+  const [delegateClarifySelection, setDelegateClarifySelection] = useState<string[]>([]);
+  useEffect(() => {
+    setDelegateClarifySelection([]);
+  }, [activeConversation?.pendingClarify?.clarifyId]);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [composerExpanded, setComposerExpanded] = useState(false);
   const [copiedMessageId, setCopiedMessageId] = useState("");
@@ -1278,7 +1282,21 @@ function ChatTabContent({ agents }: ChatTabProps) {
   }
 
   function handleClarifyChoice(answer: string) {
+    if (activeConversation?.pendingClarify?.multiSelect) {
+      setDelegateClarifySelection((current) =>
+        current.includes(answer)
+          ? current.filter((item) => item !== answer)
+          : [...current, answer],
+      );
+      return;
+    }
     respondClarify(answer);
+  }
+
+  function handleClarifySubmit() {
+    if (delegateClarifySelection.length > 0) {
+      respondClarify(JSON.stringify(delegateClarifySelection));
+    }
   }
 
   function handleClarifyOther() {
@@ -2357,7 +2375,9 @@ function ChatTabContent({ agents }: ChatTabProps) {
                 <ShieldAlert className="h-5 w-5 shrink-0 mt-0.5" />
                 <div className="flex-1">
                   <div className="text-sm font-bold">
-                    Approval Required
+                    {activeConversation.pendingApproval.source === 'delegate'
+                      ? `Delegate Approval · ${activeConversation.foregroundAgentName || 'remote agent'}`
+                      : 'Approval Required'}
                   </div>
                   <div className="mt-1 text-xs">
                     {activeConversation.pendingApproval.description}
@@ -2372,18 +2392,22 @@ function ChatTabContent({ agents }: ChatTabProps) {
                     >
                       Allow Once
                     </button>
-                    <button
-                      onClick={() => handleApproval("session")}
-                      className="px-3 py-1.5 rounded border border-slate-700 text-slate-200 font-bold text-xs"
-                    >
-                      Session
-                    </button>
-                    <button
-                      onClick={() => handleApproval("always")}
-                      className="px-3 py-1.5 rounded border border-slate-700 text-slate-200 font-bold text-xs"
-                    >
-                      Always
-                    </button>
+                    {activeConversation.pendingApproval.allowSession !== false ? (
+                      <button
+                        onClick={() => handleApproval("session")}
+                        className="px-3 py-1.5 rounded border border-slate-700 text-slate-200 font-bold text-xs"
+                      >
+                        Session
+                      </button>
+                    ) : null}
+                    {activeConversation.pendingApproval.allowPermanent !== false ? (
+                      <button
+                        onClick={() => handleApproval("always")}
+                        className="px-3 py-1.5 rounded border border-slate-700 text-slate-200 font-bold text-xs"
+                      >
+                        Always
+                      </button>
+                    ) : null}
                     <button
                       onClick={() => handleApproval("deny")}
                       className="aegis-btn aegis-btn--danger px-3 py-1.5 rounded font-bold text-xs"
@@ -2402,7 +2426,9 @@ function ChatTabContent({ agents }: ChatTabProps) {
                 <Clock className="h-5 w-5 text-cyan-400 shrink-0 mt-0.5" />
                 <div className="flex-1">
                   <div className="text-sm font-bold text-cyan-200">
-                    Clarify Required
+                    {activeConversation.pendingClarify.source === 'delegate'
+                      ? `Delegate Clarification · ${activeConversation.foregroundAgentName || 'remote agent'}`
+                      : 'Clarify Required'}
                   </div>
                   <div className="mt-1 text-xs text-cyan-100/90">
                     {activeConversation.pendingClarify.question}
@@ -2419,12 +2445,21 @@ function ChatTabContent({ agents }: ChatTabProps) {
                           <button
                             key={choice}
                             onClick={() => handleClarifyChoice(choice)}
-                            className="px-3 py-1.5 rounded border border-slate-700 text-slate-200 font-bold text-xs"
+                            className={`px-3 py-1.5 rounded border text-slate-200 font-bold text-xs ${delegateClarifySelection.includes(choice) ? 'border-cyan-400 bg-cyan-900/50' : 'border-slate-700'}`}
                           >
                             {choice}
                           </button>
                         ),
                       )}
+                      {activeConversation.pendingClarify.multiSelect ? (
+                        <button
+                          onClick={handleClarifySubmit}
+                          disabled={delegateClarifySelection.length === 0}
+                          className="px-3 py-1.5 rounded bg-cyan-500 text-white font-bold text-xs disabled:opacity-40"
+                        >
+                          Submit Selection
+                        </button>
+                      ) : null}
                       <button
                         onClick={handleClarifyOther}
                         className="px-3 py-1.5 rounded bg-cyan-500 text-white font-bold text-xs"

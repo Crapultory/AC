@@ -37,12 +37,19 @@ def _make_adapter() -> FeishuAdapter:
     return adapter
 
 
-def _card_data(value, *, chat_id="oc_123", open_id="ou_owner", token="token-1"):
+def _card_data(
+    value,
+    *,
+    chat_id="oc_123",
+    open_id="ou_owner",
+    operator_user_id="",
+    token="token-1",
+):
     return SimpleNamespace(
         event=SimpleNamespace(
             token=token,
             context=SimpleNamespace(open_chat_id=chat_id),
-            operator=SimpleNamespace(open_id=open_id, user_id=""),
+            operator=SimpleNamespace(open_id=open_id, user_id=operator_user_id),
             action=SimpleNamespace(value=value),
         )
     )
@@ -229,6 +236,66 @@ async def test_feishu_delegate_foreground_route_and_stream_are_isolated():
     first.close()
     assert route_key not in adapter._delegate_routes
     assert route_key not in adapter._delegate_stream_states
+
+
+@pytest.mark.parametrize(
+    ("kind", "action_value", "state", "expected_value"),
+    [
+        (
+            "approval",
+            {
+                "hermes_delegate_kind": "approval",
+                "interaction_id": "approval-tenant-id",
+                "choice": "once",
+            },
+            {"kind": "approval"},
+            "once",
+        ),
+        (
+            "clarify",
+            {
+                "hermes_delegate_kind": "clarify",
+                "interaction_id": "clarify-tenant-id",
+                "token": "0",
+            },
+            {"kind": "clarify", "choices": ["alpha"]},
+            "alpha",
+        ),
+    ],
+)
+def test_feishu_delegate_card_accepts_tenant_user_id_from_callback(
+    monkeypatch, kind, action_value, state, expected_value
+):
+    adapter = _make_adapter()
+    adapter._loop = MagicMock()
+    adapter._loop.is_closed.return_value = False
+    adapter._allowed_group_users = {"ou_owner"}
+    interaction_id = str(action_value["interaction_id"])
+    responder = MagicMock(return_value=True)
+    adapter._delegate_interactions[interaction_id] = {
+        **state,
+        "interaction_id": interaction_id,
+        "chat_id": "oc_123",
+        "thread_id": None,
+        "user_id": "tenant-user-1",
+        "responder": responder,
+        "resolved": False,
+        "selected": [],
+    }
+    monkeypatch.setattr(feishu_module, "P2CardActionTriggerResponse", _Response)
+    monkeypatch.setattr(feishu_module, "CallBackCard", _Card)
+
+    response = adapter._on_card_action_trigger(
+        _card_data(
+            action_value,
+            operator_user_id="tenant-user-1",
+            token=f"{kind}-tenant-user",
+        )
+    )
+
+    assert response.card is not None
+    assert adapter._delegate_interactions[interaction_id]["resolved"] is True
+    responder.assert_called_once_with(interaction_id, kind, expected_value)
 
 
 def test_gateway_binds_feishu_delegate_runtime_for_each_turn():
