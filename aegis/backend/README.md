@@ -101,6 +101,72 @@ directory for generated HTML previews.
 
 The frontend login page also uses the same JWT for `/api/chat/ws?token=...`.
 
+## Aegis Portal OIDC
+
+The standalone web app is an OIDC client of Aegis Portal. Configure the
+following values in the process environment; never commit the client secret:
+
+```dotenv
+OIDC_ISSUER=http://127.0.0.1:8080
+OIDC_BACKCHANNEL_URL=http://127.0.0.1:8080
+OIDC_CLIENT_ID=<Portal application client id>
+OIDC_CLIENT_SECRET=<Portal application secret>
+OIDC_REDIRECT_URI=http://127.0.0.1:9130/api/sso/callback
+OIDC_POST_LOGIN_REDIRECT=/sso/callback
+```
+
+`OIDC_ISSUER` is used for browser redirects and
+`OIDC_BACKCHANNEL_URL` is used by the Aegis process for Token, JWKS and
+UserInfo requests. Direct Portal service launch uses:
+
+```text
+http://127.0.0.1:9130/?organization_id=<id>&client_id=<client_id>
+```
+
+The login page SSO button uses `/api/sso/start?sso=1`. Both paths use
+Authorization Code + S256 PKCE and the registered callback
+`/api/sso/callback`. Portal owns organization and subscription authorization;
+`subscription_id` is not sent through the browser.
+
+The callback places a short-lived, one-time HttpOnly ticket in a cookie and
+redirects to `/sso/callback`. The frontend exchanges that ticket at
+`POST /api/sso/exchange`, then stores the existing Aegis local JWT. Portal
+roles are not mapped to Aegis administrator rights. New SSO users are enabled
+regular users with a random unusable local password; administrators may reset
+a password through the existing user-management API if local login is needed.
+
+## Lark SSO
+
+The login page also supports Lark OAuth login. Configure the Lark application
+credentials in the process environment and register the exact callback URL in
+the Lark developer console:
+
+```dotenv
+LARK_APP_ID=<Lark application App ID>
+LARK_APP_SECRET=<Lark application App Secret>
+LARK_REDIRECT_URI=http://127.0.0.1:9130/api/lark/callback
+```
+
+The Lark application must have the `contact:user.email:readonly` permission.
+The browser starts at `/api/lark/start`, and the backend exchanges the
+authorization code at Lark before requesting `/open-apis/authen/v1/user_info`.
+Lark users are matched to Aegis accounts by normalized email. A missing email,
+disabled local account, invalid state, or failed upstream request rejects the
+login. The Lark access and refresh tokens are not stored; successful logins
+reuse the existing Aegis SSO ticket and JWT exchange flow.
+
+The existing `HERMES_HOME/aegis.db` is migrated additively at startup. The
+`users` table gains nullable `oidc_subject`; `oidc_login_transactions` and
+`sso_login_tickets` are created if absent. Existing users and local passwords
+are preserved.
+
+To restart after frontend or backend changes:
+
+```bash
+hermes aegis --stop
+hermes aegis --no-open
+```
+
 ## Storage
 
 The backend persists its state in:
@@ -128,6 +194,7 @@ served back as `http://127.0.0.1:9086/a2a`.
 The standalone backend currently supports these API areas:
 
 - Auth and session: `/api/auth/login`, `/api/auth/register`, `/api/auth/session`, `/api/auth/logout`, `/api/auth/password`
+- Portal OIDC client: `/api/sso/start`, `/api/sso/callback`, `/api/sso/exchange`
 - User management: `/api/users`, `/api/users/{uid}/status`, `/api/users/{uid}/password`, `/api/users/{uid}`
 - System: `/health`, `/api/system/bootstrap`
 - Public skill JavaScript: `/static/skills/html-deliverable/assets/agent2ui-bridge.js`

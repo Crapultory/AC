@@ -37,13 +37,47 @@ hermes workagent --module server --port 9120 --tui
 - `--tui`：启用嵌入式 chat PTY/WS 能力，仅 `server` 模块使用
 - `--skip-build`：跳过前端构建（需已有 `backend/web_dist`），仅 `server` 模块使用
 
-未来 A2A 模块启动形态：
+A2A 模块启动形态：
 
 ```bash
 hermes workagent --module a2a --host 127.0.0.1 --port 9086
 ```
 
 A2A 模块默认允许直接连接；设置 `WORKAGENT_A2A_AUTH=true` 后，会在 HTTP 中间件层对 A2A RPC 请求启用 Bearer Token 认证。
+
+#### A2A 模式启用 YOLO
+
+如果要使用当前 `aisoc` profile 启动 A2A service，并让 A2A agent 自动跳过危险命令的人工审批，使用：
+
+```bash
+hermes -p aisoc --yolo aisoc --module a2a --host 127.0.0.1 --port 9120
+```
+
+`--yolo` 是 Hermes 的全局参数，必须放在 `aisoc` 子命令之前。下面的写法不会生效：
+
+```bash
+hermes aisoc --module a2a --yolo  # 错误：aisoc 子解析器不认识 --yolo
+```
+
+原因是 `--yolo` 注册在顶层解析器（`hermes_cli/_parser.py`），而 `aisoc` 子命令只解析 `--module`、`--host`、`--port` 等 A2A 参数。Hermes 主入口会在插件和工具加载前设置 `HERMES_YOLO_MODE=1`；`tools/approval.py` 在导入时冻结该值，因此 A2A service 进程内的每个 agent turn 都能继承 YOLO 状态。A2A service 使用同进程启动 Uvicorn，不会重新执行或重新启动一个丢失该状态的子进程。
+
+YOLO 的作用是旁路危险命令的人工 approval prompt，适用于没有交互式审批通道的 A2A 委派场景。例如，普通 approval 模式下，A2A 委派执行 `chmod 777` 可能进入 `pending_approval` 并无法继续；启用 YOLO 后会自动执行。
+
+YOLO 仍受以下安全规则约束：
+
+- hardline 灾难命令（例如 `rm -rf /`、`mkfs`、块设备覆写、关机）仍然硬阻断；
+- `approvals.deny` 命中的命令优先于 YOLO，仍然无条件拦截；
+- 建议为 A2A 配置 deny glob，例如 `chmod * 777*`、`*curl*|*sh*`、`git push --force*`。
+
+也可以在启动前使用环境变量开启同样的进程级 YOLO：
+
+```bash
+HERMES_YOLO_MODE=1 hermes -p aisoc aisoc --module a2a --host 127.0.0.1 --port 9120
+```
+
+持久化配置 `approvals.mode: off` 也会跳过审批，但它会影响该 profile 下的 CLI、gateway 和 A2A 全部渠道，范围大于仅为 A2A 启用 YOLO，不建议作为首选方案。
+
+安全提示：A2A service 是远程委派执行入口。启用 YOLO 后，能够访问该端点的调用方可以让宿主机自动执行大部分原本需要人工确认的危险命令。除非有明确需求，否则应保持 `--host 127.0.0.1`、不要使用 `--insecure`，并同时启用 A2A 认证及 `approvals.deny` 高危命令兜底。
 
 `extcli` 模块启动形态：
 

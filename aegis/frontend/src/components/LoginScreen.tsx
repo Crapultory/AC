@@ -3,6 +3,8 @@ import { FormEvent, useState } from 'react';
 interface LoginScreenProps {
   notice?: string;
   onSubmit: (username: string, password: string) => Promise<void>;
+  onAegisSsoLogin: () => void;
+  onLarkSsoLogin: () => void;
   onSwitchToRegister: () => void;
   pending: boolean;
 }
@@ -10,6 +12,8 @@ interface LoginScreenProps {
 export default function LoginScreen({
   notice = '',
   onSubmit,
+  onAegisSsoLogin,
+  onLarkSsoLogin,
   onSwitchToRegister,
   pending,
 }: LoginScreenProps) {
@@ -74,6 +78,20 @@ export default function LoginScreen({
             className="w-full rounded-xl bg-cyan-500 px-4 py-3 text-sm font-bold text-white transition hover:bg-cyan-600 disabled:cursor-not-allowed disabled:opacity-60"
           >
             {pending ? 'Signing In...' : 'Sign In'}
+          </button>
+          <button
+            type="button"
+            onClick={onAegisSsoLogin}
+            className="w-full rounded-xl border border-cyan-700 bg-cyan-950/40 px-4 py-3 text-sm font-semibold text-cyan-100 transition hover:border-cyan-400 hover:bg-cyan-900/50 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-cyan-400"
+          >
+            Aegis SSO
+          </button>
+          <button
+            type="button"
+            onClick={onLarkSsoLogin}
+            className="w-full rounded-xl border border-sky-500/70 bg-sky-950/45 px-4 py-3 text-sm font-semibold text-sky-100 transition hover:border-sky-300 hover:bg-sky-900/55 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-sky-300"
+          >
+            Lark SSO
           </button>
           <button
             type="button"
