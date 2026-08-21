@@ -472,7 +472,10 @@ class HermesA2AExecutor(AgentExecutor):
             agent._user_name         = _uname
             agent._user_env_platform = _plat  # tool_executor L877 优先读此属性，fallback agent.platform
         if _plat:
-            agent.platform           = _plat  # 同步覆盖 agent.platform，确保 _format_aegis_source_header 读到真实来源平台
+            # Mark the transient execution surface as A2A while keeping the
+            # originating platform in _user_env_platform. User-env storage is
+            # keyed by the originating platform, not by the A2A transport.
+            agent.platform           = f"{_plat}_a2a"
 
         # ── 路径 C：临时覆写 ephemeral_system_prompt，让 LLM 每次都能看到实时 Session Context ──
         # agent.ephemeral_system_prompt 在每次 API call 前实时拼入 effective_system（不走
