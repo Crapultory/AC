@@ -7196,9 +7196,11 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         configured per-user isolation policy).
 
         Pass ``user_id`` to restrict results to sessions owned by that account
-        (exact match against ``sessions.user_id``). Used by callers with their
-        own per-user account system (e.g. AISOC) to scope listings to the
-        requesting user.
+        plus ownerless sessions (``user_id IS NULL``/``''`` — legacy rows and
+        rows from platforms with no per-user account concept, e.g. tui/discord/
+        cron). Used by callers with their own per-user account system (e.g.
+        AISOC) to scope listings to the requesting user while still surfacing
+        cross-platform history nobody has claimed.
         """
         # Rows carry token/cost totals — drain queued deltas first so
         # listings (sidebar, /resume, dashboards) show exact counters.
@@ -7233,7 +7235,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             where_clauses.append("s.session_key = ?")
             params.append(session_key)
         if user_id:
-            where_clauses.append("s.user_id = ?")
+            where_clauses.append("(s.user_id = ? OR s.user_id IS NULL OR s.user_id = '')")
             params.append(user_id)
         if exclude_sources:
             placeholders = ",".join("?" for _ in exclude_sources)
@@ -9301,8 +9303,9 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         cron-excluded ``list_sessions_rich`` page and doesn't keep "load more"
         stuck on for buried scheduler sessions).
 
-        Pass ``user_id`` to count only sessions owned by that account
-        (mirrors ``list_sessions_rich``'s ``user_id`` filter).
+        Pass ``user_id`` to count sessions owned by that account plus
+        ownerless sessions (mirrors ``list_sessions_rich``'s ``user_id``
+        filter).
         """
         where_clauses = []
         params = []
@@ -9334,7 +9337,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         elif not include_archived:
             where_clauses.append("s.archived = 0")
         if user_id:
-            where_clauses.append("s.user_id = ?")
+            where_clauses.append("(s.user_id = ? OR s.user_id IS NULL OR s.user_id = '')")
             params.append(user_id)
 
         where_sql = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""

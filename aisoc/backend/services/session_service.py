@@ -18,17 +18,31 @@ def _strip_sensitive_session_fields(item: dict[str, Any]) -> dict[str, Any]:
 
 
 def _owns_session(session: dict[str, Any], *, user_id: str) -> bool:
-    """Return True when ``user_id`` may view/modify ``session``.
+    """Return True when ``user_id`` may modify (not just view) ``session``.
 
     Every user, including admins, must match the session's stored ``user_id``
-    exactly — session history is per-user, not admin-visible. Sessions with
-    no owner (created before user accounts existed, or bound anonymously)
-    are treated as inaccessible rather than visible-to-everyone, since the
-    alternative silently reopens the isolation gap this scoping exists to
-    close.
+    exactly — used only for mutations (``delete_session``). Sessions with no
+    owner (created before user accounts existed, or from platforms with no
+    per-user account concept — tui/discord/cron/etc.) are never mutable
+    through this check, since nobody has claimed them yet. For read access
+    see ``_is_readable``, which treats ownerless sessions as public.
     """
     owner = str(session.get("user_id") or "").strip()
     return bool(owner) and owner == user_id
+
+
+def _is_readable(session: dict[str, Any], *, user_id: str) -> bool:
+    """Return True when ``user_id`` may view (not modify) ``session``.
+
+    Ownerless sessions (legacy rows predating per-user accounts, or rows
+    from platforms with no per-user account concept — tui/discord/cron/etc.)
+    are public reads by design: the browse/search page's whole purpose is to
+    surface history across platforms, and most of it was never going to
+    carry a user_id in the first place. Owned sessions still require an
+    exact match.
+    """
+    owner = str(session.get("user_id") or "").strip()
+    return not owner or owner == user_id
 
 
 def _build_message_search_query(query: str) -> str:
@@ -90,7 +104,7 @@ def search_sessions(query: str, limit: int = 20, *, user_id: str) -> dict[str, A
             if sid in seen:
                 continue
             session = db.get_session(sid)
-            if not session or not _owns_session(session, user_id=user_id):
+            if not session or not _is_readable(session, user_id=user_id):
                 continue
             seen[sid] = {
                 "session_id": sid,
@@ -181,7 +195,7 @@ def get_session_detail(session_id: str, *, user_id: str) -> dict[str, Any] | Non
         if not sid:
             return None
         session = db.get_session(sid)
-        if not session or not _owns_session(session, user_id=user_id):
+        if not session or not _is_readable(session, user_id=user_id):
             return None
         return session
     finally:
@@ -196,7 +210,7 @@ def get_session_detail_with_messages(session_id: str, *, user_id: str) -> dict[s
             return None
 
         session = db.get_session(sid)
-        if not session or not _owns_session(session, user_id=user_id):
+        if not session or not _is_readable(session, user_id=user_id):
             return None
 
         raw_messages = db.get_messages(sid)
@@ -248,7 +262,7 @@ def get_latest_descendant(session_id: str, *, user_id: str) -> dict[str, Any] | 
         if not sid:
             return None
         session = db.get_session(sid)
-        if not session or not _owns_session(session, user_id=user_id):
+        if not session or not _is_readable(session, user_id=user_id):
             return None
     finally:
         db.close()
@@ -271,7 +285,7 @@ def get_session_messages(session_id: str, *, user_id: str) -> dict[str, Any] | N
         if not sid:
             return None
         session = db.get_session(sid)
-        if not session or not _owns_session(session, user_id=user_id):
+        if not session or not _is_readable(session, user_id=user_id):
             return None
         return {"session_id": sid, "messages": db.get_messages(sid)}
     finally:
