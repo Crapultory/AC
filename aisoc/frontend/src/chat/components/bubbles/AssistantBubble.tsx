@@ -6,7 +6,9 @@ import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import { FileText } from 'lucide-react';
 
+import { BrandMark } from '../../../components/BrandMark';
 import { Message } from '../../types';
+import { ASSISTANT_NAME } from '../../lib/identity';
 
 /** 紧凑暗色 markdown 渲染（也被 drawer 文件预览复用） */
 export function ChatMarkdown({ content }: { content: string }) {
@@ -79,7 +81,14 @@ export function AssistantBubble({ message, onOpenFile }: AssistantBubbleProps) {
           <div className="mb-1 font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-[var(--aisoc-danger)]">
             {message.srcagent} · delegate
           </div>
-        ) : null}
+        ) : (
+          <div className="mb-1 flex items-center gap-1.5">
+            <BrandMark size={14} />
+            <span className="font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-[var(--aisoc-muted)]">
+              {ASSISTANT_NAME}
+            </span>
+          </div>
+        )}
         <div className="rounded-[var(--aisoc-radius-md)] border border-[var(--aisoc-border)] bg-[var(--aisoc-panel)] px-3 py-2 text-[13px] text-[var(--aisoc-text)]">
           <ChatMarkdown content={message.text} />
           {message.pending ? (

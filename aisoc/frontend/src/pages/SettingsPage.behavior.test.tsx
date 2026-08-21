@@ -8,12 +8,34 @@ import { MemoryRouter } from "react-router-dom";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { fetchJSON } from "../lib/api";
-import { setStoredToken } from "../lib/auth";
+import { setStoredAuth } from "../lib/auth";
+import { CurrentUserProvider } from "../lib/authContext";
+import type { AuthenticatedUser } from "../types";
 import { SettingsPage } from "./SettingsPage";
 
 vi.mock("../lib/api", () => ({
   fetchJSON: vi.fn(),
 }));
+
+const ADMIN_USER: AuthenticatedUser = {
+  uid: "0000000000000001",
+  username: "admin",
+  display_name: "admin",
+  email: "admin@aisoc.local",
+  status: "enabled",
+  create_time: "2026-01-01T00:00:00Z",
+  last_login: null,
+  is_admin: true,
+};
+
+function seedAdminAuth(): void {
+  setStoredAuth("test-token", ADMIN_USER);
+}
+
+async function mountWithAdmin(ui: React.ReactNode): Promise<HTMLElement> {
+  seedAdminAuth();
+  return mount(<CurrentUserProvider>{ui}</CurrentUserProvider>);
+}
 
 const RUNTIME_STATUS = {
   status: "ok",
@@ -119,11 +141,11 @@ afterEach(async () => {
 describe("Settings route", () => {
   it("renders the Settings page through the authenticated app route", async () => {
     vi.spyOn(HTMLCanvasElement.prototype, "getContext").mockReturnValue(null);
-    setStoredToken("test-token");
+    seedAdminAuth();
     vi.stubGlobal(
       "fetch",
       vi.fn().mockResolvedValue(
-        new Response(JSON.stringify({ authenticated: true }), {
+        new Response(JSON.stringify({ authenticated: true, user: ADMIN_USER, expires_in: 28800 }), {
           status: 200,
           headers: { "Content-Type": "application/json" },
         }),
@@ -146,7 +168,7 @@ describe("Settings route", () => {
 
 describe("Settings restart flow", () => {
   it("requires both confirmation stages and the exact phrase", async () => {
-    const container = await mount(
+    const container = await mountWithAdmin(
       <MemoryRouter>
         <SettingsPage />
       </MemoryRouter>,
@@ -188,7 +210,7 @@ describe("Settings restart flow", () => {
       }
       throw new Error(`Unexpected request: ${path}`);
     });
-    const container = await mount(
+    const container = await mountWithAdmin(
       <MemoryRouter>
         <SettingsPage reloadPage={reloadPage} recoveryPollMs={100} />
       </MemoryRouter>,
@@ -235,7 +257,7 @@ describe("Settings restart flow", () => {
       }
       throw new Error(`Unexpected request: ${path}`);
     });
-    const container = await mount(
+    const container = await mountWithAdmin(
       <MemoryRouter>
         <SettingsPage reloadPage={reloadPage} recoveryPollMs={100} />
       </MemoryRouter>,
@@ -256,7 +278,7 @@ describe("Settings restart flow", () => {
   });
 
   it("manages dialog focus, traps tab navigation, and restores trigger focus on Escape", async () => {
-    const container = await mount(
+    const container = await mountWithAdmin(
       <MemoryRouter>
         <SettingsPage />
       </MemoryRouter>,

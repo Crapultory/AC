@@ -7,7 +7,7 @@ AISOC Backend 是 `hermes aisoc` 的服务层。当前以 `server` 模块为主�
 - `extcli`：本地增强交互命令行，直接在终端里与 `AIAgent` 对话
 
 `server` 模块当前负责：
-- 统一认证（Bearer Token）
+- 统一认证（用户账号 + JWT）
 - 会话、Cron、Skill、Memory、Logs、Overview 数据读取/写入
 - 统一聊天模块（`/api/chat/session` WebSocket + quick commands + drawer 预览 + 附件）
 - 托管前端静态资源（`web_dist`）
@@ -86,9 +86,9 @@ python aisoc/backend/main.py -p myprofile --module server --host 127.0.0.1 --por
 python -c "from aisoc.backend.server import start_server; start_server(host='127.0.0.1', port=9120, open_browser=False)"
 ```
 
-### 2.3 Token 配置
-- `AISOC_SESSION_TOKEN`：若设置，则使用静态 token（`token_source=env`）
-- 未设置时：进程启动自动生成随机 token（`token_source=generated`）
+### 2.3 认证配置
+- `AISOC_BOOTSTRAP_ADMIN_PASSWORD`：首次启动播种初始 `admin` 账号所需（≥8 位）；未设置时不会创建 admin，`/api/system/bootstrap` 返回 `admin_setup_required: true`，任何账号均无法登录
+- `AISOC_JWT_SECRET`：若设置，则 JWT 使用该固定密钥签发/校验；未设置时进程启动自动生成随机密钥（不落盘）——**重启且未设置该变量会使所有已登录会话失效**
 - `AISOC_A2A_AUTH`：A2A 模块认证开关；`true/1/yes/on` 启用，未设置或 `false/0/no/off` 关闭
 - `A2A_SESSION_TOKEN`：仅 `a2a` 模块使用；启用 A2A 认证时若设置，则使用静态 token（`a2a_token_source=env`）
 - 启用 A2A 认证且未设置 `A2A_SESSION_TOKEN` 时：进程启动自动生成随机 A2A token（`a2a_token_source=generated`）
@@ -112,18 +112,22 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 - `models.py`
   - Pydantic 请求/响应模型
 - `auth.py` + `config.py`
-  - token 校验与配置装配
+  - 密码哈希、JWT 签发/校验、配置装配
 
 ### 3.2 认证机制
+- 独立于 aegis 的用户账号体系：sqlite `users` 表（`$HERMES_HOME/aisoc.db`），PBKDF2-HMAC-SHA256 密码哈希，JWT（HS256）访问令牌
+- 角色模型极简：仅一个 `is_admin` 布尔位，硬编码 `username == "admin"` 为超级管理员，无多角色/权限表
 - 所有 `/api/*` 默认受保护
 - 白名单（无需认证）：
   - `/api/auth/login`
+  - `/api/auth/register`
   - `/api/auth/session`
   - `/api/auth/logout`
   - `/api/system/bootstrap`
   - `/health`
-- HTTP：`Authorization: Bearer <token>`
-- WebSocket：`?token=<token>`（浏览器 WS 升级不便带自定义 Authorization）
+- HTTP：`Authorization: Bearer <JWT>`（`/api/auth/login` 换取）
+- WebSocket：`?token=<JWT>`（浏览器 WS 升级不便带自定义 Authorization）
+- 自助注册（`POST /api/auth/register`）默认落地 `status=disabled`，需管理员在 `/api/users` 启用后才能登录
 
 ### 3.3 A2A 认证机制
 - 默认关闭；通过 `AISOC_A2A_AUTH=true` 启用
@@ -133,7 +137,7 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
   - `/.well-known/agent-card.json`
   - `/a2a/.well-known/agent-card.json`（或 `A2A_BASE_PATH` 对应前缀）
 - 仅在 HTTP 中间件层认证，不改变 A2A executor、消息流或任务状态机
-- `AISOC_SESSION_TOKEN` 仍仅用于 `server` 模块；`A2A_SESSION_TOKEN` 仅用于 `a2a` 模块
+- `A2A_SESSION_TOKEN` 仅用于 `a2a` 模块，与 `server` 模块的用户账号 + JWT 认证完全独立，不共享同一套凭证
 
 ### 3.4 A2A 管理与重启
 - 设置非空 `AISOC_A2A_ADMIN_TOKEN` 后启用 `GET /man`；未设置时页面会明确显示管理未启用，管理 API 返回 503，重启不可用
@@ -144,7 +148,7 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 - 重启会重放当前启动命令；若认证 token 原本由进程启动时随机生成，新进程可能生成不同值
 
 ### 3.5 统一聊天链路设计（1.0）
-聊天核心在 `aisoc/backend/chat/`（自 aegis chat 模块回迁，去用户化）：
+聊天核心在 `aisoc/backend/chat/`（自 aegis chat 模块回迁；已恢复用户账号绑定，会话按认证用户的 `user_id` 隔离）：
 - `WS /api/chat/session`：唯一聊天通道。客户端事件 `session.bind` / `message.send` /
   `approval.respond` / `clarify.respond` / `session.interrupt` / `session.resume`；
   服务端事件 envelope（`message.delta/completed`、`run.state`、`tool.*`、
@@ -168,12 +172,23 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
 ### 4.1 Auth
 前缀：`/api/auth`
 - `POST /login`
+- `POST /register`（自助注册，落地 `status=disabled`）
 - `GET /session`
 - `POST /logout`
+- `PUT /password`
+
+### 4.1a Users（仅管理员）
+前缀：`/api/users`
+- `GET /`
+- `POST /`
+- `PUT /{uid}/status`
+- `PUT /{uid}/password`
+- `DELETE /{uid}`
 
 ### 4.2 System
 - `GET /health`
-- `GET /api/system/bootstrap`
+- `GET /api/system/bootstrap`（含 `admin_setup_required`）
+- `POST /api/system/restart`（仅管理员）
 
 ### 4.3 Chat
 前缀：`/api/chat`
@@ -279,8 +294,9 @@ python -c "from aisoc.backend.server import start_server; start_server(host='127
   - 自动 OpenAPI，便于前端/agent 调试
 - **服务层拆分（routes + services）**：
   - 路由层保持薄，业务逻辑集中，便于 agent 定位改动点
-- **Bearer Token 简模型**：
-  - 局域网本地工具场景下实现成本低、调试效率高
+- **用户账号 + JWT**：
+  - 与 aegis 保持一致的最小角色模型（单一 `is_admin` 布尔位），独立 sqlite 用户库，不与 aegis 共享登录态
+  - 相比共享 token，支持多用户审计、逐用户禁用/重置密码，以及按用户隔离聊天会话
 - **复用 Hermes 核心数据源**：
   - 避免双写与数据漂移，确保 CLI 与 Dashboard 一致
 

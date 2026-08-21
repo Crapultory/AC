@@ -1,4 +1,4 @@
-import { useEffect } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 
 import { hasStoredToken } from "../lib/auth";
@@ -6,14 +6,35 @@ import { LoginForm } from "../components/LoginForm";
 import { BrandMark } from "../components/BrandMark";
 import { HudGrid } from "../components/ambient/HudGrid";
 
+interface BootstrapResponse {
+  auth_scheme: string;
+  admin_setup_required: boolean;
+}
+
 export function LoginPage() {
   const navigate = useNavigate();
+  const [adminSetupRequired, setAdminSetupRequired] = useState(false);
 
   useEffect(() => {
     if (hasStoredToken()) {
       navigate("/overview", { replace: true });
     }
   }, [navigate]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/system/bootstrap")
+      .then((response) => response.json() as Promise<BootstrapResponse>)
+      .then((payload) => {
+        if (!cancelled) setAdminSetupRequired(Boolean(payload.admin_setup_required));
+      })
+      .catch(() => {
+        /* ignore: default to showing the normal login form */
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   return (
     <section className="relative grid h-dvh place-items-center overflow-hidden p-[calc(24px*var(--density-scale))]">
@@ -36,10 +57,20 @@ export function LoginPage() {
         <h2 className="font-display m-0 text-[calc(22px*var(--density-scale))] font-bold tracking-[0.01em]">
           Authenticate to Continue
         </h2>
-        <p className="subtle-copy mt-[calc(6px*var(--density-scale))]">
-          Enter the token from <code className="font-mono">AISOC_SESSION_TOKEN</code> or the startup log output.
-        </p>
-        <LoginForm onSuccess={() => navigate("/overview", { replace: true })} />
+
+        {adminSetupRequired ? (
+          <p className="subtle-copy mt-[calc(6px*var(--density-scale))]">
+            No admin account exists yet. Set <code className="font-mono">AISOC_BOOTSTRAP_ADMIN_PASSWORD</code> and
+            restart the service to create the initial admin account.
+          </p>
+        ) : (
+          <>
+            <p className="subtle-copy mt-[calc(6px*var(--density-scale))]">
+              Sign in with your AISOC username and password.
+            </p>
+            <LoginForm onSuccess={() => navigate("/overview", { replace: true })} />
+          </>
+        )}
       </div>
     </section>
   );

@@ -87,7 +87,7 @@ export function FloatingChatWidget() {
     <div
       role="dialog"
       aria-label="Floating chat panel"
-      className="fixed bottom-6 right-6 z-50 flex h-[560px] max-h-[calc(100vh-3rem)] w-[380px] max-w-[calc(100vw-3rem)] flex-col overflow-hidden rounded-[var(--aisoc-radius-lg)] border border-[var(--aisoc-border)] bg-[var(--aisoc-bg)] text-[var(--aisoc-text)] shadow-[0_18px_48px_rgba(6,8,12,0.55)]"
+      className="chat-shell fixed bottom-6 right-6 z-50 flex h-[560px] max-h-[calc(100vh-3rem)] w-[380px] max-w-[calc(100vw-3rem)] flex-col overflow-hidden rounded-[var(--aisoc-radius-lg)] border border-[var(--aisoc-border)] bg-[var(--aisoc-bg)] text-[var(--aisoc-text)] shadow-[0_18px_48px_rgba(6,8,12,0.55)]"
     >
       <header className="flex shrink-0 items-center gap-1.5 border-b border-[var(--aisoc-border)] bg-[var(--aisoc-bg-alt)] px-3 py-2">
         <span className="min-w-0 flex-1 truncate text-sm font-medium" title={title}>

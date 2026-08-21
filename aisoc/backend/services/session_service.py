@@ -17,6 +17,20 @@ def _strip_sensitive_session_fields(item: dict[str, Any]) -> dict[str, Any]:
     return item
 
 
+def _owns_session(session: dict[str, Any], *, user_id: str) -> bool:
+    """Return True when ``user_id`` may view/modify ``session``.
+
+    Every user, including admins, must match the session's stored ``user_id``
+    exactly — session history is per-user, not admin-visible. Sessions with
+    no owner (created before user accounts existed, or bound anonymously)
+    are treated as inaccessible rather than visible-to-everyone, since the
+    alternative silently reopens the isolation gap this scoping exists to
+    close.
+    """
+    owner = str(session.get("user_id") or "").strip()
+    return bool(owner) and owner == user_id
+
+
 def _build_message_search_query(query: str) -> str:
     """Translate a user query into an FTS5 query for ``search_messages``.
 
@@ -37,11 +51,19 @@ def _build_message_search_query(query: str) -> str:
     return " ".join(terms)
 
 
-def list_sessions(limit: int = 20, offset: int = 0, source: str | None = None) -> dict[str, Any]:
+def list_sessions(
+    limit: int = 20,
+    offset: int = 0,
+    source: str | None = None,
+    *,
+    user_id: str,
+) -> dict[str, Any]:
     db = SessionDB()
     try:
-        sessions = db.list_sessions_rich(source=source, limit=limit, offset=offset)
-        total = db.session_count(source=source)
+        sessions = db.list_sessions_rich(
+            source=source, limit=limit, offset=offset, user_id=user_id
+        )
+        total = db.session_count(source=source, user_id=user_id)
         now = time.time()
         for item in sessions:
             item["is_active"] = (
@@ -54,7 +76,7 @@ def list_sessions(limit: int = 20, offset: int = 0, source: str | None = None) -
         db.close()
 
 
-def search_sessions(query: str, limit: int = 20) -> dict[str, Any]:
+def search_sessions(query: str, limit: int = 20, *, user_id: str) -> dict[str, Any]:
     if not query or not query.strip():
         return {"results": []}
 
@@ -65,15 +87,19 @@ def search_sessions(query: str, limit: int = 20) -> dict[str, Any]:
         seen: dict[str, dict[str, Any]] = {}
         for match in matches:
             sid = match["session_id"]
-            if sid not in seen:
-                seen[sid] = {
-                    "session_id": sid,
-                    "snippet": match.get("snippet", ""),
-                    "role": match.get("role"),
-                    "source": match.get("source"),
-                    "model": match.get("model"),
-                    "session_started": match.get("session_started"),
-                }
+            if sid in seen:
+                continue
+            session = db.get_session(sid)
+            if not session or not _owns_session(session, user_id=user_id):
+                continue
+            seen[sid] = {
+                "session_id": sid,
+                "snippet": match.get("snippet", ""),
+                "role": match.get("role"),
+                "source": match.get("source"),
+                "model": match.get("model"),
+                "session_started": match.get("session_started"),
+            }
         return {"results": list(seen.values())}
     finally:
         db.close()
@@ -148,16 +174,21 @@ def _session_latest_descendant(session_id: str) -> tuple[str | None, list[str]]:
         db.close()
 
 
-def get_session_detail(session_id: str) -> dict[str, Any] | None:
+def get_session_detail(session_id: str, *, user_id: str) -> dict[str, Any] | None:
     db = SessionDB()
     try:
         sid = db.resolve_session_id(session_id)
-        return db.get_session(sid) if sid else None
+        if not sid:
+            return None
+        session = db.get_session(sid)
+        if not session or not _owns_session(session, user_id=user_id):
+            return None
+        return session
     finally:
         db.close()
 
 
-def get_session_detail_with_messages(session_id: str) -> dict[str, Any] | None:
+def get_session_detail_with_messages(session_id: str, *, user_id: str) -> dict[str, Any] | None:
     db = SessionDB()
     try:
         sid = db.resolve_session_id(session_id)
@@ -165,7 +196,7 @@ def get_session_detail_with_messages(session_id: str) -> dict[str, Any] | None:
             return None
 
         session = db.get_session(sid)
-        if not session:
+        if not session or not _owns_session(session, user_id=user_id):
             return None
 
         raw_messages = db.get_messages(sid)
@@ -210,7 +241,18 @@ def get_session_detail_with_messages(session_id: str) -> dict[str, Any] | None:
     }
 
 
-def get_latest_descendant(session_id: str) -> dict[str, Any] | None:
+def get_latest_descendant(session_id: str, *, user_id: str) -> dict[str, Any] | None:
+    db = SessionDB()
+    try:
+        sid = db.resolve_session_id(session_id)
+        if not sid:
+            return None
+        session = db.get_session(sid)
+        if not session or not _owns_session(session, user_id=user_id):
+            return None
+    finally:
+        db.close()
+
     latest, path = _session_latest_descendant(session_id)
     if not latest:
         return None
@@ -222,20 +264,29 @@ def get_latest_descendant(session_id: str) -> dict[str, Any] | None:
     }
 
 
-def get_session_messages(session_id: str) -> dict[str, Any] | None:
+def get_session_messages(session_id: str, *, user_id: str) -> dict[str, Any] | None:
     db = SessionDB()
     try:
         sid = db.resolve_session_id(session_id)
         if not sid:
+            return None
+        session = db.get_session(sid)
+        if not session or not _owns_session(session, user_id=user_id):
             return None
         return {"session_id": sid, "messages": db.get_messages(sid)}
     finally:
         db.close()
 
 
-def delete_session(session_id: str) -> bool:
+def delete_session(session_id: str, *, user_id: str) -> bool:
     db = SessionDB()
     try:
-        return bool(db.delete_session(session_id))
+        sid = db.resolve_session_id(session_id)
+        if not sid:
+            return False
+        session = db.get_session(sid)
+        if not session or not _owns_session(session, user_id=user_id):
+            return False
+        return bool(db.delete_session(sid))
     finally:
         db.close()

@@ -3,12 +3,23 @@ import { useState } from "react";
 
 import { FloatingChatWidget } from "../chat/FloatingChatWidget";
 import { AisocChatProvider, useOptionalChatRuntime } from "../chat/runtime/chatRuntime";
-import { clearStoredToken } from "../lib/auth";
+import { clearStoredAuth } from "../lib/auth";
+import { useCurrentUser } from "../lib/authContext";
 import { HudGrid } from "./ambient/HudGrid";
 import { BrandMark } from "./BrandMark";
 import { applyTheme, readTheme, type ThemeMode } from "../design/theme";
 
-type NavIconName = "overview" | "chat" | "sessions" | "cron" | "skills" | "wiki" | "memory" | "ontology" | "settings";
+type NavIconName =
+  | "overview"
+  | "chat"
+  | "sessions"
+  | "cron"
+  | "skills"
+  | "wiki"
+  | "memory"
+  | "ontology"
+  | "settings"
+  | "users";
 
 interface NavChild {
   path: string;
@@ -22,7 +33,7 @@ interface NavEntry {
   children?: NavChild[];
 }
 
-const NAV_ITEMS: NavEntry[] = [
+const BASE_NAV_ITEMS: NavEntry[] = [
   { path: "/overview", label: "Overview", icon: "overview" },
   { path: "/chat", label: "Chat", icon: "chat" },
   { path: "/sessions", label: "Sessions", icon: "sessions" },
@@ -41,6 +52,12 @@ const NAV_ITEMS: NavEntry[] = [
   },
   { path: "/settings", label: "Settings", icon: "settings" },
 ];
+
+const ADMIN_NAV_ITEM: NavEntry = { path: "/users", label: "Users", icon: "users" };
+
+function buildNavItems(isAdmin: boolean): NavEntry[] {
+  return isAdmin ? [...BASE_NAV_ITEMS, ADMIN_NAV_ITEM] : BASE_NAV_ITEMS;
+}
 
 const NAV_COLLAPSED_STORAGE_KEY = "aisoc_nav_collapsed";
 const NAV_EXPANDED_PARENTS_KEY = "aisoc_nav_expanded_parents";
@@ -116,6 +133,13 @@ function NavIcon({ name }: { name: NavIconName }) {
           <path {...common} d="M19.1 13.6a7.6 7.6 0 0 0 .05-1.6 7.6 7.6 0 0 0-.05-1.6l2-1.55-2-3.45-2.45 1a7.6 7.6 0 0 0-2.75-1.6L13.55 2h-4l-.4 2.8A7.6 7.6 0 0 0 6.4 6.4l-2.45-1-2 3.45 2 1.55A7.6 7.6 0 0 0 3.9 12a7.6 7.6 0 0 0 .05 1.6l-2 1.55 2 3.45 2.45-1a7.6 7.6 0 0 0 2.75 1.6l.4 2.8h4l.4-2.8a7.6 7.6 0 0 0 2.75-1.6l2.45 1 2-3.45-2-1.55Z" />
         </>
       )}
+      {name === "users" && (
+        <>
+          <path {...common} d="M9 11a3.25 3.25 0 1 0 0-6.5A3.25 3.25 0 0 0 9 11Z" />
+          <path {...common} d="M3.5 19.25a5.5 5.5 0 0 1 11 0" />
+          <path {...common} d="M15.5 5.1a3.25 3.25 0 0 1 0 5.8M18 19.25a5.4 5.4 0 0 0-2.8-4.75" />
+        </>
+      )}
     </svg>
   );
 }
@@ -129,7 +153,7 @@ function readInitialNavCollapsed(): boolean {
  * via the chevron and the choice persists across reloads. */
 function readInitialExpandedParents(): Record<string, boolean> {
   const defaults: Record<string, boolean> = {};
-  for (const item of NAV_ITEMS) {
+  for (const item of BASE_NAV_ITEMS) {
     if (item.children?.length) defaults[item.path] = true;
   }
   if (typeof window === "undefined") return defaults;
@@ -163,6 +187,8 @@ function ChatNavBadge() {
 
 export function AppShell() {
   const location = useLocation();
+  const currentUser = useCurrentUser();
+  const navItems = buildNavItems(Boolean(currentUser?.is_admin));
   const [navCollapsed, setNavCollapsed] = useState<boolean>(readInitialNavCollapsed);
   const [expandedParents, setExpandedParents] = useState<Record<string, boolean>>(readInitialExpandedParents);
   const [theme, setTheme] = useState<ThemeMode>(readTheme);
@@ -182,12 +208,12 @@ export function AppShell() {
   }
 
   const activeItem =
-    NAV_ITEMS.find((item) => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)) ??
-    NAV_ITEMS[0];
+    navItems.find((item) => location.pathname === item.path || location.pathname.startsWith(`${item.path}/`)) ??
+    navItems[0];
   const showWorkbenchTopbar = activeItem.path !== "/overview";
 
   function signOut(): void {
-    clearStoredToken();
+    clearStoredAuth();
     window.location.href = "/login";
   }
 
@@ -241,7 +267,7 @@ export function AppShell() {
             <section className="side-nav-group">
               <p className="side-nav-group-label">Workbench</p>
               <nav aria-label="Workbench navigation">
-                {NAV_ITEMS.map((item) => {
+                {navItems.map((item) => {
                   const isActive = location.pathname.startsWith(item.path);
                   const hasChildren = !!item.children?.length;
                   const expanded = hasChildren ? !!expandedParents[item.path] : false;

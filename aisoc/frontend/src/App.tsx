@@ -9,6 +9,8 @@ import { LoginPage } from "./pages/LoginPage";
 import { MemoryPage } from "./pages/MemoryPage";
 import { NotFoundPage } from "./pages/NotFoundPage";
 import { OverviewPage } from "./pages/OverviewPage";
+import { RegisterPage } from "./pages/RegisterPage";
+import { UsersPage } from "./pages/UsersPage";
 
 const OntologyPage = lazy(() =>
   import("./pages/OntologyPage").then((m) => ({ default: m.OntologyPage })),
@@ -36,6 +38,7 @@ export function App() {
   return (
     <Routes>
       <Route path="/login" element={<LoginPage />} />
+      <Route path="/register" element={<RegisterPage />} />
       <Route element={<RequireAuth />}>
         <Route element={<AppShell />}>
           <Route index element={<Navigate to="/overview" replace />} />
@@ -54,6 +57,7 @@ export function App() {
           />
           <Route path="/ontology/*" element={<OntologyRoute />} />
           <Route path="/settings" element={<SettingsPage />} />
+          <Route path="/users" element={<UsersPage />} />
         </Route>
       </Route>
       <Route path="*" element={<NotFoundPage />} />

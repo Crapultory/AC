@@ -3,11 +3,7 @@ from __future__ import annotations
 from aisoc.backend.services import cron_service
 
 
-def auth_headers(token: str = "test-token") -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
-
-def test_list_cron_jobs_returns_profile_annotations(test_client, monkeypatch) -> None:
+def test_list_cron_jobs_returns_profile_annotations(test_client, auth_headers, monkeypatch) -> None:
     monkeypatch.setattr(
         cron_service,
         "list_jobs",
@@ -15,7 +11,7 @@ def test_list_cron_jobs_returns_profile_annotations(test_client, monkeypatch) ->
             {"id": "job-1", "profile": "default", "profile_name": "default"}
         ],
     )
-    resp = test_client.get("/api/cron/jobs", headers=auth_headers())
+    resp = test_client.get("/api/cron/jobs", headers=auth_headers)
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["items"][0]["profile"] == "default"
@@ -23,7 +19,7 @@ def test_list_cron_jobs_returns_profile_annotations(test_client, monkeypatch) ->
     assert payload["total"] == 1
 
 
-def test_list_cron_jobs_supports_pagination_query(test_client, monkeypatch) -> None:
+def test_list_cron_jobs_supports_pagination_query(test_client, auth_headers, monkeypatch) -> None:
     monkeypatch.setattr(
         cron_service,
         "list_jobs",
@@ -33,7 +29,7 @@ def test_list_cron_jobs_supports_pagination_query(test_client, monkeypatch) -> N
         ],
     )
 
-    resp = test_client.get("/api/cron/jobs?page=2&page_size=12", headers=auth_headers())
+    resp = test_client.get("/api/cron/jobs?page=2&page_size=12", headers=auth_headers)
     assert resp.status_code == 200
     payload = resp.json()
     assert payload["page"] == 2
@@ -46,7 +42,7 @@ def test_list_cron_jobs_supports_pagination_query(test_client, monkeypatch) -> N
     assert payload["items"][0]["id"] == "job-13"
 
 
-def test_cron_routes_default_profile_to_runtime_profile(test_client, monkeypatch) -> None:
+def test_cron_routes_default_profile_to_runtime_profile(test_client, auth_headers, monkeypatch) -> None:
     monkeypatch.setattr(cron_service, "get_runtime_profile_name", lambda: "worker_alpha")
 
     observed: dict[str, str] = {}
@@ -127,7 +123,7 @@ def test_cron_routes_default_profile_to_runtime_profile(test_client, monkeypatch
         )[1],
     )
 
-    headers = auth_headers()
+    headers = auth_headers
     assert test_client.get("/api/cron/jobs", headers=headers).status_code == 200
     assert test_client.get("/api/cron/jobs/job-1", headers=headers).status_code == 200
     assert test_client.get("/api/cron/jobs/job-1/history", headers=headers).status_code == 200
@@ -179,7 +175,7 @@ def test_cron_routes_default_profile_to_runtime_profile(test_client, monkeypatch
     }
 
 
-def test_create_cron_job_accepts_extended_payload_fields(test_client, monkeypatch) -> None:
+def test_create_cron_job_accepts_extended_payload_fields(test_client, auth_headers, monkeypatch) -> None:
     monkeypatch.setattr(cron_service, "get_runtime_profile_name", lambda: "default")
 
     captured: dict[str, object] = {}
@@ -206,13 +202,13 @@ def test_create_cron_job_accepts_extended_payload_fields(test_client, monkeypatc
         "workdir": None,
         "no_agent": False,
     }
-    response = test_client.post("/api/cron/jobs", headers=auth_headers(), json=payload)
+    response = test_client.post("/api/cron/jobs", headers=auth_headers, json=payload)
 
     assert response.status_code == 200
     assert captured == {"profile": "default", **payload}
 
 
-def test_raw_cron_job_update_route_uses_runtime_profile(test_client, monkeypatch) -> None:
+def test_raw_cron_job_update_route_uses_runtime_profile(test_client, auth_headers, monkeypatch) -> None:
     monkeypatch.setattr(cron_service, "get_runtime_profile_name", lambda: "worker_alpha")
 
     observed: dict[str, object] = {}
@@ -227,7 +223,7 @@ def test_raw_cron_job_update_route_uses_runtime_profile(test_client, monkeypatch
 
     response = test_client.put(
         "/api/cron/jobs/job-1/raw",
-        headers=auth_headers(),
+        headers=auth_headers,
         json={"job": {"name": "renamed", "identify": None}},
     )
 
@@ -239,13 +235,13 @@ def test_raw_cron_job_update_route_uses_runtime_profile(test_client, monkeypatch
     }
 
 
-def test_raw_cron_job_update_route_returns_not_found(test_client, monkeypatch) -> None:
+def test_raw_cron_job_update_route_returns_not_found(test_client, auth_headers, monkeypatch) -> None:
     monkeypatch.setattr(cron_service, "get_runtime_profile_name", lambda: "default")
     monkeypatch.setattr(cron_service, "update_job_raw", lambda job_id, job, profile=None: None)
 
     response = test_client.put(
         "/api/cron/jobs/missing/raw",
-        headers=auth_headers(),
+        headers=auth_headers,
         json={"job": {"name": "renamed"}},
     )
 

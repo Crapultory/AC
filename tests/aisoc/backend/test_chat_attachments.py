@@ -63,7 +63,7 @@ def test_document_turn_context_inlines_small_text(
 ) -> None:
     attachment = _upload(client, auth_headers, "ioc.json", b'{"ip":"203.0.113.7"}', "application/json")
     records = client.app.state.chat_manager.attachments.resolve(
-        [{"id": attachment["id"]}], owner_id="aisoc"
+        [{"id": attachment["id"]}], owner_id="0000000000000001"
     )
 
     from aisoc.backend.chat.attachments import prepare_turn_message
@@ -81,7 +81,7 @@ def test_image_turn_uses_native_content_parts_when_the_model_supports_vision(
 ) -> None:
     attachment = _upload(client, auth_headers, "evidence.png", _PNG, "image/png")
     records = client.app.state.chat_manager.attachments.resolve(
-        [{"id": attachment["id"]}], owner_id="aisoc"
+        [{"id": attachment["id"]}], owner_id="0000000000000001"
     )
     monkeypatch.setattr("agent.image_routing.decide_image_input_mode", lambda *_args: "native")
 

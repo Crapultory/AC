@@ -5,10 +5,21 @@ import threading
 import time
 from typing import Any
 
+import jwt
 from fastapi.testclient import TestClient
 
 
-AUTH_TOKEN = "test-token"
+AUTH_TOKEN = jwt.encode(
+    {
+        "sub": "0000000000000001",
+        "username": "admin",
+        "email": "admin@aisoc.local",
+        "iat": 1,
+        "exp": 4102444800,
+    },
+    "test-jwt-secret-1234567890-abcdef",
+    algorithm="HS256",
+)
 
 
 def _recv_until(ws, event_type: str, *, timeout: float = 3.0) -> dict[str, Any]:
@@ -587,14 +598,13 @@ def test_chat_session_manager_uses_aisoc_platform_name(load_backend) -> None:
     assert captured["ephemeral_system_prompt"] == ""
 
 
-def test_chat_ws_bind_without_user_keeps_public_session_id_as_runtime_id(
+def test_chat_ws_bind_propagates_authenticated_user_identity(
     load_backend,
     monkeypatch,
     hermes_home,
 ) -> None:
-    """AISOC has no user accounts: the agent runtime session id must equal the
-    public session id so /api/sessions and resume flows line up."""
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
+    """A valid per-user JWT must thread the real uid/username into the agent
+    runtime (aisoc/backend/chat/routes.py session.bind handler)."""
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     captured: dict[str, str] = {}
@@ -612,9 +622,14 @@ def test_chat_ws_bind_without_user_keeps_public_session_id_as_runtime_id(
             ws.send_json({"type": "session.bind", "title": "Identity Bind"})
             bound = _recv_until(ws, "session.bound")
 
-    assert captured["session_id"] == bound["session_id"]
-    assert captured["user_id"] == ""
-    assert captured["user_name"] == ""
+    import hashlib
+
+    expected_runtime_id = "aisoc-" + hashlib.sha256(
+        f"0000000000000001\0{bound['session_id']}".encode("utf-8")
+    ).hexdigest()[:32]
+    assert captured["session_id"] == expected_runtime_id
+    assert captured["user_id"] == "0000000000000001"
+    assert captured["user_name"] == "admin"
 
 
 def test_chat_manager_scopes_same_public_session_by_user(load_backend) -> None:
@@ -798,7 +813,6 @@ def test_chat_ws_binds_and_streams_main_agent_events(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     app.state.chat_manager.set_agent_factory(lambda session_id: _StreamingAgent(session_id))
@@ -837,7 +851,6 @@ def test_chat_ws_reports_every_successful_file_mutation_on_the_final_reply(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     app.state.chat_manager.set_agent_factory(lambda session_id: _FileMutationAgent(session_id))
@@ -871,7 +884,6 @@ def test_chat_ws_workflow_event_ids_remain_unique_after_service_restart(
     hermes_home,
 ) -> None:
     """A browser can retain a session trace while Aegis recreates its actor."""
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
 
     def send_turn(app, client_msg_id: str) -> dict[str, Any]:
@@ -924,7 +936,6 @@ def test_chat_ws_resolves_quick_command_tokens_before_running_the_agent(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     _write_user_quick_commands(
         hermes_home,
         [
@@ -984,7 +995,6 @@ def test_chat_ws_keeps_unprovided_agent_template_variables_after_name_resolution
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     _write_user_quick_commands(
         hermes_home,
         [
@@ -1030,7 +1040,6 @@ def test_chat_ws_expands_args_after_resolving_quick_commands(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     _write_user_quick_commands(
         hermes_home,
         [
@@ -1090,7 +1099,6 @@ def test_chat_ws_passes_a2ui_theme_and_date_args_to_instruct_templates(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     _write_user_quick_commands(
         hermes_home,
         [
@@ -1154,7 +1162,6 @@ def test_chat_ws_starts_new_main_message_after_a2a_delegate_completion(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     app.state.chat_manager.set_agent_factory(lambda session_id: _MainA2AResumeAgent(session_id))
@@ -1201,8 +1208,8 @@ def test_chat_ws_starts_new_main_message_after_a2a_delegate_completion(
 def test_chat_ws_keeps_parallel_sessions_isolated(
     load_backend,
     monkeypatch,
+    hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     app.state.chat_manager.set_agent_factory(lambda session_id: _StreamingAgent(session_id))
@@ -1248,7 +1255,6 @@ def test_chat_ws_a2a_slash_returns_cached_context_without_running_agent(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     from tools import a2a_delegate_tool
 
     a2a_delegate_tool.A2A_CONTEXT = "<aegis_context><active_agents /></aegis_context>"
@@ -1280,7 +1286,6 @@ def test_chat_ws_a2a_slash_refreshes_empty_context(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     from tools import a2a_delegate_tool
 
     a2a_delegate_tool.A2A_CONTEXT = ""
@@ -1320,7 +1325,6 @@ def test_chat_ws_a2a_slash_reports_refresh_failure(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     from tools import a2a_delegate_tool
 
     a2a_delegate_tool.A2A_CONTEXT = ""
@@ -1356,7 +1360,6 @@ def test_chat_ws_help_slash_lists_supported_aisoc_commands(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     app.state.chat_manager.set_agent_factory(lambda session_id: _StreamingAgent(session_id))
@@ -1390,7 +1393,6 @@ def test_chat_ws_model_slash_without_args_returns_usage(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     agent = _SwitchableAgent("switchable")
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
@@ -1420,7 +1422,6 @@ def test_chat_ws_model_slash_switches_live_agent(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     agent = _SwitchableAgent("switchable")
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
@@ -1477,7 +1478,6 @@ def test_chat_ws_model_slash_preserves_live_credentials_when_same_provider_resul
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     agent = _SwitchableAgent("switchable")
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
@@ -1531,7 +1531,6 @@ def test_chat_ws_model_slash_rebuilds_live_client_headers_for_provider_specific_
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     agent = _HeaderAwareSwitchableAgent("switchable")
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
@@ -1584,7 +1583,6 @@ def test_chat_ws_model_slash_reports_busy_session(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     app.state.chat_manager.set_agent_factory(lambda session_id: _SlowSwitchableAgent(session_id))
@@ -1624,7 +1622,6 @@ def test_chat_ws_model_slash_reports_switch_failure(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     agent = _SwitchableAgent("switchable")
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
@@ -1661,7 +1658,6 @@ def test_chat_ws_routes_follow_up_into_delegate_foreground_with_srcagent(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     app.state.chat_manager.set_agent_factory(lambda session_id: _DelegateAgent(session_id))
@@ -1730,7 +1726,6 @@ def test_chat_ws_renders_delegate_final_when_no_streamed_delta(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     app.state.chat_manager.set_agent_factory(lambda session_id: _DelegateFinalOnlyAgent(session_id))
@@ -1759,7 +1754,6 @@ def test_chat_ws_stop_slash_cancels_active_remote_a2a_delegate(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     agent = _RemoteCancelableDelegateAgent("remote-cancel")
@@ -1829,7 +1823,6 @@ def test_chat_ws_session_interrupt_cancels_active_remote_a2a_delegate(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     agent = _RemoteCancelableDelegateAgent("remote-cancel")
@@ -1867,7 +1860,6 @@ def test_chat_ws_stop_slash_treats_delayed_cancel_dispatch_as_success(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     agent = _DelayedRemoteCancelableDelegateAgent("remote-delayed-cancel")
@@ -1912,7 +1904,6 @@ def test_chat_ws_stop_slash_reports_real_cancel_failures(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     agent = _FailingRemoteCancelableDelegateAgent("remote-failing-cancel")
@@ -1953,7 +1944,6 @@ def test_chat_ws_stop_slash_without_active_delegate_returns_info_message(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     agent = _InterruptAwareAgent("no-remote-delegate")
@@ -1984,7 +1974,6 @@ def test_chat_ws_session_interrupt_keeps_existing_main_agent_interrupt_behavior(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     agent = _InterruptAwareAgent("interrupt-aware")
@@ -2021,7 +2010,6 @@ def test_chat_ws_emits_approval_request_and_resolves_over_same_socket(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     app.state.chat_manager.set_agent_factory(lambda session_id: _ApprovalAgent(session_id))
@@ -2064,7 +2052,6 @@ def test_chat_ws_emits_clarify_request_and_accepts_choice_response(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     app.state.chat_manager.set_agent_factory(lambda session_id: _ClarifyChoicesAgent(session_id))
@@ -2109,7 +2096,6 @@ def test_chat_ws_resumes_open_ended_clarify_and_accepts_text_response(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     server = load_backend("aisoc.backend.server")
     app = server.create_app()
     app.state.chat_manager.set_agent_factory(lambda session_id: _ClarifyOpenEndedAgent(session_id))
@@ -2163,7 +2149,6 @@ def test_chat_ws_skips_message_delta_when_disabled(
     monkeypatch,
     hermes_home,
 ) -> None:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
     monkeypatch.setenv("MESSAGE_DELTA", "False")
     server = load_backend("aisoc.backend.server")
     app = server.create_app()

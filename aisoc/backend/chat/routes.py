@@ -1,11 +1,10 @@
 """WebSocket + REST chat routes for the AISOC backend.
 
 Forked from ``aegis/backend/chat/routes.py``. Differences:
-- single shared session token (query ``?token=`` on the WebSocket; HTTP
-  endpoints are covered by the global bearer middleware in ``server.py``)
-- no user accounts: sessions bind without ``user_id`` so public session ids
-  equal the persisted ``hermes_state.SessionDB`` ids, and attachments use a
-  fixed owner
+- user identity is carried by a per-user JWT (query ``?token=`` on the
+  WebSocket; HTTP endpoints are covered by the global JWT middleware in
+  ``server.py``); sessions bind with the authenticated user's ``user_id``
+- quick commands are global (not per-user scoped) in AISOC, unlike Aegis
 - WebSocket path is ``/api/chat/session`` (the legacy tui_gateway bridge owns
   ``/api/chat/ws`` until it is removed)
 """
@@ -17,10 +16,10 @@ import base64
 import mimetypes
 from pathlib import Path
 
-from fastapi import APIRouter, File, HTTPException, UploadFile, WebSocket, status
+from fastapi import APIRouter, File, HTTPException, Request, UploadFile, WebSocket, status
 from starlette.websockets import WebSocketDisconnect
 
-from aisoc.backend.auth import token_matches
+from aisoc.backend.auth import get_current_user_from_token, require_authenticated_user
 from aisoc.backend.chat.service import ChatSessionManager
 from aisoc.backend.config import AisocSettings
 from aisoc.backend.models import ChatQuickCommandListResponse, DrawerFileResponse
@@ -28,6 +27,7 @@ from aisoc.backend.services.quick_command_service import (
     MessageArgumentResolutionError,
     QuickCommandService,
 )
+from aisoc.backend.services.user_service import UserService
 
 
 ATTACHMENT_OWNER_ID = "aisoc"
@@ -120,6 +120,7 @@ def _ws_token(websocket: WebSocket) -> str | None:
 
 def build_agent_chat_router(
     settings: AisocSettings,
+    user_service: UserService,
     manager: ChatSessionManager | None = None,
     quick_command_service: QuickCommandService | None = None,
 ) -> APIRouter:
@@ -128,28 +129,35 @@ def build_agent_chat_router(
     resolved_quick_command_service = quick_command_service or QuickCommandService()
 
     @router.post("/api/chat/attachments", status_code=status.HTTP_201_CREATED)
-    async def upload_attachment(file: UploadFile = File(...)) -> dict:
-        attachment = await session_manager.attachments.upload(
-            file, owner_id=ATTACHMENT_OWNER_ID
-        )
+    async def upload_attachment(request: Request, file: UploadFile = File(...)) -> dict:
+        user, _payload = require_authenticated_user(request, settings, user_service)
+        attachment = await session_manager.attachments.upload(file, owner_id=user.uid)
         return {"attachment": attachment.public_dict()}
 
     @router.get("/api/chat/quick-commands", response_model=ChatQuickCommandListResponse)
-    async def list_quick_commands() -> ChatQuickCommandListResponse:
+    async def list_quick_commands(request: Request) -> ChatQuickCommandListResponse:
         """Return the available composer shortcuts."""
+        require_authenticated_user(request, settings, user_service)
         return ChatQuickCommandListResponse(
             commands=resolved_quick_command_service.list_commands()
         )
 
     @router.get("/api/chat/drawer-html", response_model=DrawerFileResponse)
-    async def get_drawer_html(path: str) -> DrawerFileResponse:
+    async def get_drawer_html(path: str, request: Request) -> DrawerFileResponse:
         """Return a typed preview payload for one file in the Hermes workspace."""
+        require_authenticated_user(request, settings, user_service)
         return _drawer_file_response(path)
 
     @router.websocket("/api/chat/session")
     async def chat_session_ws(websocket: WebSocket) -> None:
         token = _ws_token(websocket)
-        if not token_matches(token, settings):
+        if not token:
+            await websocket.close(code=4401)
+            return
+        current_user = None
+        try:
+            current_user, _payload = get_current_user_from_token(token, settings, user_service)
+        except Exception:
             await websocket.close(code=4401)
             return
 
@@ -175,6 +183,8 @@ def build_agent_chat_router(
                         asyncio.get_running_loop(),
                         session_id=str(payload.get("session_id") or "").strip() or None,
                         title=str(payload.get("title") or "").strip() or None,
+                        user_id=current_user.uid if current_user is not None else None,
+                        user_name=current_user.username if current_user is not None else None,
                     )
                     await websocket.send_json(
                         actor.build_bound_event(resumed=bool(payload.get("session_id")))
@@ -199,7 +209,7 @@ def build_agent_chat_router(
                         )
                         attachments = session_manager.attachments.resolve(
                             payload.get("attachments"),
-                            owner_id=ATTACHMENT_OWNER_ID,
+                            owner_id=current_user.uid if current_user is not None else ATTACHMENT_OWNER_ID,
                         )
                         actor.handle_message(
                             resolved_text,
