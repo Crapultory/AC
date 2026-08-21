@@ -9,7 +9,6 @@ import secrets
 from typing import Literal
 
 
-TokenSource = Literal["env", "generated"]
 A2ATokenSource = Literal["disabled", "env", "generated"]
 
 
@@ -19,8 +18,8 @@ class AisocSettings:
     port: int = 9120
     open_browser: bool = True
     allow_public: bool = False
-    session_token: str = ""
-    token_source: TokenSource = "generated"
+    jwt_secret: str = ""
+    jwt_expire_seconds: int = 28800
     a2a_auth_enabled: bool = False
     a2a_session_token: str = ""
     a2a_token_source: A2ATokenSource = "disabled"
@@ -42,13 +41,7 @@ def load_aisoc_settings(
     dist_dir: Path | None = None,
 ) -> AisocSettings:
     """Load settings from explicit args plus environment fallback."""
-    env_token = (os.environ.get("AISOC_SESSION_TOKEN") or "").strip()
-    if env_token:
-        token = env_token
-        source: TokenSource = "env"
-    else:
-        token = secrets.token_urlsafe(32)
-        source = "generated"
+    jwt_secret = (os.environ.get("AISOC_JWT_SECRET") or "").strip() or secrets.token_urlsafe(32)
 
     a2a_auth_enabled = _env_flag("AISOC_A2A_AUTH")
     if a2a_auth_enabled:
@@ -70,8 +63,8 @@ def load_aisoc_settings(
         port=port,
         open_browser=open_browser,
         allow_public=allow_public,
-        session_token=token,
-        token_source=source,
+        jwt_secret=jwt_secret,
+        jwt_expire_seconds=28800,
         a2a_auth_enabled=a2a_auth_enabled,
         a2a_session_token=a2a_token,
         a2a_token_source=a2a_source,

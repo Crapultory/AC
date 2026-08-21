@@ -196,7 +196,7 @@ describe("chatRuntime workflowTrace persistence", () => {
       }
       throw new Error(`Unhandled fetchJSON path in test: ${path}`);
     });
-    window.localStorage.setItem("aisoc.sessionToken", "test-token");
+    window.localStorage.setItem("aisoc.accessToken", "test-token");
 
     await mount();
 

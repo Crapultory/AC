@@ -1,10 +1,7 @@
 from __future__ import annotations
 
-def auth_headers(token: str = "test-token") -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
 
-
-def test_memory_index_lists_soul_user_and_memory_files(test_client, monkeypatch) -> None:
+def test_memory_index_lists_soul_user_and_memory_files(test_client, auth_headers, monkeypatch) -> None:
     from aisoc.backend.services import memory_service
 
     monkeypatch.setattr(
@@ -16,7 +13,7 @@ def test_memory_index_lists_soul_user_and_memory_files(test_client, monkeypatch)
             "memory_files": [{"name": "MEMORY.md"}],
         },
     )
-    resp = test_client.get("/api/memory", headers=auth_headers())
+    resp = test_client.get("/api/memory", headers=auth_headers)
     assert resp.status_code == 200
     body = resp.json()
     assert "soul" in body

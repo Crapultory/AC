@@ -3,9 +3,13 @@ from __future__ import annotations
 from fastapi.testclient import TestClient
 from hermes_state import SessionDB
 
+import aisoc.backend.services.user_store as _user_store_module
 from aisoc.backend.config import load_aisoc_settings
 from aisoc.backend.server import create_app
 from aisoc.backend.services import cron_service, overview_service, session_service
+
+
+BOOTSTRAP_PASSWORD = "test-admin-password-123"
 
 
 REQUIRED_STATUS_KEYS = {
@@ -33,12 +37,25 @@ REQUIRED_STATS_KEYS = {
 
 
 def _auth_client(monkeypatch) -> tuple[TestClient, dict[str, str]]:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", "test-token")
+    client, headers, _uid = _auth_client_with_uid(monkeypatch)
+    return client, headers
+
+
+def _auth_client_with_uid(monkeypatch) -> tuple[TestClient, dict[str, str], str]:
+    monkeypatch.setenv("AISOC_BOOTSTRAP_ADMIN_PASSWORD", BOOTSTRAP_PASSWORD)
+    monkeypatch.setenv("AISOC_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
+    monkeypatch.setattr(_user_store_module, "_STORE", None)
     settings = load_aisoc_settings()
     app = create_app(settings)
     client = TestClient(app)
-    headers = {"Authorization": "Bearer test-token"}
-    return client, headers
+    login = client.post(
+        "/api/auth/login", json={"username": "admin", "password": BOOTSTRAP_PASSWORD}
+    )
+    assert login.status_code == 200
+    body = login.json()
+    token = body["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+    return client, headers, body["user"]["uid"]
 
 
 def test_overview_status_requires_auth(monkeypatch) -> None:
@@ -153,10 +170,12 @@ def test_overview_session_detail_not_found(monkeypatch) -> None:
 
 
 def test_overview_session_detail_truncates_tool_and_skips_empty_assistant(monkeypatch, tmp_path) -> None:
+    client, headers, uid = _auth_client_with_uid(monkeypatch)
+
     db_path = tmp_path / "state.db"
     db = SessionDB(db_path=db_path)
     try:
-        db.create_session("sess_1", "cron", model="gpt-5")
+        db.create_session("sess_1", "cron", model="gpt-5", user_id=uid)
         db.update_token_counts("sess_1", input_tokens=10, output_tokens=20)
         db.append_message("sess_1", "assistant", content="")
         db.append_message("sess_1", "tool", content="x" * 550, tool_name="terminal")
@@ -165,7 +184,6 @@ def test_overview_session_detail_truncates_tool_and_skips_empty_assistant(monkey
         db.close()
 
     monkeypatch.setattr(session_service, "SessionDB", lambda: SessionDB(db_path=db_path))
-    client, headers = _auth_client(monkeypatch)
 
     response = client.get("/api/sessions/sess_1/detail", headers=headers)
     assert response.status_code == 200

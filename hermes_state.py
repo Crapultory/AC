@@ -6747,6 +6747,27 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
         return self._execute_write(_do) > 0
 
+    def set_session_user_id(self, session_id: str, user_id: Optional[str]) -> bool:
+        """Attach (or clear) the owning account on a session row.
+
+        ``_ensure_db_session`` (run_agent.py) always creates rows with
+        ``user_id=None`` — the column is populated after the fact by callers
+        with their own per-user account system (e.g. AISOC) once the row
+        exists, typically on every turn so it self-heals if the row didn't
+        exist yet on the first call. Returns True when a row was updated.
+        """
+        def _do(conn):
+            cursor = conn.execute(
+                "UPDATE sessions SET user_id = ? WHERE id = ?",
+                (user_id, session_id),
+            )
+            rowcount = cursor.rowcount
+            if rowcount is None or rowcount < 0:
+                rowcount = conn.execute("SELECT changes()").fetchone()[0]
+            return rowcount
+        rowcount = self._execute_write(_do)
+        return rowcount > 0
+
     def set_session_archived(self, session_id: str, archived: bool) -> bool:
         """Archive or unarchive a session.
 
@@ -7120,6 +7141,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         compact_rows: bool = False,
         include_pinned: bool = False,
         session_key: str = None,
+        user_id: str = None,
     ) -> List[Dict[str, Any]]:
         """List sessions with preview (first user message) and last active timestamp.
 
@@ -7172,6 +7194,11 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         Pass ``session_key`` to restrict results to one stable gateway
         conversation scope (DM, group, channel, or thread, including the
         configured per-user isolation policy).
+
+        Pass ``user_id`` to restrict results to sessions owned by that account
+        (exact match against ``sessions.user_id``). Used by callers with their
+        own per-user account system (e.g. AISOC) to scope listings to the
+        requesting user.
         """
         # Rows carry token/cost totals — drain queued deltas first so
         # listings (sidebar, /resume, dashboards) show exact counters.
@@ -7205,6 +7232,9 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         if session_key:
             where_clauses.append("s.session_key = ?")
             params.append(session_key)
+        if user_id:
+            where_clauses.append("s.user_id = ?")
+            params.append(user_id)
         if exclude_sources:
             placeholders = ",".join("?" for _ in exclude_sources)
             where_clauses.append(f"s.source NOT IN ({placeholders})")
@@ -9255,6 +9285,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         archived_only: bool = False,
         exclude_children: bool = False,
         exclude_sources: List[str] = None,
+        user_id: str = None,
     ) -> int:
         """Count sessions, optionally filtered by source.
 
@@ -9269,6 +9300,9 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         (e.g. ``["cron"]`` so the recents "load more" total matches a
         cron-excluded ``list_sessions_rich`` page and doesn't keep "load more"
         stuck on for buried scheduler sessions).
+
+        Pass ``user_id`` to count only sessions owned by that account
+        (mirrors ``list_sessions_rich``'s ``user_id`` filter).
         """
         where_clauses = []
         params = []
@@ -9299,6 +9333,9 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             where_clauses.append("s.archived = 1")
         elif not include_archived:
             where_clauses.append("s.archived = 0")
+        if user_id:
+            where_clauses.append("s.user_id = ?")
+            params.append(user_id)
 
         where_sql = f" WHERE {' AND '.join(where_clauses)}" if where_clauses else ""
 

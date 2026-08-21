@@ -2,6 +2,9 @@ import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent }
 
 import { PageMissionHeader } from "../components/PageMissionHeader";
 import { fetchJSON } from "../lib/api";
+import { setStoredUser } from "../lib/auth";
+import { useCurrentUser, useSetCurrentUser } from "../lib/authContext";
+import type { AuthenticatedUser } from "../types";
 
 const RESTART_CONFIRMATION_PHRASE = "RESTART AISOC";
 const DEFAULT_RECOVERY_POLL_MS = 1_000;
@@ -49,6 +52,13 @@ export function SettingsPage({
   reloadPage = reloadWindow,
   recoveryPollMs = DEFAULT_RECOVERY_POLL_MS,
 }: SettingsPageProps) {
+  const currentUser = useCurrentUser();
+  const setCurrentUser = useSetCurrentUser();
+  const isAdmin = Boolean(currentUser?.is_admin);
+  const [displayName, setDisplayName] = useState(currentUser?.display_name || "");
+  const [profileSubmitting, setProfileSubmitting] = useState(false);
+  const [profileError, setProfileError] = useState("");
+  const [profileSaved, setProfileSaved] = useState(false);
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null);
   const [runtimeError, setRuntimeError] = useState("");
   const [confirmationStage, setConfirmationStage] = useState<"danger" | "phrase" | null>(null);
@@ -166,6 +176,29 @@ export function SettingsPage({
     }
   }
 
+  async function saveProfile(): Promise<void> {
+    const trimmed = displayName.trim();
+    if (!trimmed || profileSubmitting) return;
+
+    setProfileSubmitting(true);
+    setProfileError("");
+    try {
+      const updated = await fetchJSON<AuthenticatedUser>("/api/auth/profile", {
+        method: "PUT",
+        body: JSON.stringify({ display_name: trimmed }),
+      });
+      setStoredUser(updated);
+      setCurrentUser(updated);
+      setDisplayName(updated.display_name);
+      setProfileSaved(true);
+      window.setTimeout(() => setProfileSaved(false), 2_000);
+    } catch {
+      setProfileError("Could not save nickname. Try again.");
+    } finally {
+      setProfileSubmitting(false);
+    }
+  }
+
   function handleDialogKeyDown(event: ReactKeyboardEvent<HTMLElement>): void {
     if (event.key === "Escape") {
       event.preventDefault();
@@ -206,6 +239,38 @@ export function SettingsPage({
         }
       />
 
+      <article className="detail-panel settings-profile-panel" aria-labelledby="profile-title">
+        <div className="settings-panel-heading">
+          <div>
+            <p className="brand-kicker">Identity</p>
+            <h3 id="profile-title">Profile</h3>
+          </div>
+        </div>
+        <label className="settings-confirm-label" htmlFor="profile-display-name">
+          Nickname
+          <input
+            id="profile-display-name"
+            type="text"
+            value={displayName}
+            onChange={(event) => setDisplayName(event.target.value)}
+            maxLength={40}
+            autoComplete="off"
+            disabled={profileSubmitting}
+          />
+        </label>
+        {profileError ? <p className="error-text" role="alert">{profileError}</p> : null}
+        <div className="settings-confirm-actions">
+          <button
+            type="button"
+            className="ghost-button"
+            onClick={() => void saveProfile()}
+            disabled={profileSubmitting || !displayName.trim()}
+          >
+            {profileSubmitting ? "Saving…" : profileSaved ? "Saved" : "Save nickname"}
+          </button>
+        </div>
+      </article>
+
       <article className="detail-panel settings-runtime-panel" aria-labelledby="runtime-status-title">
         <div className="settings-panel-heading">
           <div>
@@ -242,31 +307,33 @@ export function SettingsPage({
         ) : null}
       </article>
 
-      <article className="detail-panel settings-danger-panel" aria-labelledby="dangerous-actions-title">
-        <div className="settings-danger-marker" aria-hidden="true">!</div>
-        <div className="settings-danger-copy">
-          <p className="brand-kicker">Restricted control</p>
-          <h3 id="dangerous-actions-title">Dangerous Actions</h3>
-          <p className="subtle-copy">
-            Restarting temporarily disconnects this workbench and interrupts active operations.
-          </p>
-          {restartError ? <p className="error-text" role="alert">{restartError}</p> : null}
-          {restarting ? (
-            <p className="settings-restart-state" role="status">
-              Restarting AISOC. Waiting for the public health check to recover…
+      {isAdmin ? (
+        <article className="detail-panel settings-danger-panel" aria-labelledby="dangerous-actions-title">
+          <div className="settings-danger-marker" aria-hidden="true">!</div>
+          <div className="settings-danger-copy">
+            <p className="brand-kicker">Restricted control</p>
+            <h3 id="dangerous-actions-title">Dangerous Actions</h3>
+            <p className="subtle-copy">
+              Restarting temporarily disconnects this workbench and interrupts active operations.
             </p>
-          ) : null}
-        </div>
-        <button
-          ref={restartButtonRef}
-          type="button"
-          className="danger-button settings-restart-button"
-          onClick={() => setConfirmationStage("danger")}
-          disabled={restartSubmitting || restarting}
-        >
-          {restarting ? "Restarting…" : "Restart AISOC"}
-        </button>
-      </article>
+            {restartError ? <p className="error-text" role="alert">{restartError}</p> : null}
+            {restarting ? (
+              <p className="settings-restart-state" role="status">
+                Restarting AISOC. Waiting for the public health check to recover…
+              </p>
+            ) : null}
+          </div>
+          <button
+            ref={restartButtonRef}
+            type="button"
+            className="danger-button settings-restart-button"
+            onClick={() => setConfirmationStage("danger")}
+            disabled={restartSubmitting || restarting}
+          >
+            {restarting ? "Restarting…" : "Restart AISOC"}
+          </button>
+        </article>
+      ) : null}
 
       {confirmationStage ? (
         <div className="settings-confirm-overlay" onMouseDown={(event) => {

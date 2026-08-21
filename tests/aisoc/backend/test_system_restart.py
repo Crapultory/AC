@@ -6,8 +6,12 @@ from fastapi.testclient import TestClient
 import pytest
 
 import hermes_self_restart
+import aisoc.backend.services.user_store as _user_store_module
 from aisoc.backend.config import load_aisoc_settings
 from aisoc.backend.server import create_app
+
+
+BOOTSTRAP_PASSWORD = "test-admin-password-123"
 
 
 @pytest.fixture(autouse=True)
@@ -16,11 +20,17 @@ def reset_restart_guard(monkeypatch) -> None:
 
 
 def _client(monkeypatch) -> tuple[TestClient, dict[str, str]]:
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", "test-token")
+    monkeypatch.setenv("AISOC_BOOTSTRAP_ADMIN_PASSWORD", BOOTSTRAP_PASSWORD)
+    monkeypatch.setenv("AISOC_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
+    monkeypatch.setattr(_user_store_module, "_STORE", None)
     settings = load_aisoc_settings()
-    return TestClient(create_app(settings)), {
-        "Authorization": "Bearer test-token",
-    }
+    client = TestClient(create_app(settings))
+    login = client.post(
+        "/api/auth/login", json={"username": "admin", "password": BOOTSTRAP_PASSWORD}
+    )
+    assert login.status_code == 200
+    token = login.json()["access_token"]
+    return client, {"Authorization": f"Bearer {token}"}
 
 
 def test_restart_requires_valid_bearer_auth(monkeypatch) -> None:

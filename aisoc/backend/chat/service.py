@@ -1,9 +1,12 @@
 """Session manager + actor for AISOC chat WebSocket flows.
 
-Forked from ``aegis/backend/chat/service.py`` (2026-08). AISOC runs with a
-single shared session token and no user accounts, so ``user_id`` is normally
-empty here — which keeps public chat session ids identical to the persisted
-``hermes_state.SessionDB`` ids (see ``_runtime_session_id``).
+Forked from ``aegis/backend/chat/service.py`` (2026-08). AISOC now has its own
+user account system (see ``aisoc/backend/auth.py``); the WebSocket route binds
+each session with the authenticated user's ``user_id``, which isolates the
+same public session id per user and derives a distinct persisted
+``hermes_state.SessionDB`` runtime id (see ``_runtime_session_id``). When
+``user_id`` is empty (e.g. anonymous/legacy callers), the public and runtime
+session ids remain identical.
 """
 
 from __future__ import annotations
@@ -274,6 +277,25 @@ class ChatSessionActor:
         self._running_thread: threading.Thread | None = None
         self._disconnect_requested = False
         self._output_adapter = ChatOutputAdapter(self)
+
+    def _heal_session_owner(self) -> None:
+        """Best-effort: stamp the persisted session row with its owning account.
+
+        ``run_agent.py``'s ``_ensure_db_session`` always creates the row with
+        ``user_id=None`` (it has no notion of AISOC's account system), and the
+        row is created lazily on first turn — so this can't run once at bind
+        time, it must self-heal after every turn. No-ops (and never raises)
+        when the actor is unowned or the underlying session DB is unavailable.
+        """
+        if not self._user_id:
+            return
+        session_db = getattr(self._agent, "_session_db", None)
+        if session_db is None:
+            return
+        try:
+            session_db.set_session_user_id(self._runtime_session_id, self._user_id)
+        except Exception:
+            pass
 
     def update_identity(self, *, user_id: str | None, user_name: str | None) -> None:
         """Refresh mutable account metadata on a cached, user-scoped actor."""
@@ -1069,6 +1091,7 @@ class ChatSessionActor:
                 conversation_history=history,
                 task_id=turn_id,
             )
+            self._heal_session_owner()
             final_response = str(result.get("final_response") or "")
             if final_response:
                 with modified_files_lock:

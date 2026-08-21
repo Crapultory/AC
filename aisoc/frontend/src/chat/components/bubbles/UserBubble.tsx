@@ -3,7 +3,9 @@
  */
 import { FileText, Image as ImageIcon } from 'lucide-react';
 
+import { useCurrentUser } from '../../../lib/authContext';
 import { Message } from '../../types';
+import { initialsAvatar } from '../../lib/identity';
 
 function formatSize(size: number): string {
   if (size >= 1024 * 1024) return `${(size / 1024 / 1024).toFixed(1)} MB`;
@@ -12,9 +14,25 @@ function formatSize(size: number): string {
 }
 
 export function UserBubble({ message }: { message: Message }) {
+  const currentUser = useCurrentUser();
+  const displayName = currentUser?.display_name || currentUser?.username || 'You';
+  const avatar = initialsAvatar(currentUser?.username || displayName);
+
   return (
     <div className="flex justify-end px-4 py-1.5">
       <div className="max-w-[78%] min-w-0">
+        <div className="mb-1 flex items-center justify-end gap-1.5">
+          <span className="font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-[var(--aisoc-muted)]">
+            {displayName}
+          </span>
+          <span
+            aria-hidden="true"
+            className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full text-[8px] font-bold text-white"
+            style={{ backgroundColor: avatar.color }}
+          >
+            {avatar.initials}
+          </span>
+        </div>
         <div className="whitespace-pre-wrap break-words rounded-[var(--aisoc-radius-md)] border border-[color-mix(in_srgb,var(--aisoc-accent)_35%,var(--aisoc-border))] bg-[var(--aisoc-accent-soft)] px-3 py-2 text-[13px] leading-relaxed text-[var(--aisoc-text)]">
           {message.text}
         </div>

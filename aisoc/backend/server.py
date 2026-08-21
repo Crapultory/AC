@@ -13,7 +13,7 @@ from fastapi.staticfiles import StaticFiles
 import uvicorn
 
 from aisoc.backend.agent_runtime import prepare_hermes_home
-from aisoc.backend.auth import verify_bearer_token
+from aisoc.backend.auth import require_authenticated_user
 from aisoc.backend.chat import ChatSessionManager, build_agent_chat_router
 from aisoc.backend.config import AisocSettings, is_loopback_host, load_aisoc_settings
 from aisoc.backend.routes.auth import build_auth_router
@@ -26,13 +26,16 @@ from aisoc.backend.routes.sessions import build_sessions_router
 from aisoc.backend.routes.skills import build_skills_router
 from aisoc.backend.routes.kb import build_kb_router
 from aisoc.backend.routes.system import build_system_router
+from aisoc.backend.routes.users import build_users_router
 from aisoc.backend.services.quick_command_service import QuickCommandService
 from aisoc.backend.services.skill_installer import bundled_skills_root, install_bundled_skills
+from aisoc.backend.services.user_service import UserService
 
 
 PUBLIC_API_PATHS = frozenset(
     {
         "/api/auth/login",
+        "/api/auth/register",
         "/api/auth/session",
         "/api/auth/logout",
         "/health",
@@ -53,7 +56,7 @@ def _install_docs_bearer_auth(app: FastAPI) -> None:
             version="0.1.0",
             description=(
                 "AISOC backend API. Use the `Authorize` button in Swagger UI "
-                "and provide `Bearer <token>` automatically via the token field."
+                "and provide `Bearer <token>` automatically via the JWT access token field."
             ),
             routes=app.routes,
         )
@@ -63,9 +66,9 @@ def _install_docs_bearer_auth(app: FastAPI) -> None:
         security_schemes["bearerAuth"] = {
             "type": "http",
             "scheme": "bearer",
-            "bearerFormat": "Token",
+            "bearerFormat": "JWT",
             "description": (
-                "Paste AISOC session token. Swagger will send "
+                "Paste AISOC JWT access token. Swagger will send "
                 "`Authorization: Bearer <token>`."
             ),
         }
@@ -82,6 +85,10 @@ def create_app(settings: AisocSettings | None = None) -> FastAPI:
     active_settings = settings or load_aisoc_settings()
     app = FastAPI(title="AISOC Backend")
     app.state.aisoc_settings = active_settings
+    user_service = UserService()
+    admin_ready = user_service.ensure_bootstrap_admin()
+    app.state.user_service = user_service
+    app.state.admin_setup_required = not admin_ready
 
     app.add_middleware(
         CORSMiddleware,
@@ -98,9 +105,9 @@ def create_app(settings: AisocSettings | None = None) -> FastAPI:
     @app.middleware("http")
     async def auth_middleware(request: Request, call_next):
         path = request.url.path
-        if path.startswith("/api/") and path not in PUBLIC_API_PATHS:
+        if request.method != "OPTIONS" and path.startswith("/api/") and path not in PUBLIC_API_PATHS:
             try:
-                verify_bearer_token(request, active_settings)
+                require_authenticated_user(request, active_settings, user_service)
             except Exception as exc:
                 # Keep middleware response stable and explicit.
                 detail = getattr(exc, "detail", "Unauthorized")
@@ -112,16 +119,20 @@ def create_app(settings: AisocSettings | None = None) -> FastAPI:
     app.state.chat_manager = chat_manager
     app.state.quick_command_service = quick_command_service
 
-    app.include_router(build_auth_router(active_settings))
-    app.include_router(build_system_router(active_settings))
+    app.include_router(build_auth_router(active_settings, user_service))
+    app.include_router(build_users_router(active_settings, user_service))
+    app.include_router(
+        build_system_router(active_settings, user_service, admin_setup_required=not admin_ready)
+    )
     app.include_router(
         build_agent_chat_router(
             active_settings,
+            user_service,
             manager=chat_manager,
             quick_command_service=quick_command_service,
         )
     )
-    app.include_router(build_sessions_router())
+    app.include_router(build_sessions_router(active_settings, user_service))
     app.include_router(build_cron_router())
     app.include_router(build_skills_router())
     app.include_router(build_memory_router())
@@ -202,11 +213,11 @@ def start_server(
     )
     app = create_app(settings)
 
-    if settings.token_source == "generated":
-        print("AISOC session token (generated for this process):")
-        print(settings.session_token)
-    else:
-        print("AISOC session token source: AISOC_SESSION_TOKEN")
+    if app.state.admin_setup_required:
+        print(
+            "AISOC requires initial admin setup. Set AISOC_BOOTSTRAP_ADMIN_PASSWORD "
+            "and restart the service."
+        )
 
     if open_browser:
         try:

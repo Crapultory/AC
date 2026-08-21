@@ -9,7 +9,7 @@ import pytest
 from fastapi.testclient import TestClient
 
 
-AUTH_TOKEN = "test-token"
+BOOTSTRAP_PASSWORD = "test-admin-password-123"
 
 
 def _clear_aisoc_backend_modules() -> None:
@@ -20,7 +20,7 @@ def _clear_aisoc_backend_modules() -> None:
 
 @pytest.fixture
 def load_backend(monkeypatch: pytest.MonkeyPatch):
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
+    monkeypatch.setenv("AISOC_BOOTSTRAP_ADMIN_PASSWORD", BOOTSTRAP_PASSWORD)
 
     def _load(module_name: str):
         _clear_aisoc_backend_modules()
@@ -35,7 +35,8 @@ def hermes_home(
     tmp_path,
 ) -> Path:
     monkeypatch.setenv("HERMES_HOME", str(tmp_path))
-    monkeypatch.setenv("AISOC_SESSION_TOKEN", AUTH_TOKEN)
+    monkeypatch.setenv("AISOC_JWT_SECRET", "test-jwt-secret-1234567890-abcdef")
+    monkeypatch.setenv("AISOC_BOOTSTRAP_ADMIN_PASSWORD", BOOTSTRAP_PASSWORD)
     return tmp_path
 
 
@@ -51,5 +52,18 @@ def client(
 
 
 @pytest.fixture
-def auth_headers() -> dict[str, str]:
-    return {"Authorization": f"Bearer {AUTH_TOKEN}"}
+def auth_token(client: TestClient) -> str:
+    response = client.post(
+        "/api/auth/login",
+        json={"username": "admin", "password": BOOTSTRAP_PASSWORD},
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    token = payload.get("access_token")
+    assert isinstance(token, str) and token
+    return token
+
+
+@pytest.fixture
+def auth_headers(auth_token: str) -> dict[str, str]:
+    return {"Authorization": f"Bearer {auth_token}"}

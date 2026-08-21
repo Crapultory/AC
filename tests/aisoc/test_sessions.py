@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-def auth_headers(token: str = "test-token") -> dict[str, str]:
-    return {"Authorization": f"Bearer {token}"}
-
 
 def test_session_detail_includes_tool_call_id_for_history_reconstruction(monkeypatch) -> None:
     """The frontend groups consecutive role="tool" rows into a reconstructed
@@ -23,6 +20,7 @@ def test_session_detail_includes_tool_call_id_for_history_reconstruction(monkeyp
                 "message_count": 3,
                 "input_tokens": 10,
                 "output_tokens": 20,
+                "user_id": "admin-uid",
             }
 
         def get_messages(self, sid: str) -> list[dict]:
@@ -43,7 +41,7 @@ def test_session_detail_includes_tool_call_id_for_history_reconstruction(monkeyp
 
     monkeypatch.setattr(session_service, "SessionDB", FakeSessionDB)
 
-    payload = session_service.get_session_detail_with_messages("sess-1")
+    payload = session_service.get_session_detail_with_messages("sess-1", user_id="admin-uid")
 
     assert payload is not None
     tool_messages = [m for m in payload["messages"] if m["role"] == "tool"]
@@ -53,13 +51,13 @@ def test_session_detail_includes_tool_call_id_for_history_reconstruction(monkeyp
     assert tool_messages[0]["content"] == "scan complete, 0 findings"
 
 
-def test_latest_descendant_returns_resume_target(test_client, monkeypatch) -> None:
+def test_latest_descendant_returns_resume_target(test_client, auth_headers, monkeypatch) -> None:
     from aisoc.backend.services import session_service
 
     monkeypatch.setattr(
         session_service,
         "get_latest_descendant",
-        lambda session_id: {
+        lambda session_id, *, user_id: {
             "requested_session_id": session_id,
             "session_id": "sess-child",
             "path": [session_id, "sess-child"],
@@ -67,7 +65,7 @@ def test_latest_descendant_returns_resume_target(test_client, monkeypatch) -> No
         },
     )
     resp = test_client.get(
-        "/api/sessions/root/latest-descendant", headers=auth_headers()
+        "/api/sessions/root/latest-descendant", headers=auth_headers
     )
     assert resp.status_code == 200
     assert resp.json()["session_id"] == "sess-child"
