@@ -45,6 +45,8 @@ hermes workagent --module a2a --host 127.0.0.1 --port 9086
 
 A2A 模块默认允许直接连接；设置 `WORKAGENT_A2A_AUTH=true` 后，会在 HTTP 中间件层对 A2A RPC 请求启用 Bearer Token 认证。
 
+A2A 审批/澄清交互扩展（`hermes.interaction.v1`）的服务端协议、任务元数据、响应 endpoint 和清理语义见 [`backend/docs/a2a-interaction-extension.md`](docs/a2a-interaction-extension.md)。该扩展使用同一 A2A Bearer 认证；未声明扩展的调用方保持原有行为。
+
 #### A2A 模式启用 YOLO
 
 如果要使用当前 `aisoc` profile 启动 A2A service，并让 A2A agent 自动跳过危险命令的人工审批，使用：

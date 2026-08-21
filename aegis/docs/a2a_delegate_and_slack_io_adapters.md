@@ -2,6 +2,12 @@
 
 本文档描述当前 Hermes 主线中 Aegis 二次开发的远端 A2A 委托能力，以及 Slack 和 Feishu 的前台输入/输出适配。它面向需要维护、移植或重新实现该能力的开发者和 AI。
 
+当前模块归属如下：
+
+- Aegis 后端/前端的 pending 状态、WebSocket 事件和用户响应见 [`a2a-delegate-interaction.md`](a2a-delegate-interaction.md)。
+- Workagent A2A 服务端的协议、任务元数据、阻塞等待和 Bearer 响应接口见 [`workagent/backend/docs/a2a-interaction-extension.md`](../../workagent/backend/docs/a2a-interaction-extension.md)。
+- 本文保留跨模块调用链以及 Slack/Feishu adapter 的实现约束；本次交互扩展只接入 Workagent A2A 服务端，`aisoc/` 下的 A2A executor/server 不在本次改动范围内。
+
 本文只描述当前实现。旧版本的本地 A2A 子 Agent 模式、`type`、`toolsets`、`max_iterations` 参数，以及旧路径 `gateway/platforms/slack.py` 均不属于当前设计。需要本地子 Agent 时使用既有的 `delegate_task`。
 
 ## 1. 目标与边界
@@ -133,7 +139,73 @@ output.emit(source, event_type, content, session_id=None)
 
 工具 result 同时包含可供模型继续判断的结构化 JSON。远端 tool result message 不作为用户可见 tool call 重复展示。
 
-### 3.2 取消与异常收尾
+### 3.2 `hermes.interaction.v1` 审批/澄清交互
+
+Workagent 远端 Agent 需要用户授权或澄清时，不结束当前 task，也不把请求伪装成普通 AI 文本，而是在同一个 `TaskState.WORKING` 更新中携带 `hermes` metadata。服务端 Agent Card 通过一个非强制扩展声明是否支持该响应通道：
+
+```json
+{
+  "uri": "https://hermes.dev/extensions/interaction/v1",
+  "required": false,
+  "params": {"response_path": "/a2a/hermes/interaction/respond"}
+}
+```
+
+审批请求的 metadata 形态：
+
+```json
+{
+  "hermes": {
+    "kind": "approval_request",
+    "interaction_id": "approval_…",
+    "task_id": "…",
+    "context_id": "…",
+    "command": "chmod 777 …",
+    "description": "world/other-writable permissions",
+    "choices": ["once", "session", "always", "deny"],
+    "allow_session": true,
+    "allow_permanent": true
+  }
+}
+```
+
+澄清请求使用 `kind: "clarify_request"`，携带 `question`、可选 `choices`、`multi_select` 和同一组三个远端 ID。调用方通过受相同 A2A Bearer 认证保护的接口响应：
+
+```text
+POST {A2A_RPC_PATH}/hermes/interaction/respond
+```
+
+```json
+{"task_id":"…","context_id":"…","interaction_id":"…","kind":"approval","choice":"once"}
+```
+
+或：
+
+```json
+{"task_id":"…","context_id":"…","interaction_id":"…","kind":"clarify","answer":["option-a","option-b"]}
+```
+
+服务端 `InteractionRegistry` 校验 task/context/interaction/kind 的匹配关系，并限制审批值为 `once/session/always/deny`。澄清拒绝空答案，多选答案以 JSON 数组保留。重复点击、未知 ID、过期等待和底层等待已结束分别返回明确的 `409`/`404`/`422` 错误；超时、取消和 executor cleanup 都会释放底层 approval/clarify wait，默认 fail-closed。
+
+调用方的完整交互链路是：
+
+```text
+remote tools.approval / clarify_gateway
+  -> Workagent register interaction + block current agent thread
+  -> TaskState.WORKING metadata
+  -> a2a_delegate streaming event 或 get_task() polling
+  -> 按 interaction_id 去重并发出 approval_request / clarify_request
+  -> Slack / Feishu / Aegis 展示交互控件
+  -> UI callback 在 A2A session owner event loop 调度 responder
+  -> POST /hermes/interaction/respond（Bearer + task/context/interaction）
+  -> Workagent registry resolver
+  -> 唤醒原 approval/clarify wait，继续同一 context_id 的 agent turn
+  -> approval_resolved / clarify_resolved metadata（用于确认；调用方可先清理已成功提交的本地 pending）
+```
+
+`a2a_delegate` 只有在 Agent Card 声明该扩展时才显示可响应控件；远端未声明扩展时会保持旧的安全行为，不人为制造一个无法解除阻塞的按钮，也不会自动批准危险操作。解析 streaming 与 polling 的实现都经过同一个 session 事件入口，因此轮询不会重复显示同一个 interaction。
+
+### 3.3 取消与异常收尾
 
 活动远端 session 会登记到父 Agent 的 `_active_a2a_delegate_session`。停止请求通过 `_RemoteA2ADelegateCancelHandle` 将 `cancel_task` 调度到 session 所属 event loop；若 task 尚未创建，取消是 no-op。停止过程对 event loop 已关闭、跨 loop 和被停止的 coroutine 等常见收尾异常做受控抑制，避免中断路径二次失败。
 
@@ -211,7 +283,11 @@ route 命中时先 flush 上一段 delegate stream，再压入用户文本，避
 
 若 edit 失败且不可恢复，stream state 降级为追加消息；委托输出不能因一条消息不可编辑而丢失。退出、adapter 关闭或 route 失效时必须取消延迟 flush 并清理 state。
 
-### 5.4 Clarify 卡片
+### 5.4 Approval / Clarify 卡片与 delegate 交互
+
+普通本地 gateway 审批/澄清和远程 delegate 交互状态必须分开保存。delegate 卡片的按钮携带远端 `interaction_id`，但不调用本地 `resolve_gateway_approval` 或本地 clarify resolver；它们通过 `_A2ADelegateSession.schedule_interaction_response(...)` 回到远端服务。响应调度使用 session 所属 event loop，避免在 Slack/Feishu/Aegis 的前端事件循环中同步等待 HTTP。
+
+Slack delegate 使用独立的 Block Kit state，保留 Allow Once、Session、Always、Deny、clarify 选项、Other 和多选提交；回调同时校验 interaction、channel/thread、操作者授权和重复点击。Other 后的下一条文本优先路由到对应远端 interaction。
 
 Slack adapter 也覆写 `send_clarify(...)`：多选 clarify 使用 section + actions buttons，每个按钮只保存 `clarify_id` 和选项 index；真实选项文本留在 adapter 内存映射，避免写进 interaction payload。
 
@@ -222,7 +298,9 @@ Slack adapter 也覆写 `send_clarify(...)`：多选 clarify 使用 section + ac
 
 未授权或 malformed action 仅记录告警，不 resolve、不更新卡片。开放式 clarify 沿用现有文本捕获 fallback，不创建 modal。
 
-Feishu adapter 以 interactive card 实现相同语义：问题、每个选项按钮和 `Other (type answer)` 按钮。action value 只保存 `clarify_id` 与选项 index，真实选项和预期 chat 存在 adapter 内存。同步 card callback 会校验 pending state、callback chat、现有群组准入规则和 interactive 操作者授权；只有通过校验后才调用 `resolve_gateway_clarify(...)` 或 `mark_awaiting_text(...)`。选中或等待输入后返回原地更新卡片；未知、重复、跨 chat 或未授权点击不 resolve 也不更新卡片。发送卡片及 delegate 输出时保留 `thread_id` metadata，因此 Feishu 话题会被正确路由。
+Feishu adapter 以 interactive card 实现相同语义：问题、每个选项按钮和 `Other (type answer)` 按钮。delegate action value 保存 `interaction_id` 和选项 token，真实选项和预期 chat/thread 存在 adapter 内存。同步 card callback 会校验 pending state、callback chat、现有群组准入规则和 interactive 操作者授权；同时兼容 Feishu 回调中的 tenant-scoped `operator.user_id` 与 app-scoped `operator.open_id`，避免把入站 `<source>` 的用户 ID 只与 `open_id` 比较而误拒绝合法点击。通过校验后才调用远端 responder；选中或等待输入后返回原地更新卡片。未知、重复、跨 chat、未授权或身份不匹配的点击不 resolve 也不更新卡片。发送卡片及 delegate 输出时保留 `thread_id` metadata，因此 Feishu 话题会被正确路由。
+
+普通（非 delegate）Feishu 卡片仍使用原有的 `resolve_gateway_approval(...)`、`resolve_gateway_clarify(...)` 和本地 pending state，不能因为 delegate 兼容逻辑而改变其 resolver 或授权边界。
 
 ## 6. 并发、隔离与排查
 
@@ -230,6 +308,8 @@ Feishu adapter 以 interactive card 实现相同语义：问题、每个选项�
 - route 释放、input close 和 stream-state cleanup 必须在循环退出路径中执行；否则后续正常消息可能被错误吞入旧委托。
 - A2A 默认 session id 在时间戳后增加两位随机后缀，降低同秒并发创建的 context id 冲突概率。
 - `_active_a2a_delegate_session` 是父 Agent 上的活动会话取消句柄；新增并行策略时必须审查其单句柄语义，不能假设它能独立取消任意并发 remote delegate。
+- 交互卡片显示但点击无效时，先检查 adapter 保存的 interaction 是否仍 pending，再检查 Feishu callback 的 `operator.user_id` / `operator.open_id`、chat/thread 是否与卡片状态匹配，最后确认 owner event loop 仍运行且远端 Agent Card 声明了 interaction extension。
+- Workagent interaction response 的 HTTP 401/403 表示 A2A Bearer 认证或入口配置问题；404/409/422 分别优先检查 interaction 生命周期、task/context 匹配和 choice/answer 格式，不要通过重发或自动批准绕过安全策略。
 
 排查优先级：先确认 `a2a.json` 和 Agent Card，再确认 toolset 是否显式启用；对于来源信息，分别检查主 Agent user turn 的 Slack / Feishu 信封（含 `channel`）和远端 A2A payload 的工具信封（不含 `channel`），随后检查 gateway 是否为当前 turn 绑定 runtime、平台 route 是否命中、`context_id` 是否复用，以及 output event 是否已调度到 adapter 主 loop。
 
@@ -242,10 +322,12 @@ venv/bin/python -m pytest tests/tools/test_a2a_delegate_tool.py -q
 venv/bin/python -m pytest tests/gateway/test_slack_delegate_runtime_wiring.py -q
 venv/bin/python -m pytest tests/gateway/test_slack_clarify_buttons.py -q
 venv/bin/python -m pytest tests/gateway/test_feishu_clarify_and_delegate.py -q
+venv/bin/python -m pytest tests/workagent/backend/test_a2a_interactions.py tests/workagent/backend/test_a2a_executor.py -q
+venv/bin/python -m pytest tests/aegis/backend/test_chat_ws.py -q
 venv/bin/python -m pytest tests/gateway/test_shared_group_sender_prefix.py -q
 venv/bin/python -m pytest tests/run_agent/test_run_agent.py tests/test_model_tools.py -q
 venv/bin/python -m py_compile tools/a2a_delegate_tool.py plugins/platforms/slack/adapter.py plugins/platforms/feishu/adapter.py gateway/run.py run_agent.py
 git diff --check
 ```
 
-回归至少应覆盖：remote-only schema、SDK 缺失、loop 无 input adapter、同一 remote session 多轮复用、每轮远端来源信封、`/main`/`/exit`、Slack / Feishu route hit/miss、主 Agent Slack / Feishu 信封在 reply/thread context 之前且含 channel、cached agent binding 刷新、delta 编辑节流、final text 不重复、长文本拆段、tool call segment break，以及授权/未授权 clarify card/button。
+回归至少应覆盖：remote-only schema、SDK 缺失、loop 无 input adapter、同一 remote session 多轮复用、每轮远端来源信封、`/main`/`/exit`、Slack / Feishu route hit/miss、主 Agent Slack / Feishu 信封在 reply/thread context 之前且含 channel、cached agent binding 刷新、delta 编辑节流、final text 不重复、长文本拆段、tool call segment break、授权/未授权 clarify card/button，以及 Workagent interaction 的 streaming/polling 去重、task/context/interaction 校验、响应后恢复、超时/取消 fail-closed 和 Feishu tenant/app user ID 兼容。

@@ -356,12 +356,19 @@ export interface Conversation {
     command: string;
     description: string;
     choices: string[];
+    source?: 'main' | 'delegate';
+    remoteInteractionId?: string | null;
+    allowSession?: boolean;
+    allowPermanent?: boolean;
   } | null;
   pendingClarify?: {
     clarifyId: string;
     question: string;
     choices: string[];
     awaitingText: boolean;
+    multiSelect?: boolean;
+    source?: 'main' | 'delegate';
+    remoteInteractionId?: string | null;
   } | null;
   hasUnread?: boolean;
   transportState?: 'idle' | 'connecting' | 'connected' | 'error' | 'closed';

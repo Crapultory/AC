@@ -548,6 +548,14 @@ class _FeishuDelegateOutputAdapter:
         self._thread_id = thread_id
         self._user_id = user_id
         self._chat_type = chat_type
+        self._a2a_session = None
+
+    def bind_a2a_interaction_session(self, session) -> None:
+        self._a2a_session = session
+
+    def unbind_a2a_interaction_session(self, session) -> None:
+        if self._a2a_session is session:
+            self._a2a_session = None
 
     def emit(self, source, event_type, content, session_id=None) -> None:
         self._adapter._schedule_delegate_output(
@@ -574,8 +582,39 @@ class _FeishuDelegateOutputAdapter:
         return f"`tool` {tool_name}: {preview}" if preview else f"`tool` {tool_name}"
 
     async def _emit_async(self, source: str, event_type: str, content: str, *, session_id=None) -> None:
-        del session_id
         metadata = {"thread_id": self._thread_id} if self._thread_id else None
+        if source == "delegate" and event_type in {
+            "approval_request",
+            "clarify_request",
+            "approval_resolved",
+            "clarify_resolved",
+        }:
+            try:
+                payload = json.loads(content)
+            except (TypeError, ValueError):
+                payload = {}
+            responder = getattr(self._a2a_session, "schedule_interaction_response", None)
+            if event_type == "approval_request" and payload:
+                await self._adapter.send_delegate_exec_approval(
+                    chat_id=self._chat_id,
+                    payload=payload,
+                    responder=responder if callable(responder) else None,
+                    metadata=metadata,
+                    user_id=self._user_id,
+                )
+            elif event_type == "clarify_request" and payload:
+                await self._adapter.send_delegate_clarify(
+                    chat_id=self._chat_id,
+                    payload=payload,
+                    responder=responder if callable(responder) else None,
+                    metadata=metadata,
+                    user_id=self._user_id,
+                )
+            elif event_type.endswith("_resolved") and payload:
+                await self._adapter.resolve_delegate_interaction(payload)
+            return
+
+        del session_id
         if source == "delegate" and event_type == "ai_delta":
             if content:
                 await self._adapter.handle_delegate_ai_delta(
@@ -1703,6 +1742,11 @@ class FeishuAdapter(BasePlatformAdapter):
         # Clarify card state is adapter-local: card payloads carry only the
         # clarify id and option index, never the original choice text.
         self._clarify_choices: Dict[str, Dict[str, Any]] = {}
+        # Remote A2A interaction cards are kept outside the local gateway
+        # approval/clarify maps; their responder is an authenticated A2A
+        # bridge owned by the delegate client.
+        self._delegate_interactions: Dict[str, Dict[str, Any]] = {}
+        self._DELEGATE_INTERACTIONS_MAX = 1000
         # Foreground A2A routes and stream state are process-local by design.
         self._delegate_routes: Dict[str, _FeishuDelegateRoute] = {}
         self._delegate_routes_lock = threading.RLock()
@@ -1712,6 +1756,11 @@ class FeishuAdapter(BasePlatformAdapter):
         # by create, so we cache it per message_id.
         self._pending_processing_reactions: "OrderedDict[str, str]" = OrderedDict()
         self._load_seen_message_ids()
+
+    @staticmethod
+    def _trim_oldest_dict_entries(mapping: Dict[Any, Any], max_size: int) -> None:
+        while len(mapping) > max_size:
+            mapping.pop(next(iter(mapping)), None)
 
     @staticmethod
     def _load_settings(extra: Dict[str, Any]) -> FeishuAdapterSettings:
@@ -2162,6 +2211,40 @@ class FeishuAdapter(BasePlatformAdapter):
         self._unregister_delegate_route(route)
         return False
 
+    async def _maybe_route_delegate_interaction_message(
+        self,
+        *,
+        text: str,
+        chat_id: str,
+        thread_id: Optional[str],
+        user_id: Optional[str],
+        chat_type: Optional[str],
+    ) -> bool:
+        del chat_type
+        candidate = None
+        for state in self._delegate_interactions.values():
+            if state.get("kind") != "clarify" or not state.get("awaiting_text") or state.get("resolved"):
+                continue
+            if str(state.get("chat_id") or "") != str(chat_id or ""):
+                continue
+            if (state.get("thread_id") or None) != (thread_id or None):
+                continue
+            owner = str(state.get("user_id") or "")
+            if owner and owner != str(user_id or ""):
+                continue
+            candidate = state
+            break
+        if candidate is None:
+            return False
+        responder = candidate.get("responder")
+        interaction_id = str(candidate.get("interaction_id") or "")
+        if not interaction_id or not callable(responder) or not responder(interaction_id, "clarify", str(text or "").strip()):
+            return False
+        candidate["resolved"] = True
+        candidate["awaiting_text"] = False
+        await self._send_delegate_resolution(candidate, "✅ Clarification response sent.")
+        return True
+
     def _get_sdk_executor(self) -> concurrent.futures.ThreadPoolExecutor:
         """Return the adapter-owned executor for blocking Feishu SDK calls.
 
@@ -2490,6 +2573,130 @@ class FeishuAdapter(BasePlatformAdapter):
     _EA_REASON_LABEL = "**Reason:** "
     _EA_SMART_DENY_LINE = "\n\n**Smart DENY:** owner override applies to this one operation only."
     _EA_CMD_BUDGET = 3000
+
+    async def _send_delegate_resolution(self, state: Dict[str, Any], text: str) -> None:
+        try:
+            await self.send(
+                str(state.get("chat_id") or ""),
+                text,
+                metadata={"thread_id": state.get("thread_id")} if state.get("thread_id") else None,
+            )
+        except Exception:
+            logger.debug("[Feishu] delegate resolution notice failed", exc_info=True)
+
+    async def send_delegate_exec_approval(
+        self,
+        *,
+        chat_id: str,
+        payload: Dict[str, Any],
+        responder,
+        metadata: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+    ) -> SendResult:
+        interaction_id = str(payload.get("interaction_id") or "")
+        if not interaction_id or not self._client:
+            return SendResult(success=False, error="Missing A2A interaction id or client")
+        try:
+            prefix = {"hermes_delegate_kind": "approval", "interaction_id": interaction_id}
+            def _btn(label: str, choice: str, button_type: str = "default") -> dict:
+                return {"tag": "button", "text": {"tag": "plain_text", "content": label}, "type": button_type, "value": {**prefix, "choice": choice}}
+            actions = [_btn("✅ Allow Once", "once", "primary")]
+            if payload.get("allow_session", True):
+                actions.append(_btn("✅ Session", "session"))
+            if payload.get("allow_permanent", True):
+                actions.append(_btn("✅ Always", "always"))
+            actions.append(_btn("❌ Deny", "deny", "danger"))
+            card = {
+                "config": {"wide_screen_mode": True},
+                "header": {"title": {"content": "⚠️ Delegate Approval Required", "tag": "plain_text"}, "template": "orange"},
+                "elements": [
+                    {"tag": "markdown", "content": self._format_exec_approval(str(payload.get("command") or ""), str(payload.get("description") or "dangerous command"), False)},
+                    {"tag": "action", "actions": actions},
+                ],
+            }
+            response = await self._feishu_send_with_retry(
+                chat_id=chat_id,
+                msg_type="interactive",
+                payload=json.dumps(card, ensure_ascii=False),
+                reply_to=(metadata or {}).get("thread_id"),
+                metadata=metadata,
+            )
+            result = self._finalize_send_result(response, "send_delegate_exec_approval failed")
+            if result.success:
+                self._delegate_interactions[interaction_id] = {
+                    "kind": "approval", "interaction_id": interaction_id, "responder": responder,
+                    "chat_id": chat_id, "thread_id": (metadata or {}).get("thread_id"), "user_id": user_id,
+                    "message_id": result.message_id or "", "command": str(payload.get("command") or ""), "resolved": False,
+                }
+                self._trim_oldest_dict_entries(self._delegate_interactions, self._DELEGATE_INTERACTIONS_MAX)
+            return result
+        except Exception as exc:
+            logger.warning("[Feishu] send_delegate_exec_approval failed: %s", exc, exc_info=True)
+            return SendResult(success=False, error=str(exc))
+
+    async def send_delegate_clarify(
+        self,
+        *,
+        chat_id: str,
+        payload: Dict[str, Any],
+        responder,
+        metadata: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+    ) -> SendResult:
+        interaction_id = str(payload.get("interaction_id") or "")
+        if not interaction_id or not self._client:
+            return SendResult(success=False, error="Missing A2A interaction id or client")
+        choices = [str(item) for item in (payload.get("choices") or []) if str(item).strip()]
+        state = {
+            "kind": "clarify", "interaction_id": interaction_id, "responder": responder,
+            "chat_id": chat_id, "thread_id": (metadata or {}).get("thread_id"), "user_id": user_id,
+            "question": str(payload.get("question") or "Clarification required"), "choices": choices,
+            "multi_select": bool(payload.get("multi_select")), "selected": [],
+            "awaiting_text": not bool(choices), "resolved": False,
+        }
+        try:
+            if not choices:
+                card = {
+                    "config": {"wide_screen_mode": True},
+                    "header": {"title": {"content": "❓ Delegate Clarification", "tag": "plain_text"}, "template": "blue"},
+                    "elements": [{"tag": "markdown", "content": state["question"][:3000]}],
+                }
+            else:
+                base = {"hermes_delegate_kind": "clarify", "interaction_id": interaction_id}
+                actions = [
+                    {"tag": "button", "text": {"tag": "plain_text", "content": choice[:200]}, "type": "primary" if index == 0 else "default", "value": {**base, "token": str(index)}}
+                    for index, choice in enumerate(choices)
+                ]
+                actions.append({"tag": "button", "text": {"tag": "plain_text", "content": "Other (type answer)"}, "type": "default", "value": {**base, "token": "other"}})
+                if state["multi_select"]:
+                    actions.append({"tag": "button", "text": {"tag": "plain_text", "content": "Submit selection"}, "type": "primary", "value": {**base, "token": "submit"}})
+                card = {
+                    "config": {"wide_screen_mode": True},
+                    "header": {"title": {"content": "❓ Delegate Clarification", "tag": "plain_text"}, "template": "blue"},
+                    "elements": [{"tag": "markdown", "content": state["question"][:3000]}, {"tag": "action", "actions": actions}],
+                }
+            response = await self._feishu_send_with_retry(
+                chat_id=chat_id, msg_type="interactive", payload=json.dumps(card, ensure_ascii=False),
+                reply_to=state["thread_id"], metadata=metadata,
+            )
+            result = self._finalize_send_result(response, "send_delegate_clarify failed")
+            if result.success:
+                state["message_id"] = result.message_id or ""
+                self._delegate_interactions[interaction_id] = state
+                self._trim_oldest_dict_entries(self._delegate_interactions, self._DELEGATE_INTERACTIONS_MAX)
+            return result
+        except Exception as exc:
+            logger.warning("[Feishu] send_delegate_clarify failed: %s", exc, exc_info=True)
+            return SendResult(success=False, error=str(exc))
+
+    async def resolve_delegate_interaction(self, payload: Dict[str, Any]) -> None:
+        interaction_id = str(payload.get("interaction_id") or "")
+        state = self._delegate_interactions.get(interaction_id)
+        if state is None:
+            return
+        state["resolved"] = True
+        state["awaiting_text"] = False
+        await self._send_delegate_resolution(state, "✅ Delegate interaction resolved.")
 
     async def send_clarify(
         self,
@@ -3268,6 +3475,17 @@ class FeishuAdapter(BasePlatformAdapter):
             if isinstance(action_value, dict) else None
         )
 
+        delegate_kind = action_value.get("hermes_delegate_kind") if isinstance(action_value, dict) else None
+        if delegate_kind:
+            token = str(getattr(event, "token", "") or "")
+            if token and self._is_card_action_duplicate(token):
+                return self._empty_card_action_response()
+            return self._handle_delegate_card_action(
+                event=event,
+                action_value=action_value,
+                loop=loop,
+            )
+
         if hermes_action:
             return self._handle_approval_card_action(event=event, action_value=action_value, loop=loop)
         if update_prompt_action:
@@ -3323,6 +3541,80 @@ class FeishuAdapter(BasePlatformAdapter):
 
     def _empty_card_action_response(self) -> Any:
         return P2CardActionTriggerResponse() if P2CardActionTriggerResponse else None
+
+    def _delegate_card_response(self, title: str, content: str) -> Any:
+        return self._build_card_action_response({
+            "config": {"wide_screen_mode": True},
+            "header": {"title": {"content": title, "tag": "plain_text"}, "template": "blue"},
+            "elements": [{"tag": "markdown", "content": content[:3000]}],
+        })
+
+    def _handle_delegate_card_action(self, *, event: Any, action_value: Dict[str, Any], loop: Any) -> Any:
+        interaction_id = str(action_value.get("interaction_id") or "")
+        state = self._delegate_interactions.get(interaction_id)
+        if not interaction_id or state is None or state.get("resolved"):
+            return self._empty_card_action_response()
+        callback_chat_id = str(getattr(getattr(event, "context", None), "open_chat_id", "") or "")
+        if callback_chat_id and callback_chat_id != str(state.get("chat_id") or ""):
+            return self._empty_card_action_response()
+        operator = getattr(event, "operator", None)
+        open_id = str(getattr(operator, "open_id", "") or "")
+        operator_user_id = str(getattr(operator, "user_id", "") or "")
+        # ``SessionSource.user_id`` is tenant-scoped when Feishu provides it,
+        # while card callbacks identify the operator with both the
+        # app-scoped ``open_id`` and (when available) the tenant-scoped
+        # ``user_id``.  Accept either representation here; comparing the
+        # stored source id only to ``open_id`` rejects legitimate delegate
+        # clicks before the A2A responder can run.
+        stored_user_id = str(state.get("user_id") or "")
+        if stored_user_id and stored_user_id not in {open_id, operator_user_id}:
+            logger.warning(
+                "[Feishu] Delegate callback user mismatch for interaction %s",
+                interaction_id,
+            )
+            return self._empty_card_action_response()
+        sender_id = SimpleNamespace(open_id=open_id, user_id=operator_user_id)
+        if not self._allow_group_message(sender_id, str(state.get("chat_id") or ""), is_bot=False) or not self._is_interactive_operator_authorized(open_id):
+            return self._empty_card_action_response()
+
+        token = str(action_value.get("token") or action_value.get("choice") or "")
+        if state.get("kind") == "approval":
+            if token not in {"once", "session", "always", "deny"}:
+                return self._empty_card_action_response()
+            responder = state.get("responder")
+            if not callable(responder) or not responder(interaction_id, "approval", token):
+                return self._delegate_card_response("Delegate approval", "The remote response channel is unavailable.")
+            state["resolved"] = True
+            return self._delegate_card_response("Delegate approval resolved", f"{token} by {open_id}")
+
+        if token == "other":
+            state["awaiting_text"] = True
+            return self._delegate_card_response("Delegate clarification", f"Waiting for a typed answer from {open_id}.")
+        if token == "submit":
+            selected = list(state.get("selected") or [])
+            if not selected:
+                return self._delegate_card_response("Delegate clarification", "Select at least one option first.")
+            value_to_send: Any = selected
+        else:
+            try:
+                choice = list(state.get("choices") or [])[int(token)]
+            except (ValueError, TypeError, IndexError):
+                return self._empty_card_action_response()
+            if state.get("multi_select"):
+                selected = list(state.get("selected") or [])
+                if choice in selected:
+                    selected.remove(choice)
+                else:
+                    selected.append(choice)
+                state["selected"] = selected
+                return self._delegate_card_response("Delegate clarification", "Selected: " + (", ".join(selected) if selected else "none"))
+            value_to_send = choice
+        responder = state.get("responder")
+        if not callable(responder) or not responder(interaction_id, "clarify", value_to_send):
+            return self._delegate_card_response("Delegate clarification", "The remote response channel is unavailable.")
+        state["resolved"] = True
+        state["awaiting_text"] = False
+        return self._delegate_card_response("Delegate clarification resolved", f"Response sent by {open_id}.")
 
     def _handle_clarify_card_action(self, *, event: Any, action_value: Dict[str, Any], loop: Any) -> Any:
         """Validate and resolve a Feishu clarify card without routing a new turn."""
@@ -4024,6 +4316,18 @@ class FeishuAdapter(BasePlatformAdapter):
             if delegate_command_text in {"/main", "/exit"}
             else text
         )
+        if await self._maybe_route_delegate_interaction_message(
+            text=delegate_routed_text,
+            chat_id=chat_id,
+            thread_id=thread_id,
+            user_id=getattr(source, "user_id", sender_profile["user_id"]),
+            chat_type=getattr(
+                source,
+                "chat_type",
+                self._resolve_source_chat_type(chat_info=chat_info, event_chat_type=chat_type),
+            ),
+        ):
+            return
         if await self._maybe_route_delegate_foreground_message(
             text=delegate_routed_text,
             chat_id=chat_id,

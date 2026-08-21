@@ -255,6 +255,7 @@ class ChatSessionActor:
         self._running_thread: threading.Thread | None = None
         self._disconnect_requested = False
         self._output_adapter = AegisChatOutputAdapter(self)
+        self._a2a_interaction_session = None
 
     def update_identity(self, *, user_id: str | None, user_name: str | None) -> None:
         """Refresh mutable account metadata on a cached, user-scoped actor."""
@@ -265,6 +266,15 @@ class ChatSessionActor:
         if self._user_id:
             setattr(self._agent, "_user_id", self._user_id)
             setattr(self._agent, "_user_name", self._user_name)
+
+    def bind_a2a_interaction_session(self, session) -> None:
+        with self._lock:
+            self._a2a_interaction_session = session
+
+    def unbind_a2a_interaction_session(self, session) -> None:
+        with self._lock:
+            if self._a2a_interaction_session is session:
+                self._a2a_interaction_session = None
 
     def replace_connection(self, websocket: WebSocket, loop: asyncio.AbstractEventLoop) -> None:
         with self._lock:
@@ -324,6 +334,11 @@ class ChatSessionActor:
                             "command": self._pending_approval.command,
                             "description": self._pending_approval.description,
                             "choices": list(self._pending_approval.choices),
+                            "source": self._pending_approval.source,
+                            "remote_interaction_id": self._pending_approval.remote_interaction_id,
+                            "srcagent": self._foreground_agent or None,
+                            "allow_session": self._pending_approval.allow_session,
+                            "allow_permanent": self._pending_approval.allow_permanent,
                         },
                         source=self._foreground_source,
                         turn_id=self._turn_id,
@@ -337,6 +352,11 @@ class ChatSessionActor:
                             "clarify_id": self._pending_clarify.clarify_id,
                             "question": self._pending_clarify.question,
                             "choices": list(self._pending_clarify.choices or []) or None,
+                            "awaiting_text": self._pending_clarify.awaiting_text,
+                            "multi_select": self._pending_clarify.multi_select,
+                            "source": self._pending_clarify.source,
+                            "remote_interaction_id": self._pending_clarify.remote_interaction_id,
+                            "srcagent": self._foreground_agent or None,
                         },
                         source=self._foreground_source,
                         turn_id=self._turn_id,
@@ -620,7 +640,7 @@ class ChatSessionActor:
             self._running_thread = worker
             worker.start()
 
-    def handle_approval_response(self, choice: str) -> None:
+    def handle_approval_response(self, choice: str, approval_id: str | None = None) -> None:
         normalized = str(choice or "").strip().lower()
         if normalized not in {"once", "session", "always", "deny"}:
             self._send_event(
@@ -630,7 +650,31 @@ class ChatSessionActor:
                 turn_id=self._turn_id,
             )
             return
-        resolved = resolve_gateway_approval(self._runtime_session_id, normalized)
+        with self._lock:
+            pending = self._pending_approval
+        if pending is not None and pending.source == "delegate":
+            if approval_id and approval_id != pending.approval_id:
+                self._send_event(
+                    "error",
+                    {"code": "approval_stale", "message": "This delegate approval is no longer current."},
+                    source="delegate",
+                    turn_id=self._turn_id,
+                )
+                return
+            responder = pending.responder
+            if not callable(responder) or not responder(
+                pending.remote_interaction_id, "approval", normalized
+            ):
+                self._send_event(
+                    "error",
+                    {"code": "approval_not_pending", "message": "Remote approval response channel is unavailable."},
+                    source="delegate",
+                    turn_id=self._turn_id,
+                )
+                return
+            resolved = 1
+        else:
+            resolved = resolve_gateway_approval(self._runtime_session_id, normalized)
         if resolved <= 0:
             self._send_event(
                 "error",
@@ -640,7 +684,6 @@ class ChatSessionActor:
             )
             return
         with self._lock:
-            pending = self._pending_approval
             self._pending_approval = None
         self._send_event(
             "approval.resolved",
@@ -648,12 +691,12 @@ class ChatSessionActor:
                 "approval_id": pending.approval_id if pending else None,
                 "choice": normalized,
             },
-            source=self._foreground_source,
+            source=pending.source if pending else self._foreground_source,
             turn_id=self._turn_id,
         )
         self._set_run_state("running", source=self._foreground_source)
 
-    def handle_clarify_response(self, answer: str) -> None:
+    def handle_clarify_response(self, answer: str, clarify_id: str | None = None) -> None:
         normalized = str(answer or "").strip()
         if not normalized:
             self._send_event(
@@ -665,12 +708,43 @@ class ChatSessionActor:
             return
         with self._lock:
             pending = self._pending_clarify
-            if pending is None:
-                pending = None
-            else:
+        if pending is not None and pending.source == "delegate":
+            if clarify_id and clarify_id != pending.clarify_id:
+                self._send_event(
+                    "error",
+                    {"code": "clarify_stale", "message": "This delegate clarification is no longer current."},
+                    source="delegate",
+                    turn_id=self._turn_id,
+                )
+                return
+            remote_value: Any = normalized
+            if pending.multi_select:
+                try:
+                    parsed = json.loads(normalized)
+                except (TypeError, ValueError):
+                    parsed = None
+                if isinstance(parsed, list) and parsed:
+                    remote_value = [str(item) for item in parsed]
+            responder = pending.responder
+            if not callable(responder) or not responder(
+                pending.remote_interaction_id, "clarify", remote_value
+            ):
+                self._send_event(
+                    "error",
+                    {"code": "clarify_not_pending", "message": "Remote clarify response channel is unavailable."},
+                    source="delegate",
+                    turn_id=self._turn_id,
+                )
+                return
+            with self._lock:
                 self._pending_clarify = None
-                pending.answer = normalized
-                pending.event.set()
+        else:
+            with self._lock:
+                pending = self._pending_clarify
+                if pending is not None:
+                    self._pending_clarify = None
+                    pending.answer = normalized
+                    pending.event.set()
         if pending is None:
             self._send_event(
                 "error",
@@ -685,7 +759,7 @@ class ChatSessionActor:
                 "clarify_id": pending.clarify_id,
                 "answer": normalized,
             },
-            source=self._foreground_source,
+            source=pending.source if pending else self._foreground_source,
             turn_id=self._turn_id,
         )
         self._set_run_state("running", source=self._foreground_source)
@@ -766,6 +840,100 @@ class ChatSessionActor:
         if delegate_session_id:
             with self._lock:
                 self._foreground_state.child_session_id = str(delegate_session_id)
+
+        if event_type in {
+            "approval_request",
+            "clarify_request",
+            "approval_resolved",
+            "clarify_resolved",
+        }:
+            try:
+                payload = json.loads(str(content or "{}"))
+            except (TypeError, ValueError):
+                payload = {}
+            if not isinstance(payload, dict):
+                return
+            interaction_id = str(payload.get("interaction_id") or "")
+            with self._lock:
+                delegate_session = self._a2a_interaction_session
+                responder = getattr(delegate_session, "schedule_interaction_response", None)
+                responder = responder if callable(responder) else None
+            if event_type == "approval_request" and interaction_id:
+                pending = ApprovalRequestState(
+                    approval_id=f"approval_{uuid4().hex[:10]}",
+                    command=str(payload.get("command") or ""),
+                    description=str(payload.get("description") or ""),
+                    choices=[str(item) for item in (payload.get("choices") or ["once", "session", "always", "deny"])],
+                    source="delegate",
+                    remote_interaction_id=interaction_id,
+                    responder=responder,
+                    allow_session=bool(payload.get("allow_session", True)),
+                    allow_permanent=bool(payload.get("allow_permanent", True)),
+                )
+                with self._lock:
+                    self._pending_approval = pending
+                self._set_run_state("waiting_for_approval", source="delegate")
+                self._send_event(
+                    "approval.request",
+                    {
+                        "approval_id": pending.approval_id,
+                        "command": pending.command,
+                        "description": pending.description,
+                        "choices": list(pending.choices),
+                        "source": "delegate",
+                        "remote_interaction_id": interaction_id,
+                        "srcagent": self._foreground_agent or None,
+                    },
+                    source="delegate",
+                    turn_id=self._turn_id,
+                )
+                return
+            if event_type == "clarify_request" and interaction_id:
+                choices = [str(item) for item in (payload.get("choices") or []) if str(item).strip()]
+                pending = ClarifyRequestState(
+                    clarify_id=f"clarify_{uuid4().hex[:10]}",
+                    question=str(payload.get("question") or ""),
+                    choices=choices or None,
+                    awaiting_text=not bool(choices),
+                    multi_select=bool(payload.get("multi_select")),
+                    source="delegate",
+                    remote_interaction_id=interaction_id,
+                    responder=responder,
+                )
+                with self._lock:
+                    self._pending_clarify = pending
+                self._set_run_state("waiting_for_clarify", source="delegate")
+                self._send_event(
+                    "clarify.request",
+                    {
+                        "clarify_id": pending.clarify_id,
+                        "question": pending.question,
+                        "choices": list(pending.choices or []) or None,
+                        "awaiting_text": pending.awaiting_text,
+                        "multi_select": pending.multi_select,
+                        "source": "delegate",
+                        "remote_interaction_id": interaction_id,
+                        "srcagent": self._foreground_agent or None,
+                    },
+                    source="delegate",
+                    turn_id=self._turn_id,
+                )
+                return
+            if event_type.endswith("_resolved") and interaction_id:
+                with self._lock:
+                    pending_approval = self._pending_approval
+                    pending_clarify = self._pending_clarify
+                    if pending_approval and pending_approval.remote_interaction_id == interaction_id:
+                        self._pending_approval = None
+                    if pending_clarify and pending_clarify.remote_interaction_id == interaction_id:
+                        self._pending_clarify = None
+                if pending_approval and pending_approval.remote_interaction_id == interaction_id:
+                    self._send_event("approval.resolved", {"approval_id": pending_approval.approval_id, "remote_interaction_id": interaction_id, "choice": payload.get("resolved_value")}, source="delegate", turn_id=self._turn_id)
+                if pending_clarify and pending_clarify.remote_interaction_id == interaction_id:
+                    self._send_event("clarify.resolved", {"clarify_id": pending_clarify.clarify_id, "remote_interaction_id": interaction_id, "answer": payload.get("resolved_value")}, source="delegate", turn_id=self._turn_id)
+                if pending_approval or pending_clarify:
+                    self._set_run_state("running", source="delegate")
+                return
 
         if event_type == "status":
             normalized = str(content or "").strip().lower()
@@ -880,12 +1048,19 @@ class ChatSessionActor:
                 "command": self._pending_approval.command,
                 "description": self._pending_approval.description,
                 "choices": list(self._pending_approval.choices),
+                "allow_session": self._pending_approval.allow_session,
+                "allow_permanent": self._pending_approval.allow_permanent,
             },
             source=self._foreground_source,
             turn_id=self._turn_id,
         )
 
-    def _clarify_callback_sync(self, question: str, choices: list[str] | None) -> str:
+    def _clarify_callback_sync(
+        self,
+        question: str,
+        choices: list[str] | None,
+        multi_select: bool = False,
+    ) -> str:
         normalized_question = str(question or "").strip()
         normalized_choices = [str(choice).strip() for choice in (choices or []) if str(choice).strip()]
         pending = ClarifyRequestState(
@@ -893,6 +1068,7 @@ class ChatSessionActor:
             question=normalized_question,
             choices=normalized_choices or None,
             awaiting_text=not bool(normalized_choices),
+            multi_select=bool(multi_select),
         )
         with self._lock:
             self._pending_clarify = pending

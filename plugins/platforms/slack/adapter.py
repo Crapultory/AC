@@ -400,6 +400,14 @@ class _SlackDelegateOutputAdapter:
         self._thread_ts = thread_ts
         self._user_id = user_id
         self._chat_type = chat_type
+        self._a2a_session = None
+
+    def bind_a2a_interaction_session(self, session) -> None:
+        self._a2a_session = session
+
+    def unbind_a2a_interaction_session(self, session) -> None:
+        if self._a2a_session is session:
+            self._a2a_session = None
 
     def emit(self, source, event_type, content, session_id=None) -> None:
         self._adapter._schedule_delegate_output(
@@ -428,8 +436,39 @@ class _SlackDelegateOutputAdapter:
         return f"`tool` {tool_name}"
 
     async def _emit_async(self, source: str, event_type: str, content: str, *, session_id=None) -> None:
-        del session_id
         metadata = {"thread_id": self._thread_ts} if self._thread_ts else None
+        if source == "delegate" and event_type in {
+            "approval_request",
+            "clarify_request",
+            "approval_resolved",
+            "clarify_resolved",
+        }:
+            try:
+                payload = json.loads(content)
+            except (TypeError, ValueError):
+                payload = {}
+            responder = getattr(self._a2a_session, "schedule_interaction_response", None)
+            if event_type == "approval_request" and payload:
+                await self._adapter.send_delegate_exec_approval(
+                    chat_id=self._channel_id,
+                    payload=payload,
+                    responder=responder if callable(responder) else None,
+                    metadata=metadata,
+                    user_id=self._user_id,
+                )
+            elif event_type == "clarify_request" and payload:
+                await self._adapter.send_delegate_clarify(
+                    chat_id=self._channel_id,
+                    payload=payload,
+                    responder=responder if callable(responder) else None,
+                    metadata=metadata,
+                    user_id=self._user_id,
+                )
+            elif event_type.endswith("_resolved") and payload:
+                await self._adapter.resolve_delegate_interaction(payload)
+            return
+
+        del session_id
         if source == "delegate" and event_type == "ai_delta":
             if content:
                 await self._adapter.handle_delegate_ai_delta(
@@ -1139,6 +1178,11 @@ class SlackAdapter(BasePlatformAdapter):
         self._clarify_resolved: Dict[Any, bool] = {}
         self._CLARIFY_RESOLVED_MAX = 1000
         self._clarify_choices: Dict[str, List[str]] = {}
+        # A2A delegate interaction state is intentionally separate from the
+        # local gateway approval/clarify maps.  Delegate buttons resolve a
+        # remote task through the A2A response bridge, never the local queue.
+        self._delegate_interactions: Dict[str, Dict[str, Any]] = {}
+        self._DELEGATE_INTERACTIONS_MAX = 1000
         # Track timestamps of messages sent by the bot so we can respond
         # to thread replies even without an explicit @mention.
         self._bot_message_ts: set[str] = set()
@@ -1747,6 +1791,46 @@ class SlackAdapter(BasePlatformAdapter):
             return True
         self._unregister_delegate_route(route)
         return False
+
+    async def _maybe_route_delegate_interaction_message(
+        self,
+        *,
+        text: str,
+        channel_id: str,
+        thread_ts: Optional[str],
+        user_id: Optional[str],
+        chat_type: Optional[str],
+    ) -> bool:
+        """Route an Other/open-ended reply to its remote A2A interaction."""
+        del chat_type
+        candidate = None
+        for interaction in self._delegate_interactions.values():
+            if not interaction.get("awaiting_text") or interaction.get("resolved"):
+                continue
+            if interaction.get("channel_id") != channel_id:
+                continue
+            if (interaction.get("thread_ts") or None) != (thread_ts or None):
+                continue
+            owner = str(interaction.get("user_id") or "")
+            if owner and owner != str(user_id or ""):
+                continue
+            candidate = interaction
+            break
+        if candidate is None:
+            return False
+        responder = candidate.get("responder")
+        interaction_id = str(candidate.get("interaction_id") or "")
+        if not interaction_id or not callable(responder):
+            return False
+        if not responder(interaction_id, "clarify", str(text or "").strip()):
+            return False
+        candidate["resolved"] = True
+        candidate["awaiting_text"] = False
+        await self._update_delegate_interaction_message(
+            candidate,
+            f"✅ Clarification sent by {user_id or 'user'}",
+        )
+        return True
 
     def _start_socket_mode_handler(self) -> None:
         """Start the Slack Socket Mode background task."""
@@ -2682,6 +2766,7 @@ class SlackAdapter(BasePlatformAdapter):
                 _re.compile(r"^hermes_clarify_choice_\d+$")
             )(self._handle_clarify_action)
             self._app.action("hermes_clarify_other")(self._handle_clarify_action)
+            self._app.action("hermes_clarify_submit")(self._handle_clarify_action)
 
             # Register plugin-provided Block Kit action handlers.
             #
@@ -6824,6 +6909,15 @@ class SlackAdapter(BasePlatformAdapter):
             # text here or the foreground session loses it entirely.
             delegate_routed_text = f"{channel_context}{delegate_routed_text}"
 
+        if await self._maybe_route_delegate_interaction_message(
+            text=text,
+            channel_id=channel_id,
+            thread_ts=thread_ts,
+            user_id=user_id,
+            chat_type=source.chat_type,
+        ):
+            return
+
         if await self._maybe_route_delegate_foreground_message(
             text=delegate_routed_text,
             channel_id=channel_id,
@@ -6961,6 +7055,173 @@ class SlackAdapter(BasePlatformAdapter):
         await self.handle_message(msg_event)
 
     # ----- Approval button support (Block Kit) -----
+
+    async def _update_delegate_interaction_message(
+        self, state: Dict[str, Any], decision_text: str
+    ) -> None:
+        message_ts = str(state.get("message_ts") or "")
+        channel_id = str(state.get("channel_id") or "")
+        if not message_ts or not channel_id:
+            return
+        original_text = str(state.get("question") or state.get("command") or "Delegate interaction")
+        blocks = [
+            {"type": "section", "text": {"type": "mrkdwn", "text": original_text[:3000]}},
+            {"type": "context", "elements": [{"type": "mrkdwn", "text": decision_text}]},
+        ]
+        try:
+            await self._get_client(channel_id, team_id=state.get("team_id") or None).chat_update(
+                channel=channel_id,
+                ts=message_ts,
+                text=decision_text,
+                blocks=sanitize_blocks(blocks),
+            )
+        except Exception:
+            logger.warning("[Slack] Failed to update delegate interaction", exc_info=True)
+
+    async def send_delegate_exec_approval(
+        self,
+        *,
+        chat_id: str,
+        payload: Dict[str, Any],
+        responder,
+        metadata: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+    ) -> SendResult:
+        """Render an A2A approval with values routed to the remote task."""
+        interaction_id = str(payload.get("interaction_id") or "")
+        if not interaction_id:
+            return SendResult(success=False, error="Missing A2A interaction id")
+        if not self._app:
+            return SendResult(success=False, error="Not connected")
+        chat_id = await self._ensure_dm_conversation(
+            chat_id, team_id=self._metadata_team_id(metadata)
+        )
+        try:
+            thread_ts = self._resolve_thread_ts(None, metadata)
+            command = str(payload.get("command") or "")
+            description = str(payload.get("description") or "dangerous command")
+            command_preview = command[:2400] + ("..." if len(command) > 2400 else "")
+            prefix = f"a2a_delegate|{interaction_id}|"
+            actions = [
+                {"type": "button", "text": {"type": "plain_text", "text": "Allow Once"}, "style": "primary", "action_id": "hermes_approve_once", "value": prefix + "once"},
+                {"type": "button", "text": {"type": "plain_text", "text": "Deny"}, "style": "danger", "action_id": "hermes_deny", "value": prefix + "deny"},
+            ]
+            if payload.get("allow_session", True):
+                actions.insert(1, {"type": "button", "text": {"type": "plain_text", "text": "Allow Session"}, "action_id": "hermes_approve_session", "value": prefix + "session"})
+            if payload.get("allow_permanent", True):
+                actions.insert(-1, {"type": "button", "text": {"type": "plain_text", "text": "Always Allow"}, "action_id": "hermes_approve_always", "value": prefix + "always"})
+            blocks = [
+                {"type": "section", "text": {"type": "mrkdwn", "text": f"⚠️ *Delegate command approval required*\n```{command_preview}```\nReason: {description[:500]}"}},
+                {"type": "actions", "elements": actions},
+            ]
+            kwargs: Dict[str, Any] = {
+                "channel": chat_id,
+                "text": f"⚠️ Delegate approval required: {command_preview[:100]}",
+                "blocks": sanitize_blocks(blocks),
+            }
+            if thread_ts:
+                kwargs["thread_ts"] = thread_ts
+            result = await self._get_client(chat_id, team_id=self._metadata_team_id(metadata)).chat_postMessage(**kwargs)
+            message_ts = result.get("ts", "")
+            self._delegate_interactions[interaction_id] = {
+                "kind": "approval",
+                "interaction_id": interaction_id,
+                "responder": responder,
+                "channel_id": chat_id,
+                "thread_ts": thread_ts,
+                "user_id": user_id,
+                "team_id": self._metadata_team_id(metadata),
+                "message_ts": message_ts,
+                "command": command_preview,
+                "resolved": False,
+            }
+            self._trim_oldest_dict_entries(self._delegate_interactions, self._DELEGATE_INTERACTIONS_MAX)
+            return SendResult(success=True, message_id=message_ts, raw_response=result)
+        except Exception as exc:
+            logger.error("[Slack] send_delegate_exec_approval failed: %s", exc, exc_info=True)
+            return SendResult(success=False, error=str(exc))
+
+    async def send_delegate_clarify(
+        self,
+        *,
+        chat_id: str,
+        payload: Dict[str, Any],
+        responder,
+        metadata: Optional[Dict[str, Any]] = None,
+        user_id: Optional[str] = None,
+    ) -> SendResult:
+        """Render a remote clarify request, including multi-select controls."""
+        interaction_id = str(payload.get("interaction_id") or "")
+        if not interaction_id:
+            return SendResult(success=False, error="Missing A2A interaction id")
+        if not self._app:
+            return SendResult(success=False, error="Not connected")
+        chat_id = await self._ensure_dm_conversation(chat_id, team_id=self._metadata_team_id(metadata))
+        try:
+            thread_ts = self._resolve_thread_ts(None, metadata)
+            question = str(payload.get("question") or "Clarification required")
+            choices = [str(item) for item in (payload.get("choices") or []) if str(item).strip()]
+            multi_select = bool(payload.get("multi_select"))
+            state = {
+                "kind": "clarify",
+                "interaction_id": interaction_id,
+                "responder": responder,
+                "channel_id": chat_id,
+                "thread_ts": thread_ts,
+                "user_id": user_id,
+                "team_id": self._metadata_team_id(metadata),
+                "question": question,
+                "choices": choices,
+                "multi_select": multi_select,
+                "selected": [],
+                "awaiting_text": not bool(choices),
+                "resolved": False,
+            }
+            if not choices:
+                result = await self._get_client(chat_id, team_id=self._metadata_team_id(metadata)).chat_postMessage(
+                    channel=chat_id,
+                    thread_ts=thread_ts,
+                    text=f"❓ Delegate clarification: {question}",
+                ) if thread_ts else await self._get_client(chat_id, team_id=self._metadata_team_id(metadata)).chat_postMessage(
+                    channel=chat_id,
+                    text=f"❓ Delegate clarification: {question}",
+                )
+            else:
+                prefix = f"a2a_delegate|{interaction_id}|"
+                elements = [
+                    {"type": "button", "text": {"type": "plain_text", "text": choice[:75]}, "action_id": f"hermes_clarify_choice_{idx}", "value": prefix + str(idx)}
+                    for idx, choice in enumerate(choices)
+                ]
+                elements.append({"type": "button", "text": {"type": "plain_text", "text": "✏️ Other…"}, "action_id": "hermes_clarify_other", "value": prefix + "other"})
+                if multi_select:
+                    elements.append({"type": "button", "text": {"type": "plain_text", "text": "Submit selection"}, "style": "primary", "action_id": "hermes_clarify_submit", "value": prefix + "submit"})
+                blocks = [{"type": "section", "text": {"type": "mrkdwn", "text": f"❓ {question[:2900]}"}}]
+                for start in range(0, len(elements), 5):
+                    blocks.append({"type": "actions", "elements": elements[start:start + 5]})
+                kwargs = {"channel": chat_id, "text": f"❓ Delegate clarification: {question[:100]}", "blocks": blocks}
+                if thread_ts:
+                    kwargs["thread_ts"] = thread_ts
+                result = await self._get_client(chat_id, team_id=self._metadata_team_id(metadata)).chat_postMessage(**kwargs)
+            state["message_ts"] = result.get("ts", "")
+            self._delegate_interactions[interaction_id] = state
+            self._trim_oldest_dict_entries(self._delegate_interactions, self._DELEGATE_INTERACTIONS_MAX)
+            return SendResult(success=True, message_id=state["message_ts"], raw_response=result)
+        except Exception as exc:
+            logger.error("[Slack] send_delegate_clarify failed: %s", exc, exc_info=True)
+            return SendResult(success=False, error=str(exc))
+
+    async def resolve_delegate_interaction(self, payload: Dict[str, Any]) -> None:
+        interaction_id = str(payload.get("interaction_id") or "")
+        state = self._delegate_interactions.get(interaction_id)
+        if state is None:
+            return
+        state["resolved"] = True
+        state["awaiting_text"] = False
+        value = payload.get("resolved_value")
+        await self._update_delegate_interaction_message(
+            state,
+            f"✅ Delegate interaction resolved: {str(value or 'completed')[:200]}",
+        )
 
     async def send_exec_approval(
         self,
@@ -7462,6 +7723,35 @@ class SlackAdapter(BasePlatformAdapter):
             message.get("ts", ""),
         )
 
+    async def _handle_delegate_approval_action(self, body, action) -> None:
+        value = str(action.get("value") or "")
+        _prefix, interaction_id, choice = value.split("|", 2)
+        state = self._delegate_interactions.get(interaction_id)
+        if state is None or state.get("resolved") or state.get("kind") != "approval":
+            return
+        channel_id = str((body.get("channel") or {}).get("id") or "")
+        msg_ts = str((body.get("message") or {}).get("ts") or "")
+        user_id = str((body.get("user") or {}).get("id") or "")
+        if channel_id != str(state.get("channel_id") or "") or msg_ts != str(state.get("message_ts") or ""):
+            logger.warning("[Slack] Delegate approval callback context mismatch")
+            return
+        if state.get("user_id") and str(state["user_id"]) != user_id:
+            logger.warning("[Slack] Delegate approval callback user mismatch")
+            return
+        if not self._is_interactive_user_authorized(
+            user_id,
+            channel_id=channel_id,
+            team_id=self._event_team_id({}, body),
+        ):
+            return
+        responder = state.get("responder")
+        if not callable(responder) or not responder(interaction_id, "approval", choice):
+            return
+        state["resolved"] = True
+        await self._update_delegate_interaction_message(
+            state, f"✅ Delegate approval response sent: {choice}"
+        )
+
     async def _handle_approval_action(self, ack, body, action) -> None:
         """Handle an approval button click from Block Kit."""
         await ack()
@@ -7469,6 +7759,9 @@ class SlackAdapter(BasePlatformAdapter):
         team_id = self._event_team_id({}, body)
         action_id = action.get("action_id", "")
         session_key = action.get("value", "")
+        if isinstance(session_key, str) and session_key.startswith("a2a_delegate|"):
+            await self._handle_delegate_approval_action(body, action)
+            return
         message = body.get("message", {})
         msg_ts = message.get("ts", "")
         channel_id = body.get("channel", {}).get("id", "")
@@ -7623,12 +7916,68 @@ class SlackAdapter(BasePlatformAdapter):
         except Exception as e:
             logger.warning("[Slack] Failed to update clarify message: %s", e)
 
+    async def _handle_delegate_clarify_action(self, body, action) -> None:
+        value = str(action.get("value") or "")
+        parts = value.split("|", 2)
+        if len(parts) != 3:
+            return
+        _prefix, interaction_id, token = parts
+        state = self._delegate_interactions.get(interaction_id)
+        if state is None or state.get("resolved") or state.get("kind") != "clarify":
+            return
+        channel_id = str((body.get("channel") or {}).get("id") or "")
+        msg_ts = str((body.get("message") or {}).get("ts") or "")
+        user_id = str((body.get("user") or {}).get("id") or "")
+        if channel_id != str(state.get("channel_id") or "") or msg_ts != str(state.get("message_ts") or ""):
+            return
+        if state.get("user_id") and str(state["user_id"]) != user_id:
+            return
+        if not self._is_interactive_user_authorized(user_id, channel_id=channel_id, team_id=self._event_team_id({}, body)):
+            return
+        if token == "other":
+            state["awaiting_text"] = True
+            await self._update_delegate_interaction_message(state, f"✏️ Awaiting typed answer from {user_id or 'user'}…")
+            return
+        if token == "submit":
+            selected = list(state.get("selected") or [])
+            if not selected:
+                await self._update_delegate_interaction_message(state, "Select at least one option before submitting.")
+                return
+            value_to_send: Any = selected
+        else:
+            try:
+                index = int(token)
+                choice = state.get("choices", [])[index]
+            except (ValueError, IndexError, TypeError):
+                return
+            if state.get("multi_select"):
+                selected = list(state.get("selected") or [])
+                if choice in selected:
+                    selected.remove(choice)
+                else:
+                    selected.append(choice)
+                state["selected"] = selected
+                await self._update_delegate_interaction_message(
+                    state, "Selected: " + (", ".join(selected) if selected else "none") + "."
+                )
+                return
+            value_to_send = choice
+        responder = state.get("responder")
+        if not callable(responder) or not responder(interaction_id, "clarify", value_to_send):
+            return
+        state["resolved"] = True
+        state["awaiting_text"] = False
+        await self._update_delegate_interaction_message(state, "✅ Delegate clarification response sent.")
+
     async def _handle_clarify_action(self, ack, body, action) -> None:
         """Handle a clarify button click (a choice or "Other") from Block Kit."""
         await ack()
 
         action_id = action.get("action_id", "")
         value = action.get("value", "")
+        if isinstance(value, str) and value.startswith("a2a_delegate|"):
+            await self._handle_delegate_clarify_action(body, action)
+            return
         message = body.get("message", {})
         msg_ts = message.get("ts", "")
         channel_id = body.get("channel", {}).get("id", "")

@@ -1,8 +1,8 @@
 # Aegis A2A Work Agent 服务接入参考
 
-本文面向需要接入 Aegis 的远程 Work Agent 开发者，说明 Aegis 当前使用的 A2A 通信方式、Agent Card 能力声明、认证以及两种服务端实现路径。
+本文面向需要接入 Aegis 的远程 Work Agent 开发者，说明 Aegis 当前使用的 A2A 通信方式、Agent Card 能力声明、认证以及两种服务端实现路径。Workagent 的 Hermes 审批/澄清交互扩展另见 [`aegis/docs/a2a-delegate-interaction.md`](../../docs/a2a-delegate-interaction.md)；服务端协议见 [`workagent/backend/docs/a2a-interaction-extension.md`](../../../workagent/backend/docs/a2a-interaction-extension.md)。
 
-适用日期：2026-07-27。
+适用日期：2026-08-21。
 
 ## 1. 兼容性基线
 
@@ -351,3 +351,5 @@ add_a2a_routes_to_fastapi(
 - Card 读取失败会使该 Agent 保留为不可用状态，并带错误信息；不会回退成匿名/无 Card 调用。
 - Aegis 从 Card 中读取能力用于上下文和界面展示；实际准入仍受 Aegis Agent Policy 与远端服务自己的授权控制。
 - 当前 Aegis 只直接配置静态 HTTP Header；OAuth、OIDC、mTLS 等高级认证应由入口网关或后续认证提供器集成。
+- 当远端 Card 声明 `https://hermes.dev/extensions/interaction/v1` 时，Aegis Web UI 可显示 delegate 审批/澄清并通过已认证的 Aegis WebSocket 响应；pending 状态会区分 `main` 与 `delegate` 来源。
+- 当前交互扩展的服务端实现归属 `workagent/`；本次更新不改变 `aisoc/` 下的 A2A executor/server，未声明扩展的服务仍保持普通 A2A 行为和原有 fail-closed 语义。

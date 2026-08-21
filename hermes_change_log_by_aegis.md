@@ -1,7 +1,7 @@
 # Hermes Change Intent Summary by Aegis
 
 Final summary for recording change intent when a task modifies non-test code
-outside `aisoc/` and `aegis/`.
+outside `aisoc/`、`workagent/` and `aegis/`.
 
 Maintain this file as the current per-file summary of change intent. Do not
 backfill prior historical repository changes, and do not add task-completion log
@@ -55,6 +55,9 @@ Intent: Keep a single remote A2A session alive across foreground Slack input, re
 
 Feature: Remote A2A source identity envelope.
 Intent: Prefix every remote A2A turn with a compact source envelope rebuilt from the parent Agent's platform, user ID, and display name, place optional context only on the initial turn, and keep this remote identity contract separate from the gateway's Slack channel envelope so channel data is never assumed to be forwarded implicitly.
+
+Feature: Hermes A2A interaction client bridge.
+Intent: Read the optional `hermes.interaction.v1` Agent Card extension, parse approval/clarify metadata from both streaming and polling task updates, de-duplicate interaction events, and schedule authenticated responses with task/context/interaction IDs on the session owner loop. Preserve fail-closed behavior when the remote service does not declare or cannot serve the response channel.
 
 ## File: `toolsets.py`
 
@@ -114,6 +117,9 @@ Intent: Render multi-choice gateway clarify prompts as Slack buttons, resolve au
 Feature: Slack delegate delta edit throttling.
 Intent: Limit edits to the same Slack delegate output message to at most once every three seconds, while preserving immediate first sends and forced flushes at segment boundaries to reduce queued Slack updates.
 
+Feature: Slack delegate approval and clarification interactions.
+Intent: Keep remote A2A pending state separate from local gateway approval/clarify state, render delegate Block Kit controls including Other and multi-select, validate channel/thread/user and duplicate-click boundaries, and route button/text responses through the authenticated remote interaction responder rather than a local resolver.
+
 ## File: `plugins/platforms/feishu/adapter.py`
 
 Feature: Feishu delegate foreground I/O.
@@ -130,6 +136,9 @@ Intent: Preserve Channel signaling with `extra_ua_tags=["channel"]` on current l
 
 Feature: Feishu source display-name resolution.
 Intent: Resolve sender names through Contact v3 using event `open_id` before less reliable ID forms, cache a successful name across all event identity aliases, and keep the Feishu source-envelope `uname` key present with an empty value when lookup is unavailable.
+
+Feature: Feishu delegate approval and clarification cards.
+Intent: Render remote A2A approval/clarify interactions with interactive cards, preserve chat/thread/authorization and duplicate-click checks, route choices and Other text through the remote responder, and accept either tenant-scoped callback `operator.user_id` or app-scoped `operator.open_id` when matching the stored source identity so legitimate delegate clicks are not rejected.
 
 ## File: `gateway/run.py`
 

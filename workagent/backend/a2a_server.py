@@ -10,9 +10,9 @@ import time
 from _thread import interrupt_main as _interrupt_main
 
 from a2a.server.request_handlers import DefaultRequestHandler
+from a2a.server.request_handlers.response_helpers import agent_card_to_dict
 from a2a.server.routes import (
     add_a2a_routes_to_fastapi,
-    create_agent_card_routes,
     create_jsonrpc_routes,
 )
 from a2a.server.tasks import InMemoryTaskStore
@@ -33,9 +33,16 @@ from workagent.backend.auth import (
 )
 from workagent.backend.config import WorkagentSettings, is_loopback_host, load_workagent_settings
 from hermes_self_restart import request_self_restart
+from workagent.backend.a2a_service.interactions import (
+    INTERACTION_EXTENSION_URI,
+    INTERACTION_RESPONSE_SUFFIX,
+    InteractionError,
+    interaction_extension,
+)
 
 A2A_RPC_PATH = os.getenv("A2A_BASE_PATH", "/a2a")
 A2A_AGENT_CARD_PATH = f"{A2A_RPC_PATH}/.well-known/agent-card.json"
+A2A_INTERACTION_RESPONSE_PATH = f"{A2A_RPC_PATH}{INTERACTION_RESPONSE_SUFFIX}"
 A2A_PUBLIC_PATHS = frozenset(
     {
         "/health",
@@ -257,6 +264,12 @@ def build_agent_card(
     """Build an A2A AgentCard for this server."""
     if card_path:
         data = json.loads(Path(card_path).read_text(encoding="utf-8"))
+        # A2A SDK 1.x AgentCard is a protobuf and does not yet expose the
+        # optional Hermes extensions field.  The server adds the extension to
+        # the public JSON route below, so keep custom card files compatible by
+        # dropping only this transport-level field before protobuf parsing.
+        data.pop("extensions", None)
+        data.pop("supportedExtensions", None)
         return AgentCard(**data)
 
     rpc_url = f"http://{settings.host}:{settings.port}{A2A_RPC_PATH}"
@@ -412,20 +425,75 @@ def create_a2a_app(
         streaming=streaming,
     )
     task_store = InMemoryTaskStore()
+    a2a_executor = HermesA2AExecutor(
+        agent_factory=agent_factory,
+        enable_streaming=streaming,
+    )
+    app.state.a2a_executor = a2a_executor
     request_handler = DefaultRequestHandler(
-        agent_executor=HermesA2AExecutor(
-            agent_factory=agent_factory,
-            enable_streaming=streaming,
-        ),
+        agent_executor=a2a_executor,
         task_store=task_store,
         agent_card=agent_card,
     )
+
+    def _agent_card_payload() -> dict:
+        payload = agent_card_to_dict(agent_card)
+        extensions = payload.setdefault("extensions", [])
+        if not any(
+            isinstance(item, dict)
+            and item.get("uri") == INTERACTION_EXTENSION_URI
+            for item in extensions
+        ):
+            extensions.append(
+                interaction_extension(A2A_INTERACTION_RESPONSE_PATH)
+            )
+        return payload
+
+    @app.get("/.well-known/agent-card.json", include_in_schema=False)
+    async def root_agent_card() -> JSONResponse:
+        return JSONResponse(_agent_card_payload())
+
+    @app.get(A2A_AGENT_CARD_PATH, include_in_schema=False)
+    async def a2a_agent_card() -> JSONResponse:
+        return JSONResponse(_agent_card_payload())
+
+    @app.post(A2A_INTERACTION_RESPONSE_PATH, include_in_schema=False)
+    async def respond_to_interaction(request: Request) -> JSONResponse:
+        try:
+            payload = await request.json()
+        except Exception as exc:
+            raise HTTPException(status_code=422, detail="request body must be JSON") from exc
+        if not isinstance(payload, dict):
+            raise HTTPException(status_code=422, detail="request body must be an object")
+        try:
+            record = a2a_executor.interactions.resolve(payload)
+        except InteractionError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        try:
+            await a2a_executor.publish_interaction_resolved(record)
+        except Exception:
+            # The underlying wait has already been released.  Do not turn a
+            # successful user response into a retry that could look like a
+            # duplicate click; log-only is the safe failure mode here.
+            import logging
+
+            logging.getLogger(__name__).warning(
+                "Failed to publish resolved A2A interaction %s",
+                record.interaction_id,
+                exc_info=True,
+            )
+        return JSONResponse(
+            {
+                "ok": True,
+                "interaction_id": record.interaction_id,
+                "kind": record.kind,
+                "state": record.state,
+            }
+        )
+
     add_a2a_routes_to_fastapi(
         app,
-        agent_card_routes=[
-            *create_agent_card_routes(agent_card),
-            *create_agent_card_routes(agent_card, card_url=A2A_AGENT_CARD_PATH),
-        ],
+        agent_card_routes=[],
         jsonrpc_routes=create_jsonrpc_routes(request_handler, rpc_url=A2A_RPC_PATH),
     )
     return app

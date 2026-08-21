@@ -241,11 +241,17 @@ def build_chat_router(
                     continue
 
                 if event_type == "approval.respond":
-                    actor.handle_approval_response(str(payload.get("choice") or ""))
+                    actor.handle_approval_response(
+                        str(payload.get("choice") or ""),
+                        str(payload.get("approval_id") or "") or None,
+                    )
                     continue
 
                 if event_type == "clarify.respond":
-                    actor.handle_clarify_response(str(payload.get("answer") or ""))
+                    actor.handle_clarify_response(
+                        str(payload.get("answer") or ""),
+                        str(payload.get("clarify_id") or "") or None,
+                    )
                     continue
 
                 if event_type == "session.interrupt":

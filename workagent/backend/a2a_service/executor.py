@@ -31,8 +31,17 @@ from tools.user_env_runtime import (
     reset_current_user_env_identity,
 )
 from gateway.session_context import set_session_vars, clear_session_vars
+from tools.approval import (
+    register_gateway_notify,
+    reset_current_session_key,
+    resolve_gateway_approval,
+    set_current_session_key,
+    unregister_gateway_notify,
+)
+from tools import clarify_gateway
 
 from .converter import a2a_to_text, history_to_a2a, text_to_message
+from .interactions import InteractionRecord, InteractionRegistry
 
 
 AgentFactory = Callable[[str], object]
@@ -79,7 +88,9 @@ class HermesA2AExecutor(AgentExecutor):
         self._agents: dict[str, object] = {}
         self._task_agent_keys: dict[str, str] = {}
         self._cancel_events: dict[str, asyncio.Event] = {}
+        self._task_event_queues: dict[str, EventQueue] = {}
         self._lock = asyncio.Lock()
+        self.interactions = InteractionRegistry()
 
     async def execute(self, context: RequestContext, event_queue: EventQueue) -> None:
         if context.message is None:
@@ -95,6 +106,7 @@ class HermesA2AExecutor(AgentExecutor):
         cancel_event = asyncio.Event()
         async with self._lock:
             self._cancel_events[task.id] = cancel_event
+            self._task_event_queues[task.id] = event_queue
 
         user_input = a2a_to_text(context.message)
 
@@ -111,6 +123,7 @@ class HermesA2AExecutor(AgentExecutor):
         _src_platform = _source_meta.get("platform", "")
         _src_uid      = _source_meta.get("uid", "")
         _src_uname    = _source_meta.get("uname", "")
+        agent_session_id = self._resolve_agent_session_id(task.context_id)
 
         # ── 路径 A：直接绑定 userenv ContextVar（userenv tool 的优先读取路径）──
         _identity_token = None
@@ -119,10 +132,16 @@ class HermesA2AExecutor(AgentExecutor):
 
         # ── 路径 B：绑定 HERMES_SESSION_* ContextVar（SOUL.md / session context）
         _session_tokens = set_session_vars(
-            platform=_src_platform,
+            # Approval treats any non-empty session platform as a gateway
+            # context.  Direct A2A callers may omit the optional source
+            # envelope, so use a transport-only fallback without changing
+            # the originating platform/userenv partition when one exists.
+            platform=_src_platform or "a2a",
             chat_id=_source_meta.get("channel", ""),
             user_id=_src_uid,
             user_name=_src_uname,
+            session_key=agent_session_id,
+            session_id=agent_session_id,
         )
 
         await updater.start_work()
@@ -150,7 +169,9 @@ class HermesA2AExecutor(AgentExecutor):
                 )
             return
 
-        agent_session_id = self._resolve_agent_session_id(task.context_id)
+        # The context id is the stable Hermes approval/clarify session key.
+        # Keep it separate from the transient task id so a follow-up A2A turn
+        # can reuse session approvals and the same response route.
         agent = await self._get_agent(agent_session_id)
         async with self._lock:
             self._task_agent_keys[task.id] = agent_session_id
@@ -233,6 +254,90 @@ class HermesA2AExecutor(AgentExecutor):
         tool_start_callback = None
         tool_complete_callback = None
         loop = asyncio.get_running_loop()
+
+        def _schedule_interaction(metadata: dict[str, object]) -> None:
+            async def _publish() -> None:
+                try:
+                    await updater.update_status(
+                        TaskState.TASK_STATE_WORKING,
+                        updater.new_agent_message([], metadata={"hermes": metadata}),
+                    )
+                except Exception:
+                    logger.warning(
+                        "Failed to publish A2A interaction %s",
+                        metadata.get("interaction_id"),
+                        exc_info=True,
+                    )
+
+            loop.call_soon_threadsafe(lambda: asyncio.create_task(_publish()))
+
+        def _approval_notify(approval_data: dict) -> None:
+            interaction_id = f"approval_{uuid.uuid4().hex}"
+            metadata = {
+                "kind": "approval_request",
+                "interaction_id": interaction_id,
+                "task_id": task.id,
+                "context_id": task.context_id,
+                "command": approval_data.get("command", ""),
+                "description": approval_data.get("description", ""),
+                "choices": ["once", "session", "always", "deny"],
+                "allow_session": bool(approval_data.get("allow_session", True)),
+                "allow_permanent": bool(approval_data.get("allow_permanent", True)),
+            }
+            self.interactions.register(
+                interaction_id=interaction_id,
+                task_id=task.id,
+                context_id=task.context_id,
+                session_key=agent_session_id,
+                kind="approval",
+                payload=metadata,
+                resolver=lambda choice: resolve_gateway_approval(agent_session_id, choice),
+            )
+            _schedule_interaction(metadata)
+
+        def _clarify_callback(
+            question: str,
+            choices: list[str] | None = None,
+            multi_select: bool = False,
+        ) -> str:
+            interaction_id = f"clarify_{uuid.uuid4().hex}"
+            normalized_choices = [
+                str(choice).strip() for choice in (choices or []) if str(choice).strip()
+            ]
+            metadata = {
+                "kind": "clarify_request",
+                "interaction_id": interaction_id,
+                "task_id": task.id,
+                "context_id": task.context_id,
+                "question": str(question or ""),
+                "choices": normalized_choices or None,
+                "multi_select": bool(multi_select),
+            }
+            clarify_gateway.register(
+                interaction_id,
+                agent_session_id,
+                str(question or ""),
+                normalized_choices or None,
+                multi_select=bool(multi_select),
+            )
+            self.interactions.register(
+                interaction_id=interaction_id,
+                task_id=task.id,
+                context_id=task.context_id,
+                session_key=agent_session_id,
+                kind="clarify",
+                payload=metadata,
+                resolver=lambda answer: clarify_gateway.resolve_gateway_clarify(
+                    interaction_id, answer
+                ),
+            )
+            _schedule_interaction(metadata)
+            return_value = clarify_gateway.wait_for_response(
+                interaction_id, clarify_gateway.get_clarify_timeout()
+            )
+            return str(return_value or "")
+
+        register_gateway_notify(agent_session_id, _approval_notify)
         if self._enable_streaming:
             delta_queue = asyncio.Queue()
             stream_task = asyncio.create_task(
@@ -252,6 +357,8 @@ class HermesA2AExecutor(AgentExecutor):
                 stream_callback,
                 tool_start_callback,
                 tool_complete_callback,
+                agent_session_id,
+                _clarify_callback,
             )
         except Exception as exc:
             await self._finish_stream_consumer(loop, delta_queue, stream_task)
@@ -262,10 +369,14 @@ class HermesA2AExecutor(AgentExecutor):
         finally:
             if _identity_token is not None:
                 reset_current_user_env_identity(_identity_token)
+            self.interactions.cancel_session(agent_session_id, "executor cleanup")
+            unregister_gateway_notify(agent_session_id)
+            clarify_gateway.clear_session(agent_session_id)
             clear_session_vars(_session_tokens)
             async with self._lock:
                 self._cancel_events.pop(task.id, None)
                 self._task_agent_keys.pop(task.id, None)
+                self._task_event_queues.pop(task.id, None)
 
         streamed_text = await self._finish_stream_consumer(loop, delta_queue, stream_task)
         response_text = str(result.get("final_response") or "")
@@ -291,9 +402,28 @@ class HermesA2AExecutor(AgentExecutor):
             agent = self._agents.get(agent_key)
         if agent is not None:
             setattr(agent, "_interrupt_requested", True)
+        if agent_key:
+            self.interactions.cancel_session(agent_key, "task cancelled")
+            unregister_gateway_notify(agent_key)
+            clarify_gateway.clear_session(agent_key)
         updater = TaskUpdater(event_queue, task.id, task.context_id)
         await updater.cancel(
             updater.new_agent_message([text_to_message("Canceled by user.").parts[0]])
+        )
+
+    async def publish_interaction_resolved(self, record: InteractionRecord) -> None:
+        """Publish a resolved interaction on the still-working A2A task."""
+        async with self._lock:
+            event_queue = self._task_event_queues.get(record.task_id)
+        if event_queue is None:
+            return
+        payload = dict(record.payload)
+        payload["kind"] = f"{record.kind}_resolved"
+        payload["resolved_value"] = record.resolved_value
+        updater = TaskUpdater(event_queue, record.task_id, record.context_id)
+        await updater.update_status(
+            TaskState.TASK_STATE_WORKING,
+            updater.new_agent_message([], metadata={"hermes": payload}),
         )
 
     async def export_history(
@@ -457,6 +587,8 @@ class HermesA2AExecutor(AgentExecutor):
         stream_callback,
         tool_start_callback=None,
         tool_complete_callback=None,
+        session_key: str | None = None,
+        clarify_callback=None,
     ) -> dict[str, object]:
         # ── 临时注入 agent 身份属性（tool_executor.py L876/L906 从 agent 属性读 userenv 分区键）
         src = getattr(agent, "_pending_source_meta", {})
@@ -490,11 +622,15 @@ class HermesA2AExecutor(AgentExecutor):
             kwargs["stream_callback"] = stream_callback
         old_tool_start = getattr(agent, "tool_start_callback", self._CALLBACK_MISSING)
         old_tool_complete = getattr(agent, "tool_complete_callback", self._CALLBACK_MISSING)
+        old_clarify_callback = getattr(agent, "clarify_callback", self._CALLBACK_MISSING)
+        session_token = set_current_session_key(session_key or "") if session_key else None
         try:
             if tool_start_callback is not None:
                 setattr(agent, "tool_start_callback", tool_start_callback)
             if tool_complete_callback is not None:
                 setattr(agent, "tool_complete_callback", tool_complete_callback)
+            if clarify_callback is not None:
+                setattr(agent, "clarify_callback", clarify_callback)
             return agent.run_conversation(
                 user_input,
                 None,
@@ -541,3 +677,12 @@ class HermesA2AExecutor(AgentExecutor):
                     pass
             else:
                 setattr(agent, "tool_complete_callback", old_tool_complete)
+            if old_clarify_callback is self._CALLBACK_MISSING:
+                try:
+                    delattr(agent, "clarify_callback")
+                except Exception:
+                    pass
+            else:
+                setattr(agent, "clarify_callback", old_clarify_callback)
+            if session_token is not None:
+                reset_current_session_key(session_token)

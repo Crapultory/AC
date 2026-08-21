@@ -16,6 +16,11 @@ class ApprovalRequestState:
     command: str
     description: str
     choices: list[str] = field(default_factory=lambda: ["once", "session", "always", "deny"])
+    source: str = "main"
+    remote_interaction_id: str | None = None
+    responder: Any = None
+    allow_session: bool = True
+    allow_permanent: bool = True
 
 
 @dataclass(slots=True)
@@ -24,6 +29,10 @@ class ClarifyRequestState:
     question: str
     choices: list[str] | None = None
     awaiting_text: bool = False
+    multi_select: bool = False
+    source: str = "main"
+    remote_interaction_id: str | None = None
+    responder: Any = None
     answer: str | None = None
     event: threading.Event = field(default_factory=threading.Event)
 

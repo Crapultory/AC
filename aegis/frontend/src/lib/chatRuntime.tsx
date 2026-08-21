@@ -40,6 +40,11 @@ export type ChatSocketEvent = {
   description?: string;
   question?: string;
   choices?: string[];
+  awaiting_text?: boolean;
+  multi_select?: boolean;
+  remote_interaction_id?: string | null;
+  allow_session?: boolean;
+  allow_permanent?: boolean;
   code?: string;
   message?: string;
 };
@@ -65,8 +70,8 @@ type PendingBoundAction =
       attachments: ChatAttachment[];
       args?: ChatMessageArgs;
     }
-  | { type: 'approval.respond'; choice: 'once' | 'session' | 'always' | 'deny' }
-  | { type: 'clarify.respond'; answer: string }
+  | { type: 'approval.respond'; choice: 'once' | 'session' | 'always' | 'deny'; approvalId?: string }
+  | { type: 'clarify.respond'; answer: string; clarifyId?: string }
   | { type: 'session.resume' };
 
 type SocketEntry = {
@@ -514,6 +519,7 @@ export function AegisChatProvider({
           type: 'approval.respond',
           session_id: sessionId,
           choice: action.choice,
+          approval_id: action.approvalId,
         }),
       );
       return;
@@ -524,6 +530,7 @@ export function AegisChatProvider({
           type: 'clarify.respond',
           session_id: sessionId,
           answer: action.answer,
+          clarify_id: action.clarifyId,
         }),
       );
       return;
@@ -743,6 +750,10 @@ export function AegisChatProvider({
             command: payload.command || '',
             description: payload.description || '',
             choices: payload.choices || ['once', 'session', 'always', 'deny'],
+            source: payload.source === 'delegate' ? 'delegate' : 'main',
+            remoteInteractionId: payload.remote_interaction_id || null,
+            allowSession: payload.allow_session !== false,
+            allowPermanent: payload.allow_permanent !== false,
           };
           nextConversation.lastKnownRunState = 'waiting_for_approval';
           return nextConversation;
@@ -759,7 +770,10 @@ export function AegisChatProvider({
             clarifyId: payload.clarify_id || '',
             question: payload.question || '',
             choices: nextChoices,
-            awaitingText: nextChoices.length === 0,
+            awaitingText: Boolean(payload.awaiting_text) || nextChoices.length === 0,
+            multiSelect: Boolean(payload.multi_select),
+            source: payload.source === 'delegate' ? 'delegate' : 'main',
+            remoteInteractionId: payload.remote_interaction_id || null,
           };
           nextConversation.lastKnownRunState = 'waiting_for_clarify';
           return nextConversation;
@@ -996,6 +1010,7 @@ export function AegisChatProvider({
         ? {
             type: 'clarify.respond' as const,
             answer: trimmedText,
+            clarifyId: targetConversation.pendingClarify?.clarifyId,
           }
         : {
             type: 'message.send' as const,
@@ -1017,6 +1032,7 @@ export function AegisChatProvider({
     connectSocketForConversation(conversation, {
       type: 'approval.respond',
       choice,
+      approvalId: conversation.pendingApproval?.approvalId,
     });
   }
 
@@ -1034,6 +1050,7 @@ export function AegisChatProvider({
     connectSocketForConversation(conversation, {
       type: 'clarify.respond',
       answer,
+      clarifyId: conversation.pendingClarify?.clarifyId,
     });
   }
 
