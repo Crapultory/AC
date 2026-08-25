@@ -736,7 +736,7 @@ export function AisocChatProvider({
     setSessionsLoading(true);
     try {
       const response = await fetchJSON<SessionListResponse>(
-        `/api/sessions?limit=${SESSION_LIST_LIMIT}&source=${encodeURIComponent(SESSION_SOURCE)}`,
+        `/api/sessions?limit=${SESSION_LIST_LIMIT}&source=${encodeURIComponent(SESSION_SOURCE)}&mine=true`,
       );
       const items = Array.isArray(response.sessions) ? response.sessions : [];
       updateConversations((current) => {

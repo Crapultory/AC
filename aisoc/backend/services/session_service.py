@@ -71,13 +71,29 @@ def list_sessions(
     source: str | None = None,
     *,
     user_id: str,
+    strict_owner: bool = False,
 ) -> dict[str, Any]:
+    """List sessions visible to ``user_id``.
+
+    By default, ownerless sessions (legacy rows, tui/discord/cron/etc.) are
+    included alongside the user's own — this is the browse/search page's
+    behavior. Pass ``strict_owner=True`` for a private listing (e.g. the
+    per-user chat sidebar) that must show only sessions this account
+    actually owns, not history nobody has claimed.
+    """
     db = SessionDB()
     try:
+        include_ownerless = not strict_owner
         sessions = db.list_sessions_rich(
-            source=source, limit=limit, offset=offset, user_id=user_id
+            source=source,
+            limit=limit,
+            offset=offset,
+            user_id=user_id,
+            include_ownerless=include_ownerless,
         )
-        total = db.session_count(source=source, user_id=user_id)
+        total = db.session_count(
+            source=source, user_id=user_id, include_ownerless=include_ownerless
+        )
         now = time.time()
         for item in sessions:
             item["is_active"] = (

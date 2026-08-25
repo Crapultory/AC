@@ -18,13 +18,20 @@ def build_sessions_router(settings: AisocSettings, user_service: UserService) ->
         return user
 
     @router.get("")
-    async def get_sessions(request: Request, limit: int = 20, offset: int = 0, source: str = ""):
+    async def get_sessions(
+        request: Request,
+        limit: int = 20,
+        offset: int = 0,
+        source: str = "",
+        mine: bool = False,
+    ):
         user = _current_user(request)
         return session_service.list_sessions(
             limit=limit,
             offset=offset,
             source=source or None,
             user_id=user.uid,
+            strict_owner=mine,
         )
 
     @router.get("/search")

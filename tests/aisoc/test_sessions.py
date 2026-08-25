@@ -118,6 +118,61 @@ def test_ownerless_session_cannot_be_deleted_by_anyone(monkeypatch) -> None:
     assert session_service.delete_session("sess-discord", user_id="some-user") is False
 
 
+def test_list_sessions_default_includes_ownerless(monkeypatch) -> None:
+    """Browse/search page behavior: default listing still surfaces ownerless
+    (legacy/cross-platform) sessions alongside the user's own."""
+    from aisoc.backend.services import session_service
+
+    calls = {}
+
+    class FakeSessionDB:
+        def list_sessions_rich(self, **kwargs) -> list[dict]:
+            calls["list_kwargs"] = kwargs
+            return []
+
+        def session_count(self, **kwargs) -> int:
+            calls["count_kwargs"] = kwargs
+            return 0
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(session_service, "SessionDB", FakeSessionDB)
+
+    session_service.list_sessions(user_id="some-user")
+
+    assert calls["list_kwargs"]["include_ownerless"] is True
+    assert calls["count_kwargs"]["include_ownerless"] is True
+
+
+def test_list_sessions_strict_owner_excludes_ownerless(monkeypatch) -> None:
+    """The private per-user chat sidebar must ask for strict_owner=True so
+    brand-new users don't inherit every unclaimed legacy/cross-platform
+    session in the database."""
+    from aisoc.backend.services import session_service
+
+    calls = {}
+
+    class FakeSessionDB:
+        def list_sessions_rich(self, **kwargs) -> list[dict]:
+            calls["list_kwargs"] = kwargs
+            return []
+
+        def session_count(self, **kwargs) -> int:
+            calls["count_kwargs"] = kwargs
+            return 0
+
+        def close(self) -> None:
+            pass
+
+    monkeypatch.setattr(session_service, "SessionDB", FakeSessionDB)
+
+    session_service.list_sessions(user_id="some-user", strict_owner=True)
+
+    assert calls["list_kwargs"]["include_ownerless"] is False
+    assert calls["count_kwargs"]["include_ownerless"] is False
+
+
 def test_latest_descendant_returns_resume_target(test_client, auth_headers, monkeypatch) -> None:
     from aisoc.backend.services import session_service
 
